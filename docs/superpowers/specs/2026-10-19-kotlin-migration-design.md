@@ -2,6 +2,7 @@
 
 - 작성일: 2026-10-19
 - 원본: `github.com/sGOM/quant-folio` (Python/FastAPI 백엔드 + Next.js 프론트)
+  - **기준 커밋 고정: `8a563702` (2026-10-01, PR #150 머지).** 이전 기간 중 원본은 동결(소유자 확인).
 - 대상: 이 저장소 `sGOM/quant-folio-kotlin`
 
 ## 1. 의도와 이유
@@ -93,27 +94,48 @@ quant-folio-kotlin/
 ├─ docker-compose.yml, Caddyfile, secrets/  원본 기반, backend 서비스만 JVM 이미지로 교체
 ├─ .github/workflows/  backend job 을 Gradle 로 교체, frontend job·e2e-smoke 유지
 ├─ docs/           원본 docs/ 중 도메인 문서(PRD·CONVENTIONS·strategies 등) 복사 후 Python 경로 갱신
-└─ .claude/        원본 rules·agents·skills·hooks 를 Kotlin 경로 기준으로 갱신
+└─ .claude/        §4.4 에 따라 새로 설계 (원본은 내용 출처로만 사용)
 ```
 
 `help/`(Python 학습 가이드)·`.agents/tossinvest-skill`·`skills-lock.json` 은 가져오지 않는다(설계자 판단).
 
-### 4.4 Claude 문서 구조 (소유자 요구: 이상적인 구조 유지)
+### 4.4 Claude 문서 구조 — 이상적 구조 + 자가 피드백 (소유자 요구)
 
-원본의 **지연 로딩 구조**를 그대로 유지한다. 원칙: 항상 로드되는 것은 최소로 두고, 도메인 지식은
-해당 파일을 만질 때만 도착하게 한다.
+원본 구조를 옮기는 것이 아니라 **새로 설계**한다. 원본 문서는 *내용의 출처*로만 쓰고, 형식은 아래 원칙을 따른다.
 
-| 계층 | 위치 | 담는 것 | 규칙 |
+#### 원칙
+1. **매 세션 비용 = 상시 로드 분량.** 상시 로드(CLAUDE.md)는 *모든 작업에 필요한 것*만. 그 외는 필요할 때만 도착.
+2. **강제할 것은 문장이 아니라 훅으로.** "절대 ~하지 말 것" 중 기계적으로 막을 수 있는 것은 hook/테스트/CI 로 옮기고,
+   문서에는 *왜* 만 남긴다(예: 시크릿 편집 차단, 미래참조 금지는 테스트로).
+3. **코드가 말하는 것은 쓰지 않는다.** 디렉터리 구조·클래스 목록·API 목록 나열 금지(낡는다). 대신 *비자명한 이유·함정·불변식*과
+   **단일 소스 위치 포인터**(`ChannelKeys.kt` 등)만.
+4. **한 사실은 한 곳에.** 문서 간 중복 금지, 링크로 참조.
+5. **문서마다 소유 영역이 명확.** rules 문서는 `paths` frontmatter 로 해당 코드에 묶인다 — 코드가 사라지면 문서도 낡았음이 검출된다.
+
+#### 계층
+
+| 계층 | 위치 | 담는 것 | 예산 |
 |---|---|---|---|
-| 상시 로드 | `CLAUDE.md` | 제품 한 줄 정의, **절대 금지 2항목(문구 그대로)**, 한 줄 아키텍처 지도, 필수 함정, rules 인덱스 표, 문서 유지 규칙 | 짧게 유지(원본 수준 ~60줄). 상세는 넣지 않고 rules 로 링크 |
-| 경로 트리거 | `.claude/rules/*.md` (+ `data-model/` 하위) | 아키텍처·데이터 모델·시장데이터·전략 설정·백테스트·검증 워크플로·매매 엔진·API·알림·프론트 | 각 문서의 `paths` frontmatter 를 **Kotlin 경로**(`backend/core/src/main/kotlin/**/backtest/**` 등)로 갱신. 한 문서 = 한 영역. 원본 내용은 보존하고 Python 고유 서술(asyncio·Celery·Alembic·pydantic)만 Kotlin 대응으로 교체 |
-| 역할 | `.claude/agents/*.md` | 작업별 서브에이전트 | `backend-fastapi`→`backend-spring`, `review-fastapi`→`review-kotlin` 로 대체. `quant-engine`·`db-architect`·`financial-expert`·`frontend-next`·`review-nextjs`·`ui-expert`·`pr-manager` 는 경로·명령만 갱신 |
-| 절차 | `.claude/skills/*` | `run-quantfolio`(기동·스모크), `ci-check`, `commit-pr-merge` | 명령을 Gradle/compose 기준으로 갱신 |
-| 자동화 | `.claude/hooks/*`, `.claude/settings.json` | `block-secret-edit`(유지), `backend-restart-reminder`(대상 `backend/**`, 재시작 대상 web/engine/worker 유지) | 동작 동일 |
-| 코드 규약 | `docs/CONVENTIONS.md` | Kotlin/Spring 코드 컨벤션 | 원본 Python 컨벤션을 Kotlin 으로 재작성. CLAUDE.md 에서 링크 |
+| 상시 | `CLAUDE.md` | 제품 한 줄, **절대 금지 2항목**(문구 유지), 프로세스 한 줄 지도, 빌드·테스트·기동 명령, 필수 함정, 문서 유지 규칙 | **≤ 80줄** |
+| 경로 트리거 | `.claude/rules/<영역>.md` | 영역 불변식·함정·설계 이유. 영역: 아키텍처/통신, 데이터 모델, 시장데이터, 전략 설정, 백테스트, 매매 엔진, API 계약, 알림, 프론트 | 문서당 **≤ 150줄**, `paths` 필수 |
+| 절차 | `.claude/skills/<name>/SKILL.md` | 반복 절차: 앱 기동·스모크, CI 확인, 커밋·PR, 신규 팩터 검증, **문서 점검(아래)** | 절차만, 지식은 rules 링크 |
+| 역할 | `.claude/agents/*.md` | 실제로 분리 이득이 있는 것만(예: 코드 리뷰, 금융 도메인 검토). 원본 9개를 그대로 옮기지 않는다 | 필요 입증 시 추가 |
+| 강제 | `.claude/hooks/*` + `settings.json` | 시크릿 편집 차단, 백엔드 수정 시 재시작 안내, **md 린트(아래)** | — |
+| 사람용 | `docs/` | PRD, 컨벤션, 설계 스펙, 운영 가이드 | Claude 상시 로드 아님 |
 
-새 문서를 만들 때도 같은 원칙: 상시 지식만 CLAUDE.md, 영역 지식은 `paths` 달린 rules 문서, 반복 절차는 skill.
-이 구조 정리는 §10 의 8단계에서 하되, 각 단계에서 만든 코드 영역의 rules 문서는 **그 단계에서 함께** 갱신한다.
+#### 자가 피드백 루프 — 품질을 스스로 유지하는 장치
+
+| 장치 | 무엇을 | 언제 |
+|---|---|---|
+| **md 린트 스크립트** `.claude/hooks/md-lint.(js\|sh)` | ① 줄 수 예산 초과 ② rules 문서 `paths` 누락 또는 **어떤 파일에도 매칭 안 되는 glob**(낡은 문서) ③ 깨진 상대 링크·존재하지 않는 경로 언급 ④ 문서 간 중복 문단 | `.md` 편집 직후 PostToolUse 훅(경고) + CI 잡(실패) |
+| **교정 즉시 반영 규칙** (CLAUDE.md 에 명시) | 사용자가 교정하거나 같은 실수를 반복하면, 그 교훈을 **해당 영역 rules 문서**의 "함정" 절에 한 줄로 추가. 상시 지식일 때만 CLAUDE.md | 같은 세션 |
+| **무효화 즉시 갱신 규칙** | 코드 변경이 문서 서술을 무효화하면 같은 작업에서 그 문서를 고친다 | 같은 작업 |
+| **주기 점검 스킬** (`md-refine` 사용) | 세션 기록으로 실제 사용량을 측정해 안 쓰이는 문서·절 삭제/병합, 예산 초과 분리 | 마일스톤마다(§10 각 단계 종료 시) |
+
+#### 이전 중 운용
+- §10 1단계에서 위 골격(CLAUDE.md·린트·훅·점검 스킬)을 먼저 만든다.
+- 각 단계에서 옮긴 코드 영역의 rules 문서를 **그 단계에서** 원본 내용을 출처로 새로 쓴다(Python 고유 서술은 버리고 Kotlin 기준으로).
+- 각 단계 종료 시 md 린트 통과 + `md-refine` 점검을 수용 기준에 포함.
 
 ## 5. API 계약 — 프론트가 무수정으로 붙기 위한 규칙
 
@@ -171,7 +193,7 @@ HTTP 요청·재시도·타임아웃·에러 분류(`services/data/errors.py`)�
 ## 8. 동등성 검증 — 정답지 테스트
 
 ### 8.1 방식
-1. 원본 Python 을 **한 번** 실행해 픽스처를 만든다: 같은 DB 스냅샷 기준으로
+1. 소유자 로컬 Docker 의 **운영 중인 DB 를 덤프**해 스냅샷으로 삼고, 원본 Python(기준 커밋)을 그 스냅샷 위에서 **한 번** 실행해 픽스처를 만든다:
    백테스트 결과 지표·일별 NAV, 팩터 값, DSR, 시그널, 리밸런싱 목표 비중 등 계산 결과와 그 입력.
 2. 픽스처(JSON/CSV)는 이 저장소에 **커밋**한다. 픽스처 생성 스크립트도 함께 커밋(원본 저장소 체크아웃 위에서 실행).
 3. Kotlin 테스트는 픽스처만 읽는다. **런타임에 Python 불필요.**
@@ -205,7 +227,7 @@ HTTP 요청·재시도·타임아웃·에러 분류(`services/data/errors.py`)�
 
 ## 10. 작업 순서 (빌드는 단계적, 전환은 한 번에)
 
-1. 골격: Gradle 멀티모듈, Flyway V1, JPA 엔티티, Testcontainers, CI.
+1. 골격: Gradle 멀티모듈, Flyway V1, JPA 엔티티, Testcontainers, CI, **Claude 문서 골격(§4.4: CLAUDE.md·md 린트·훅)**.
 2. 인증·세션·API 껍데기(에러 형식·직렬화 규칙) + Fernet/bcrypt 호환.
 3. 외부 데이터 클라이언트·시장데이터 저장소(§6) + 정답지 픽스처 생성.
 4. 백테스트·시그널·팩터·지표(§8 대조) → 해당 REST 엔드포인트.
@@ -213,7 +235,7 @@ HTTP 요청·재시도·타임아웃·에러 분류(`services/data/errors.py`)�
 6. worker(스케줄·백테스트 큐·백업·뉴스·스냅샷).
 7. engine(러너·실행·체결·리컨실·리스크·halt) + §9 테스트.
 8. frontend 복사, compose·Caddy·CI·e2e-smoke 교체, `.claude/`·docs 갱신.
-9. 컷오버: 기존 DB 백업 → Kotlin 스택 기동 → e2e-smoke("가입→로그인→전략목록→백테스트→모니터링") →
+9. 컷오버: 기존 Docker DB 볼륨(`pgdata`) 백업 → 원본 web/engine/worker 중지 → 같은 DB 에 Kotlin 스택 기동(Flyway baseline) → e2e-smoke("가입→로그인→전략목록→백테스트→모니터링") →
    모의투자 1영업일 이상 관찰 → 원본 보관.
 
 ## 11. 빌더 재량
