@@ -26,6 +26,8 @@ data class QuantfolioProperties(
     val s3Backup: S3Backup = S3Backup(),
     val frontendOrigin: String = "http://localhost:3000",
     val debugErrors: Boolean = false,
+    /** 파일 캐시 디렉터리(패닉 브레드스 등, 원본 backend/.cache). */
+    val cacheDir: String = ".cache",
 ) {
     init {
         validate()

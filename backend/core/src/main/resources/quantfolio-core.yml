@@ -59,3 +59,4 @@ quantfolio:
     secret-access-key: ${s3_backup_secret_access_key:${S3_BACKUP_SECRET_ACCESS_KEY:}}
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
   debug-errors: ${DEBUG_ERRORS:false}
+  cache-dir: ${CACHE_DIR:.cache}

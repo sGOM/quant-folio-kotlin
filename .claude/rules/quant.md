@@ -1,6 +1,7 @@
 ---
 paths:
   - "backend/core/src/main/kotlin/com/quantfolio/quant/**"
+  - "backend/core/src/main/kotlin/com/quantfolio/{factor,metrics,backtest}/**"
   - "tools/oracle/**"
 ---
 
@@ -33,3 +34,8 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
+
+## 계산부와 조회부 분리
+
+`factor/`·`metrics/` 는 순수 계산(`FactorScores`·`MetricsPure`)을 정답지로, 조회 조립(`*Service`·`UniverseScores`)을
+`SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터가 **전량** 실패하면 예외 — 중립 처리 금지.

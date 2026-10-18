@@ -26,6 +26,18 @@ import java.util.Collections
  * 시장별 루프: 전 시장 실패면 대표 예외, 일부 실패면 성공분을 돌려주되 확정으로 굳히지 않는다(다음 호출에서 보완).
  * 이전 판은 실패를 삼켜 전 시장 실패에도 빈 결과를 돌려줬고, 백테스트가 빈 패널 위에서 '성공'했다(§44-1·§47).
  */
+/** 지표·팩터 계산이 쓰는 시장 스냅샷 조회(테스트에서 교체 가능). 구현은 [KrxSnapshots]. */
+interface SnapshotSource {
+    fun fundamentals(asOf: LocalDate, markets: List<String>): List<StockDaily>
+    fun marketCap(asOf: LocalDate, markets: List<String>): List<StockDaily>
+    fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>): List<StockPeriod>
+    fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String> = KrxSnapshots.FLOW_INVESTORS): List<StockPeriod>
+    fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>?
+    fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>?
+    fun indexTickers(day: LocalDate, market: String): List<String>
+    fun indexName(day: LocalDate, ticker: String): String
+}
+
 @Component
 class KrxSnapshots(
     private val api: KrxStockApi,
@@ -35,7 +47,7 @@ class KrxSnapshots(
     private val indexes: IndexOhlcvStore,
     private val cooldowns: Cooldowns,
     private val calendar: MarketCalendar,
-) {
+) : SnapshotSource {
     private val log = LoggerFactory.getLogger(javaClass)
 
     /** 펀더멘털 프로세스 내 LRU — 같은 as-of 를 반복 백테스트할 때 DB 왕복까지 아낀다. 빈 결과는 캐시하지 않는다. */
@@ -46,7 +58,7 @@ class KrxSnapshots(
     )
 
     /** 전 종목 PER·PBR·DIV + market. PER ≤ 0 은 적자(정의 불가)로 보고 null. */
-    fun fundamentals(asOf: LocalDate, markets: List<String>): List<StockDaily> {
+    override fun fundamentals(asOf: LocalDate, markets: List<String>): List<StockDaily> {
         val key = asOf to markets.sorted()
         fundCache[key]?.let { return it }
         var complete = true
@@ -69,7 +81,7 @@ class KrxSnapshots(
     }
 
     /** 전 종목 시가총액·거래량·거래대금·상장주식수 + market. */
-    fun marketCap(asOf: LocalDate, markets: List<String>): List<StockDaily> {
+    override fun marketCap(asOf: LocalDate, markets: List<String>): List<StockDaily> {
         var complete = true
         return cache.cachedFetch(
             "market_cap", CacheKeys.of(asOf, markets),
@@ -88,7 +100,7 @@ class KrxSnapshots(
     }
 
     /** 기간 등락률(시가·종가·등락률·거래량·대금·종목명). 투자자군 키는 빈 문자열. */
-    fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>): List<StockPeriod> {
+    override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>): List<StockPeriod> {
         var complete = true
         return cache.cachedFetch(
             "price_change", CacheKeys.of(ymd(start), ymd(end), markets),
@@ -108,7 +120,7 @@ class KrxSnapshots(
     }
 
     /** 투자자군별 순매수대금을 종목별로 합산(수급 팩터). 시장은 마지막으로 본 시장. */
-    fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String> = FLOW_INVESTORS): List<StockPeriod> {
+    override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>): List<StockPeriod> {
         val investorsKey = investors.sorted().joinToString(",")
         var complete = true
         return cache.cachedFetch(
@@ -148,7 +160,7 @@ class KrxSnapshots(
     }
 
     /** 그날 한 시장의 전 종목 OHLCV. 없으면 null. */
-    fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? {
+    override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? {
         val rows = cache.cachedFetch(
             "market_ohlcv", CacheKeys.of(ymd(day), market),
             readLocal = { daily.read(day, listOf(market)) },
@@ -173,7 +185,7 @@ class KrxSnapshots(
     }
 
     /** 지수 일봉(범위 캐시). 없으면 null. */
-    fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? {
+    override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? {
         val bars = cache.cachedRange(
             ticker, start, end,
             readLocal = { indexes.read(ticker, start, end) },
@@ -193,14 +205,14 @@ class KrxSnapshots(
         return bars.ifEmpty { null }
     }
 
-    fun indexTickers(day: LocalDate, market: String): List<String> = try {
+    override fun indexTickers(day: LocalDate, market: String): List<String> = try {
         api.indexTickers(ymd(day), market)
     } catch (e: Exception) {
         throw wrap(e, "업종지수 목록 조회 실패($market ${ymd(day)})")
     }
 
     /** 이름 조회 실패는 티커를 그대로 쓴다(표시용). */
-    fun indexName(day: LocalDate, ticker: String): String =
+    override fun indexName(day: LocalDate, ticker: String): String =
         runCatching { api.indexTickerName(ticker).trim().ifEmpty { ticker } }.getOrDefault(ticker)
 
     /**
