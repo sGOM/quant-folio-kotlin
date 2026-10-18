@@ -3,6 +3,7 @@ package com.quantfolio.market.krx
 import com.quantfolio.domain.market.SectorMapSnapshot
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.MarketCalendar
+import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -51,7 +52,7 @@ class KrxIndexService(
     private val sectors: SectorMapSnapshotRepository,
     private val calendar: MarketCalendar,
     private val clock: Clock,
-) {
+) : IndexMembers {
     private val log = LoggerFactory.getLogger(javaClass)
     private val membersCache = ConcurrentHashMap<Pair<String, LocalDate>, List<String>>()
     private val capsCache = ConcurrentHashMap<LocalDate, Map<String, Long>>()
@@ -61,7 +62,7 @@ class KrxIndexService(
     @Volatile private var sectorCache: Map<String, String>? = null
 
     /** 지수 구성종목(PIT). 확정 기록이 있으면 로컬, 없으면 KRX 에서 최대 7일 거슬러 조회 후 저장. */
-    fun indexMembers(asOf: LocalDate, index: String = "KOSPI200"): List<String> {
+    override fun indexMembers(asOf: LocalDate, index: String): List<String> {
         val params = INDEX_PARAMS[index] ?: throw IllegalArgumentException("지원하지 않는 지수: $index (지원: ${INDEX_PARAMS.keys})")
         membersCache[index to asOf]?.let { return it }
         val storeKey = CacheKeys.of(index, asOf)
@@ -100,6 +101,8 @@ class KrxIndexService(
         }
         return codes
     }
+
+    fun indexMembers(asOf: LocalDate): List<String> = indexMembers(asOf, "KOSPI200")
 
     fun membershipUnion(dates: List<LocalDate>, index: String = "KOSPI200"): Map<String, List<String>> =
         dates.associate { it.format(YMD) to indexMembers(it, index) }
