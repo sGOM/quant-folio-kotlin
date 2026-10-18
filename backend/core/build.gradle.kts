@@ -12,6 +12,7 @@ dependencies {
     api("org.springframework.boot:spring-boot-starter-validation")
     api("org.springframework.security:spring-security-crypto")
     api("org.springframework:spring-web")
+    api("org.apache.commons:commons-math3:3.6.1")
     api("tools.jackson.module:jackson-module-kotlin")
     api("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
