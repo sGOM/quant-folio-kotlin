@@ -53,4 +53,11 @@ interface SectorMapSnapshotRepository : JpaRepository<SectorMapSnapshot, Int> {
     fun deleteBySnapshotDate(snapshotDate: LocalDate): Int
 }
 
-interface KisStockMasterSnapshotRepository : JpaRepository<KisStockMasterSnapshot, Int>
+interface KisStockMasterSnapshotRepository : JpaRepository<KisStockMasterSnapshot, Int> {
+    fun findFirstBySymbolOrderByTradeDateDesc(symbol: String): KisStockMasterSnapshot?
+
+    @Transactional
+    @Modifying
+    @Query("delete from KisStockMasterSnapshot s where s.market = :market and s.tradeDate = :tradeDate")
+    fun deleteByMarketAndTradeDate(market: String, tradeDate: LocalDate): Int
+}
