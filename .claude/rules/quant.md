@@ -1,7 +1,7 @@
 ---
 paths:
   - "backend/core/src/main/kotlin/com/quantfolio/quant/**"
-  - "backend/core/src/main/kotlin/com/quantfolio/{factor,metrics,backtest}/**"
+  - "backend/core/src/main/kotlin/com/quantfolio/{factor,metrics,backtest,rebalance}/**"
   - "tools/oracle/**"
 ---
 
@@ -34,6 +34,7 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
+백테스트 엔진을 고치면 `PortfolioLookaheadTest`(cut 이후 교란 → cut 까지 결과 동일)가 반드시 초록이어야 한다.
 
 ## 계산부와 조회부 분리
 

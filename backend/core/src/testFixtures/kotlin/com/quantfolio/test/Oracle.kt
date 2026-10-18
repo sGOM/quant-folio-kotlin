@@ -46,4 +46,31 @@ object Oracle {
             if (abs(e - a) > max(1e-12, rel * abs(e))) fail("$label [$i] expected=$e actual=$a")
         }
     }
+
+    /**
+     * JSON 정답과 Kotlin 값(Map·List·Number·String·Boolean·null)을 재귀 비교한다. 숫자는 [assertClose] 규칙,
+     * 맵은 키 집합까지 같아야 한다. 정답의 정수와 Kotlin 실수(또는 반대)는 값만 같으면 통과.
+     */
+    fun assertDeep(expected: JsonNode?, actual: Any?, rel: Double = 1e-9, path: String = "$") {
+        when {
+            expected == null || expected.isNull -> if (actual != null && !(actual is Double && actual.isNaN())) fail("$path expected=null actual=$actual")
+            expected.isObject -> {
+                val m = actual as? Map<*, *> ?: fail("$path 맵이어야 함: $actual")
+                val keys = expected.propertyNames().toSet()
+                if (keys != m.keys.map { it.toString() }.toSet()) fail("$path 키 다름: expected=$keys actual=${m.keys}")
+                for (k in keys) assertDeep(expected.get(k), m[k], rel, "$path.$k")
+            }
+            expected.isArray -> {
+                val l = (actual as? List<*>) ?: (actual as? DoubleArray)?.toList() ?: fail("$path 리스트여야 함: $actual")
+                if (expected.size() != l.size) fail("$path 길이 다름: ${expected.size()} vs ${l.size}")
+                for (i in 0 until expected.size()) assertDeep(expected.get(i), l[i], rel, "$path[$i]")
+            }
+            expected.isBoolean -> if (expected.asBoolean() != actual) fail("$path expected=${expected.asBoolean()} actual=$actual")
+            expected.isNumber || (expected.isString && expected.asString() in setOf("NaN", "Infinity", "-Infinity")) -> {
+                val a = (actual as? Number)?.toDouble() ?: fail("$path 숫자여야 함: $actual")
+                assertClose(doubleArrayOf(num(expected)), doubleArrayOf(a), rel, path)
+            }
+            else -> if (expected.asString() != actual?.toString()) fail("$path expected=${expected.asString()} actual=$actual")
+        }
+    }
 }
