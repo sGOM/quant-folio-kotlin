@@ -40,6 +40,20 @@ paths:
 - 시장 혼재 테이블(`stock_daily_snapshots`·`stock_period_stats`)의 단일시장 조회는 반드시 `markets` 필터.
 - 운영 테이블과 FK 없음 — 저장소는 통째로 지우고 재적재할 수 있어야 한다.
 
+## KRX (`market/krx/`)
+
+| 클래스 | 원본 | 역할 |
+|---|---|---|
+| `KrxSession` | pykrx `KRXSession` + `krx_index._session` | 로그인·쿠키·1시간 만료(300s 버퍼)·쿨다운 우선 |
+| `KrxMdc.rows` | `krx_index._krx_rows` | 응답 원인 분류(HTML=Auth, 키 없음=Schema) |
+| `KrxMdc.pykrx` | pykrx `KrxWebIo` | 분류 없음, 730일 분할. 호출자가 Unavailable 로 감싼다 |
+| `KrxStockApi` | pykrx `stock.*` 9종 | 같은 bld·파라미터·숫자 정리 규칙 |
+| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총·업종(PIT 스냅샷 우선)·ETF |
+| `KrxSnapshots` | `metrics/fetch.py` | 위를 `StoreCache` 로 감싼 로컬 우선 조회 |
+
+- `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.
+- KRX 미인증(자격증명 없음)은 실패가 아니라 빈 결과. 캐시는 **성공했을 때만**.
+
 ## 함정
 
 - 원본 데이터 소스: 종목 일봉 = FDR → 네이버 차트(수정주가), KRX MDC 계열 = `getJsonData.cmd` POST. 소스를 바꾸면 기존 DB 와 섞인다.
