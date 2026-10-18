@@ -12,6 +12,8 @@ class RedisKeysTest {
         assertEquals("engine:events", RedisKeys.ENGINE_EVENTS)
         assertEquals("engine:events:7", RedisKeys.engineEvents(7))
         assertEquals("session:", RedisKeys.SESSION_PREFIX)
+        assertEquals("login:fail:email:a@b.c", RedisKeys.loginFailByEmail("a@b.c"))
+        assertEquals("login:fail:ip:1.2.3.4", RedisKeys.loginFailByIp("1.2.3.4"))
         assertEquals("engine:heartbeat", RedisKeys.ENGINE_HEARTBEAT)
         assertEquals("engine:health:3", RedisKeys.engineHealth(3))
         assertEquals(3, RedisKeys.FAILURE_ALERT_THRESHOLD)

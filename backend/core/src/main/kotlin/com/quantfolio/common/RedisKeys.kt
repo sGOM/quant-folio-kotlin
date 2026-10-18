@@ -18,6 +18,10 @@ object RedisKeys {
     /** 로그인 세션 `session:{sid}` → user_id, 슬라이딩 TTL */
     const val SESSION_PREFIX = "session:"
 
+    /** 로그인 실패 카운터(고정 윈도우) — 브루트포스 방어 */
+    fun loginFailByEmail(email: String): String = "login:fail:email:$email"
+    fun loginFailByIp(ip: String): String = "login:fail:ip:$ip"
+
     /** 엔진 생존 신호(TTL 키) */
     const val ENGINE_HEARTBEAT = "engine:heartbeat"
 
