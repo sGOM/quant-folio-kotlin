@@ -4,6 +4,7 @@ import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.SourceRequestError
 import com.quantfolio.market.source.SourceSchemaError
+import com.quantfolio.strategy.StrategyConfigException
 import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -53,6 +54,10 @@ class ApiErrorHandler(private val props: QuantfolioProperties) {
             ValidationError(it.code ?: "value_error", listOf("body", it.field), it.defaultMessage ?: "잘못된 값입니다.")
         },
     )
+
+    /** 전략 설정 검증 실패 — pydantic 처럼 `loc` 이 body.config 부터(판별자 태그 → 필드). 문구·type 은 pydantic 원문. */
+    @ExceptionHandler(StrategyConfigException::class)
+    fun invalidConfig(e: StrategyConfigException) = unprocessable(e.errors.map { ValidationError(it.type, listOf("body", "config") + it.loc, it.msg) })
 
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun unreadable(e: HttpMessageNotReadableException) =

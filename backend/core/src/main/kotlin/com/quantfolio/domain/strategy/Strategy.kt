@@ -42,6 +42,8 @@ class StrategyLike(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 )
 
-interface StrategyRepository : JpaRepository<Strategy, Int>
+interface StrategyRepository : JpaRepository<Strategy, Int> {
+    fun findByUserId(userId: Int): List<Strategy>
+}
 
 interface StrategyLikeRepository : JpaRepository<StrategyLike, Int>
