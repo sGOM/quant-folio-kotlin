@@ -7,3 +7,4 @@ build/
 secrets/*.txt
 node_modules/
 .kotlin/
+tools/oracle/tier2/
