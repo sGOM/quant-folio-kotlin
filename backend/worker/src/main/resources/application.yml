@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: worker
+  config:
+    import: classpath:quantfolio-core.yml
+  main:
+    web-application-type: none

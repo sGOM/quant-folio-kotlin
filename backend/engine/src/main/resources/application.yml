@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: engine
+  config:
+    import: classpath:quantfolio-core.yml
+  main:
+    web-application-type: none

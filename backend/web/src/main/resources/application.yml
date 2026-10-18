@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: web
+  config:
+    import: classpath:quantfolio-core.yml
+
+server:
+  port: 8000
