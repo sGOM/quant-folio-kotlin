@@ -30,6 +30,7 @@ class UniverseScoresTest {
         override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int) = emptyMap<String, Double>()
         override fun marketCaps(asOf: LocalDate) = emptyMap<String, Long>()
         override fun sectorMap(asOf: LocalDate) = emptyMap<String, String>()
+        override fun dartEnabled() = false
     }
     private val noTech = TechIndicatorLoader { _, _, _ -> emptyList() }
 

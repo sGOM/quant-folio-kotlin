@@ -36,6 +36,9 @@ class DartFinancials(
 
     @Volatile private var corpMap: Map<String, String>? = null
 
+    /** OpenDART 키 설정 여부(없으면 재무 팩터는 중립). */
+    fun enabled(): Boolean = client.enabled()
+
     /**
      * 메모리 → 원장(확정 0행이면 null) → 저장소 확정본 → 원격. 원격 결과는 저장하고 원장에 기록한다.
      * 무자료(013)는 확정일이 지났을 때만 '확정 무자료'로 굳힌다(정정공시로 나중에 생길 수 있다).

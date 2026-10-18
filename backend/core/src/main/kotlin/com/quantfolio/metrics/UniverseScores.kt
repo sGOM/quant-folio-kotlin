@@ -21,6 +21,7 @@ interface FactorInputs {
     fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int): Map<String, Double>
     fun marketCaps(asOf: LocalDate): Map<String, Long>
     fun sectorMap(asOf: LocalDate): Map<String, String>
+    fun dartEnabled(): Boolean
 }
 
 @Component
@@ -29,6 +30,7 @@ class LiveFactorInputs(private val dart: DartFinancials, private val krx: KrxInd
     override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int) = dart.peadSueBySymbol(codes, asOf, lookbackQ)
     override fun marketCaps(asOf: LocalDate) = krx.marketCaps(asOf)
     override fun sectorMap(asOf: LocalDate) = krx.sectorMap(asOf)
+    override fun dartEnabled() = dart.enabled()
 }
 
 /** 리밸런싱 점수 파라미터(원본 compute_universe_scores 인자, 기본값 동일). */
