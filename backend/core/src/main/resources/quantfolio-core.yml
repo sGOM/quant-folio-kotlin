@@ -1,0 +1,61 @@
+# 공용 설정. 각 앱 application.yml 이 import 한다.
+# 우선순위: /run/secrets/<name> 파일(configtree) > 원본과 같은 이름의 환경변수 > 기본값.
+spring:
+  config:
+    import: optional:configtree:/run/secrets/
+  datasource:
+    url: ${DATABASE_JDBC_URL:jdbc:postgresql://localhost:5432/quant}
+    username: ${POSTGRES_USER:quant}
+    password: ${POSTGRES_PASSWORD:quant}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379/0}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 1
+  threads:
+    virtual:
+      enabled: true
+
+quantfolio:
+  app-env: ${APP_ENV:dev}
+  secret-key: ${secret_key:${SECRET_KEY:}}
+  credential-enc-key: ${credential_enc_key:${CREDENTIAL_ENC_KEY:}}
+  session-ttl-minutes: ${SESSION_TTL_MINUTES:20160}
+  cookie:
+    secure: ${COOKIE_SECURE:false}
+    samesite: ${COOKIE_SAMESITE:lax}
+    domain: ${COOKIE_DOMAIN:}
+  kis:
+    env: ${KIS_ENV:vts}
+    app-key: ${kis_app_key:${KIS_APP_KEY:}}
+    app-secret: ${kis_app_secret:${KIS_APP_SECRET:}}
+    account-no: ${KIS_ACCOUNT_NO:}
+    hts-id: ${KIS_HTS_ID:}
+    prod-approved: ${KIS_PROD_APPROVED:false}
+    daily-order-notional-cap: ${KIS_DAILY_ORDER_NOTIONAL_CAP:}
+  toss:
+    app-key: ${toss_app_key:${TOSS_APP_KEY:}}
+    app-secret: ${toss_app_secret:${TOSS_APP_SECRET:}}
+    account-no: ${TOSS_ACCOUNT_NO:}
+  krx:
+    id: ${krx_id:${KRX_ID:}}
+    pw: ${krx_pw:${KRX_PW:}}
+  opendart:
+    api-key: ${opendart_api_key:${OPENDART_API_KEY:}}
+  telegram:
+    bot-token: ${telegram_bot_token:${TELEGRAM_BOT_TOKEN:}}
+    chat-id: ${telegram_chat_id:${TELEGRAM_CHAT_ID:}}
+  s3-backup:
+    bucket: ${S3_BACKUP_BUCKET:}
+    endpoint-url: ${S3_BACKUP_ENDPOINT_URL:}
+    region: ${S3_BACKUP_REGION:auto}
+    prefix: ${S3_BACKUP_PREFIX:quantfolio-db-backups/}
+    access-key-id: ${s3_backup_access_key_id:${S3_BACKUP_ACCESS_KEY_ID:}}
+    secret-access-key: ${s3_backup_secret_access_key:${S3_BACKUP_SECRET_ACCESS_KEY:}}
+  frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
+  debug-errors: ${DEBUG_ERRORS:false}

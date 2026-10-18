@@ -1,0 +1,49 @@
+package com.quantfolio.common
+
+/**
+ * web ↔ engine ↔ worker 간 Redis 통신 규약의 단일 소스. 문자열은 원본 Python(channels.py)과 동일해야 한다.
+ * 키·채널 문자열을 다른 곳에 리터럴로 쓰지 말 것.
+ */
+object RedisKeys {
+    /** web → engine 전략 ON/OFF. JSON `{"action":"start"|"stop","strategy_id":int}` */
+    const val ENGINE_CONTROL = "engine:control"
+
+    /** 운용 중 전략 ID SET — 엔진 재기동 복구용 */
+    const val ACTIVE_STRATEGIES = "engine:active_strategies"
+
+    /** engine → web 이벤트. 사용자별 채널은 [engineEvents]. type: order|execution|position|signal|alert */
+    const val ENGINE_EVENTS = "engine:events"
+    fun engineEvents(userId: Int): String = "$ENGINE_EVENTS:$userId"
+
+    /** 로그인 세션 `session:{sid}` → user_id, 슬라이딩 TTL */
+    const val SESSION_PREFIX = "session:"
+
+    /** 엔진 생존 신호(TTL 키) */
+    const val ENGINE_HEARTBEAT = "engine:heartbeat"
+
+    /** 러너별 헬스 JSON */
+    const val ENGINE_HEALTH_PREFIX = "engine:health:"
+    fun engineHealth(strategyId: Int): String = "$ENGINE_HEALTH_PREFIX$strategyId"
+
+    /** 러너 연속 실패가 이 횟수면 알림 1회. web 의 healthy 판정도 같은 값. */
+    const val FAILURE_ALERT_THRESHOLD = 3
+
+    /** 주문 멱등 분산락 `lock:order:{idempotency_key}` */
+    const val ORDER_LOCK_PREFIX = "lock:order:"
+
+    /** (user, symbol) 읽기-판단-주문 직렬화 — 이중 매수/매도(TOCTOU) 방지 */
+    const val POSITION_LOCK_PREFIX = "lock:position:"
+    fun positionLock(userId: Int, symbol: String): String = "$POSITION_LOCK_PREFIX$userId:$symbol"
+
+    /** 주문 단위 체결 반영 직렬화 — reconcile 폴링과 실시간 체결통보의 이중 기록 방지 */
+    const val RECONCILE_LOCK_PREFIX = "reconcile:lock:"
+    const val RECONCILE_LOCK_TTL_SECONDS = 30L
+    fun reconcileLock(orderId: Int): String = "$RECONCILE_LOCK_PREFIX$orderId"
+
+    /** 마지막 DB 백업 성공 시각(ISO) */
+    const val BACKUP_LAST_SUCCESS = "backup:last_success_at"
+
+    /** 전략별 MDD 킬스위치 상태 JSON `{"hwm":float,"killed":bool,"kill_date":"YYYY-MM-DD"|null}` */
+    const val MDD_STATE_PREFIX = "rebalance:mdd:"
+    fun mddState(strategyId: Int): String = "$MDD_STATE_PREFIX$strategyId"
+}
