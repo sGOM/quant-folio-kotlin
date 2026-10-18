@@ -1,0 +1,1960 @@
+{
+ "cases": [
+  {
+   "name": "sma_min",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "fast": 5,
+    "slow": 20,
+    "type": "sma_crossover"
+   }
+  },
+  {
+   "name": "ema_min",
+   "input": {
+    "type": "ema_crossover",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "fast": 12,
+    "slow": 26,
+    "type": "ema_crossover"
+   }
+  },
+  {
+   "name": "rsi_min",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "rsi",
+    "period": 14,
+    "lower": 30,
+    "upper": 70
+   }
+  },
+  {
+   "name": "macd_min",
+   "input": {
+    "type": "macd",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "macd",
+    "fast": 12,
+    "slow": 26,
+    "signal": 9
+   }
+  },
+  {
+   "name": "bollinger_min",
+   "input": {
+    "type": "bollinger",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "bollinger",
+    "period": 20,
+    "num_std": 2.0
+   }
+  },
+  {
+   "name": "breakout_min",
+   "input": {
+    "type": "breakout",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "breakout",
+    "period": 20
+   }
+  },
+  {
+   "name": "momentum_min",
+   "input": {
+    "type": "momentum",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "momentum",
+    "lookback": 120
+   }
+  },
+  {
+   "name": "zscore_min",
+   "input": {
+    "type": "zscore",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "zscore",
+    "period": 20,
+    "entry": 2.0
+   }
+  },
+  {
+   "name": "disparity_min",
+   "input": {
+    "type": "disparity",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "disparity",
+    "period": 20,
+    "lower": 95.0,
+    "upper": 105.0
+   }
+  },
+  {
+   "name": "donchian_min",
+   "input": {
+    "type": "donchian_squeeze",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "donchian_squeeze",
+    "period": 20,
+    "bb_mult": 1.0,
+    "kc_mult": 1.3
+   }
+  },
+  {
+   "name": "trix_min",
+   "input": {
+    "type": "trix",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "trix",
+    "period": 15,
+    "signal_period": 9
+   }
+  },
+  {
+   "name": "obv_min",
+   "input": {
+    "type": "obv_trend",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "obv_trend",
+    "period": 20
+   }
+  },
+  {
+   "name": "atr_min",
+   "input": {
+    "type": "atr_trailing",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "atr_trailing",
+    "period": 22,
+    "atr_period": 22,
+    "k": 3.0
+   }
+  },
+  {
+   "name": "volbrk_min",
+   "input": {
+    "type": "volatility_breakout",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "volatility_breakout",
+    "k": 0.5
+   }
+  },
+  {
+   "name": "keltner_min",
+   "input": {
+    "type": "keltner",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "keltner",
+    "ema_period": 20,
+    "atr_period": 10,
+    "mult": 2.0
+   }
+  },
+  {
+   "name": "stoch_min",
+   "input": {
+    "type": "stochastic",
+    "symbol": "005930"
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "stochastic",
+    "k_period": 14,
+    "d_period": 3,
+    "lower": 20.0,
+    "upper": 80.0
+   }
+  },
+  {
+   "name": "custom_min",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": {
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ]
+    },
+    "exit": {
+     "combinator": "or",
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": "<",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      },
+      {
+       "children": [
+        {
+         "left": {
+          "kind": "rsi",
+          "period": 14
+         },
+         "op": ">",
+         "right": {
+          "kind": "const",
+          "value": 70
+         }
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "custom",
+    "entry": {
+     "combinator": "and",
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close",
+        "value": null,
+        "period": null,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "source": null,
+        "value": null,
+        "period": 20,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       }
+      }
+     ]
+    },
+    "exit": {
+     "combinator": "or",
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close",
+        "value": null,
+        "period": null,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       },
+       "op": "<",
+       "right": {
+        "kind": "sma",
+        "source": null,
+        "value": null,
+        "period": 20,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       }
+      },
+      {
+       "combinator": "and",
+       "children": [
+        {
+         "left": {
+          "kind": "rsi",
+          "source": null,
+          "value": null,
+          "period": 14,
+          "fast": null,
+          "slow": null,
+          "signal": null
+         },
+         "op": ">",
+         "right": {
+          "kind": "const",
+          "source": null,
+          "value": 70.0,
+          "period": null,
+          "fast": null,
+          "slow": null,
+          "signal": null
+         }
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "rebalance_min",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660",
+     "035420",
+     "051910",
+     "006400",
+     "000270"
+    ]
+   },
+   "ok": true,
+   "dump": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660",
+     "035420",
+     "051910",
+     "006400",
+     "000270"
+    ],
+    "selection": {
+     "method": "momentum",
+     "lookback": 120,
+     "top_n": 5,
+     "factor_weights": {
+      "momentum": 0.4,
+      "value": 0.3,
+      "lowvol": 0.3,
+      "quality": 0.0,
+      "growth": 0.0,
+      "flow": 0.0,
+      "residual_momentum": 0.0,
+      "pead": 0.0
+     },
+     "flow_window": 90,
+     "flow_denom": "mcap",
+     "resid_mom_reg_window": 36,
+     "resid_mom_window": 11,
+     "resid_mom_skip": 1,
+     "pead_lookback_q": 8,
+     "neutralize": "none",
+     "min_score": null,
+     "vol_gate": null,
+     "universe_rule": null,
+     "entry": null,
+     "exit": null
+    },
+    "weighting": "equal",
+    "cadence": "monthly",
+    "rebalance_weekday": null,
+    "rebalance_dom": 1,
+    "rebalance_time": "14:30",
+    "initial_fill_immediate": false,
+    "drift_band_pct": 0.05,
+    "regime_filter": null,
+    "risk_layer": null,
+    "panic_overlay": null,
+    "capital": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "integer_shares": true,
+    "adv_participation_cap": null,
+    "price_limit_model": false,
+    "financial_period": "annual",
+    "benchmark_index": "KOSPI200",
+    "risk_free_rate": 0.0
+   }
+  },
+  {
+   "name": "sma_full",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": " 005930",
+    "fast": "10",
+    "slow": 30.0,
+    "cash": 5000000,
+    "stop_loss_pct": 0.1,
+    "fill_mode": "same_close",
+    "slippage_bps": 0,
+    "extra_key": 1
+   },
+   "ok": true,
+   "dump": {
+    "symbol": " 005930",
+    "cash": 5000000.0,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": 0.1,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "same_close",
+    "slippage_bps": 0.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "fast": 10,
+    "slow": 30,
+    "type": "sma_crossover"
+   }
+  },
+  {
+   "name": "custom_legacy_list",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": ">",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ],
+    "exit": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": "<",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ]
+   },
+   "ok": true,
+   "dump": {
+    "symbol": "005930",
+    "cash": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "stop_loss_pct": null,
+    "take_profit_pct": null,
+    "trailing_stop_pct": null,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "risk_free_rate": 0.0,
+    "type": "custom",
+    "entry": {
+     "combinator": "and",
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close",
+        "value": null,
+        "period": null,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "source": null,
+        "value": null,
+        "period": 20,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       }
+      }
+     ]
+    },
+    "exit": {
+     "combinator": "and",
+     "children": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close",
+        "value": null,
+        "period": null,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       },
+       "op": "<",
+       "right": {
+        "kind": "sma",
+        "source": null,
+        "value": null,
+        "period": 20,
+        "fast": null,
+        "slow": null,
+        "signal": null
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "rebalance_full",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     " 005930",
+     "000660",
+     "035420"
+    ],
+    "cadence": "weekly",
+    "rebalance_time": "9:5",
+    "selection": {
+     "method": "score",
+     "top_n": 2,
+     "factor_weights": {
+      "momentum": 0.5,
+      "value": 0.25,
+      "lowvol": 0.25
+     },
+     "vol_gate": {
+      "spike_lookback": 10
+     },
+     "neutralize": "sector"
+    },
+    "weighting": "score",
+    "drift_band_pct": 0.1,
+    "regime_filter": {},
+    "risk_layer": {
+     "max_position_pct": 0.5
+    },
+    "panic_overlay": {
+     "base_exposure": 0.5
+    },
+    "financial_period": "ttm"
+   },
+   "ok": true,
+   "dump": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660",
+     "035420"
+    ],
+    "selection": {
+     "method": "score",
+     "lookback": 120,
+     "top_n": 2,
+     "factor_weights": {
+      "momentum": 0.5,
+      "value": 0.25,
+      "lowvol": 0.25,
+      "quality": 0.0,
+      "growth": 0.0,
+      "flow": 0.0,
+      "residual_momentum": 0.0,
+      "pead": 0.0
+     },
+     "flow_window": 90,
+     "flow_denom": "mcap",
+     "resid_mom_reg_window": 36,
+     "resid_mom_window": 11,
+     "resid_mom_skip": 1,
+     "pead_lookback_q": 8,
+     "neutralize": "sector",
+     "min_score": null,
+     "vol_gate": {
+      "spike_lookback": 10,
+      "base_lookback": 252,
+      "spike_min": 1.4,
+      "spike_max": null,
+      "cap": 0.9,
+      "require_uptrend": true
+     },
+     "universe_rule": null,
+     "entry": null,
+     "exit": null
+    },
+    "weighting": "score",
+    "cadence": "weekly",
+    "rebalance_weekday": 0,
+    "rebalance_dom": null,
+    "rebalance_time": "09:05",
+    "initial_fill_immediate": false,
+    "drift_band_pct": 0.1,
+    "regime_filter": {
+     "enabled": true,
+     "index": "KOSPI",
+     "ma_period": 200,
+     "reentry_buffer_pct": 0.0,
+     "exit_buffer_pct": 0.0
+    },
+    "risk_layer": {
+     "max_position_pct": 0.5,
+     "max_sector_pct": null,
+     "target_vol": null,
+     "vol_lookback": 20,
+     "max_leverage": 1.0,
+     "mdd_kill_pct": null,
+     "mdd_rearm_days": 20
+    },
+    "panic_overlay": {
+     "enabled": true,
+     "market": "KOSPI",
+     "arm_level": "warning",
+     "arm_window": 5,
+     "hold_days": 20,
+     "profit_reclaim_pct": 0.5,
+     "knife_stop_pct": 0.05,
+     "base_exposure": 0.5,
+     "panic_exposure": 1.0,
+     "scale_in_confirm": 0.5,
+     "ma_recovery_period": 20,
+     "event_only": false
+    },
+    "capital": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "integer_shares": true,
+    "adv_participation_cap": null,
+    "price_limit_model": false,
+    "financial_period": "ttm",
+    "benchmark_index": "KOSPI200",
+    "risk_free_rate": 0.0
+   }
+  },
+  {
+   "name": "rebalance_pit_empty_universe",
+   "input": {
+    "type": "rebalance",
+    "universe": [],
+    "cadence": "quarterly",
+    "selection": {
+     "method": "score",
+     "top_n": 20,
+     "universe_rule": {
+      "source": "KOSPI200",
+      "pick": 200,
+      "lookback": 60
+     }
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "selection",
+      "universe_rule",
+      "pick"
+     ],
+     "msg": "Input should be less than or equal to 100",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "rebalance_custom",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "method": "custom",
+     "entry": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ],
+     "exit": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": "<",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ]
+    }
+   },
+   "ok": true,
+   "dump": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "method": "custom",
+     "lookback": 120,
+     "top_n": 5,
+     "factor_weights": {
+      "momentum": 0.4,
+      "value": 0.3,
+      "lowvol": 0.3,
+      "quality": 0.0,
+      "growth": 0.0,
+      "flow": 0.0,
+      "residual_momentum": 0.0,
+      "pead": 0.0
+     },
+     "flow_window": 90,
+     "flow_denom": "mcap",
+     "resid_mom_reg_window": 36,
+     "resid_mom_window": 11,
+     "resid_mom_skip": 1,
+     "pead_lookback_q": 8,
+     "neutralize": "none",
+     "min_score": null,
+     "vol_gate": null,
+     "universe_rule": null,
+     "entry": {
+      "combinator": "and",
+      "children": [
+       {
+        "left": {
+         "kind": "price",
+         "source": "close",
+         "value": null,
+         "period": null,
+         "fast": null,
+         "slow": null,
+         "signal": null
+        },
+        "op": ">",
+        "right": {
+         "kind": "sma",
+         "source": null,
+         "value": null,
+         "period": 20,
+         "fast": null,
+         "slow": null,
+         "signal": null
+        }
+       }
+      ]
+     },
+     "exit": {
+      "combinator": "and",
+      "children": [
+       {
+        "left": {
+         "kind": "price",
+         "source": "close",
+         "value": null,
+         "period": null,
+         "fast": null,
+         "slow": null,
+         "signal": null
+        },
+        "op": "<",
+        "right": {
+         "kind": "sma",
+         "source": null,
+         "value": null,
+         "period": 20,
+         "fast": null,
+         "slow": null,
+         "signal": null
+        }
+       }
+      ]
+     }
+    },
+    "weighting": "equal",
+    "cadence": "monthly",
+    "rebalance_weekday": null,
+    "rebalance_dom": 1,
+    "rebalance_time": "14:30",
+    "initial_fill_immediate": false,
+    "drift_band_pct": 0.05,
+    "regime_filter": null,
+    "risk_layer": null,
+    "panic_overlay": null,
+    "capital": 10000000,
+    "fees": 0.00015,
+    "tax": 0.002,
+    "fill_mode": "next_close",
+    "slippage_bps": 5.0,
+    "slippage_vol_scale": 0.0,
+    "integer_shares": true,
+    "adv_participation_cap": null,
+    "price_limit_model": false,
+    "financial_period": "annual",
+    "benchmark_index": "KOSPI200",
+    "risk_free_rate": 0.0
+   }
+  },
+  {
+   "name": "missing_type",
+   "input": {
+    "symbol": "005930"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [],
+     "msg": "Unable to extract tag using discriminator 'type'",
+     "type": "union_tag_not_found"
+    }
+   ]
+  },
+  {
+   "name": "bad_type",
+   "input": {
+    "type": "nope",
+    "symbol": "005930"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [],
+     "msg": "Input tag 'nope' found using 'type' does not match any of the expected tags: 'sma_crossover', 'ema_crossover', 'rsi', 'macd', 'bollinger', 'breakout', 'momentum', 'zscore', 'disparity', 'donchian_squeeze', 'trix', 'obv_trend', 'atr_trailing', 'volatility_breakout', 'keltner', 'stochastic', 'custom', 'rebalance'",
+     "type": "union_tag_invalid"
+    }
+   ]
+  },
+  {
+   "name": "missing_symbol",
+   "input": {
+    "type": "rsi"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "symbol"
+     ],
+     "msg": "Field required",
+     "type": "missing"
+    }
+   ]
+  },
+  {
+   "name": "short_symbol",
+   "input": {
+    "type": "rsi",
+    "symbol": "123"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "symbol"
+     ],
+     "msg": "String should have at least 6 characters",
+     "type": "string_too_short"
+    }
+   ]
+  },
+  {
+   "name": "sma_fast_ge_slow",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fast": 30,
+    "slow": 20
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover"
+     ],
+     "msg": "Value error, fast 기간은 slow 기간보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "rsi_lower_ge_upper",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "lower": 70,
+    "upper": 30
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi"
+     ],
+     "msg": "Value error, RSI lower 는 upper 보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "macd_fast_ge_slow",
+   "input": {
+    "type": "macd",
+    "symbol": "005930",
+    "fast": 30,
+    "slow": 26
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "macd"
+     ],
+     "msg": "Value error, MACD fast 는 slow 보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "disparity_bad",
+   "input": {
+    "type": "disparity",
+    "symbol": "005930",
+    "lower": 110,
+    "upper": 105
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "disparity"
+     ],
+     "msg": "Value error, 이격도 lower 는 upper 보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "stoch_bad",
+   "input": {
+    "type": "stochastic",
+    "symbol": "005930",
+    "lower": 90
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "stochastic"
+     ],
+     "msg": "Value error, 스토캐스틱 lower 는 upper 보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "range_ge",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fast": 0
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "fast"
+     ],
+     "msg": "Input should be greater than or equal to 1",
+     "type": "greater_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "range_le",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "period": 500
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "period"
+     ],
+     "msg": "Input should be less than or equal to 240",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "range_gt",
+   "input": {
+    "type": "bollinger",
+    "symbol": "005930",
+    "num_std": 0
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "bollinger",
+      "num_std"
+     ],
+     "msg": "Input should be greater than 0",
+     "type": "greater_than"
+    }
+   ]
+  },
+  {
+   "name": "fees_le",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "fees": 0.5
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "fees"
+     ],
+     "msg": "Input should be less than or equal to 0.01",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "bad_literal",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "fill_mode": "open"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "fill_mode"
+     ],
+     "msg": "Input should be 'next_close' or 'same_close'",
+     "type": "literal_error"
+    }
+   ]
+  },
+  {
+   "name": "bad_int",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "period": "abc"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "period"
+     ],
+     "msg": "Input should be a valid integer, unable to parse string as an integer",
+     "type": "int_parsing"
+    }
+   ]
+  },
+  {
+   "name": "float_for_int",
+   "input": {
+    "type": "rsi",
+    "symbol": "005930",
+    "period": 14.5
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rsi",
+      "period"
+     ],
+     "msg": "Input should be a valid integer, got a number with a fractional part",
+     "type": "int_from_float"
+    }
+   ]
+  },
+  {
+   "name": "operand_missing_period",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": ">",
+      "right": {
+       "kind": "sma"
+      }
+     }
+    ],
+    "exit": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": "<",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "ConditionGroup",
+      "children"
+     ],
+     "msg": "Field required",
+     "type": "missing"
+    },
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "Condition",
+      "right"
+     ],
+     "msg": "Value error, sma 피연산자는 period 가 필요합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "operand_missing_source",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": [
+     {
+      "left": {
+       "kind": "price"
+      },
+      "op": ">",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ],
+    "exit": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": "<",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "ConditionGroup",
+      "children"
+     ],
+     "msg": "Field required",
+     "type": "missing"
+    },
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "Condition",
+      "left"
+     ],
+     "msg": "Value error, price 피연산자는 source 가 필요합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "operand_macd_bad",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": [
+     {
+      "left": {
+       "kind": "macd_line",
+       "fast": 30,
+       "slow": 26,
+       "signal": 9
+      },
+      "op": ">",
+      "right": {
+       "kind": "const",
+       "value": 0
+      }
+     }
+    ],
+    "exit": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": "<",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "ConditionGroup",
+      "children"
+     ],
+     "msg": "Field required",
+     "type": "missing"
+    },
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children",
+      0,
+      "Condition",
+      "left"
+     ],
+     "msg": "Value error, MACD fast 는 slow 보다 작아야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "empty_children",
+   "input": {
+    "type": "custom",
+    "symbol": "005930",
+    "entry": {
+     "children": []
+    },
+    "exit": [
+     {
+      "left": {
+       "kind": "price",
+       "source": "close"
+      },
+      "op": "<",
+      "right": {
+       "kind": "sma",
+       "period": 20
+      }
+     }
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "custom",
+      "entry",
+      "children"
+     ],
+     "msg": "List should have at least 1 item after validation, not 0",
+     "type": "too_short"
+    }
+   ]
+  },
+  {
+   "name": "weights_sum",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "method": "score",
+     "top_n": 1,
+     "factor_weights": {
+      "momentum": 0.5
+     }
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "selection",
+      "factor_weights"
+     ],
+     "msg": "Value error, factor_weights 합은 1.0 이어야 합니다(momentum+value+lowvol+quality+growth+flow+residual_momentum+pead=1.1000).",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "universe_empty",
+   "input": {
+    "type": "rebalance",
+    "universe": []
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, universe 가 비어 있습니다(지수 소스가 아니면 종목 목록 필수).",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "universe_dup",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "005930"
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "universe"
+     ],
+     "msg": "Value error, universe 에 중복 종목코드가 있습니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "universe_bad_len",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "123"
+    ]
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "universe"
+     ],
+     "msg": "Value error, 종목코드 길이가 올바르지 않습니다: '123'",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "topn_gt_universe",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 5
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, selection.top_n 은 universe 종목 수 이하여야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "drift_too_big",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660",
+     "035420"
+    ],
+    "selection": {
+     "top_n": 3
+    },
+    "drift_band_pct": 0.4
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, drift_band_pct(0.4)가 과대합니다: 선정 3종목·'equal' 비중에선 목표비중이 드리프트 밴드(0.333) 안에 갇혀 매매가 발생하지 않습니다. drift_band_pct 를 0.333 미만으로 낮추세요.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "score_weight_needs_score",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1
+    },
+    "weighting": "score"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, weighting='score' 는 selection.method='score' 일 때만 사용할 수 있습니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "custom_ohlc",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "method": "custom",
+     "entry": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "high"
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ],
+     "exit": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": "<",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ]
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, 리밸런싱 커스텀 규칙은 종가 기반 지표만 사용할 수 있습니다(open/high/low/volume 불가).",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "custom_missing_exit",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "method": "custom",
+     "entry": [
+      {
+       "left": {
+        "kind": "price",
+        "source": "close"
+       },
+       "op": ">",
+       "right": {
+        "kind": "sma",
+        "period": 20
+       }
+      }
+     ]
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, selection.method='custom' 은 entry·exit 규칙이 모두 필요합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "maxpos_le_drift",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660",
+     "035420",
+     "051910"
+    ],
+    "selection": {
+     "top_n": 2
+    },
+    "drift_band_pct": 0.3,
+    "risk_layer": {
+     "max_position_pct": 0.2
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, risk_layer.max_position_pct(0.2)는 drift_band_pct(0.3)보다 커야 합니다: 상한이 드리프트 밴드 이하이면 목표비중이 밴드 안에 갇혀 매매가 발생하지 않습니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "volgate_bad",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1,
+     "vol_gate": {
+      "spike_lookback": 100,
+      "base_lookback": 50
+     }
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "selection",
+      "vol_gate"
+     ],
+     "msg": "Value error, base_lookback 은 spike_lookback 이상이어야 합니다",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "panic_bad",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1
+    },
+    "panic_overlay": {
+     "base_exposure": 0.9,
+     "panic_exposure": 0.5
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "panic_overlay"
+     ],
+     "msg": "Value error, base_exposure 는 panic_exposure 이하여야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "bad_time",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1
+    },
+    "rebalance_time": "25:00"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "rebalance_time"
+     ],
+     "msg": "Value error, rebalance_time 시각 범위가 올바르지 않습니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "bad_time_format",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1
+    },
+    "rebalance_time": "abc"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance",
+      "rebalance_time"
+     ],
+     "msg": "Value error, rebalance_time 은 'HH:MM' 형식이어야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  },
+  {
+   "name": "pick_gt_universe",
+   "input": {
+    "type": "rebalance",
+    "universe": [
+     "005930",
+     "000660"
+    ],
+    "selection": {
+     "top_n": 1,
+     "universe_rule": {
+      "pick": 5
+     }
+    }
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "rebalance"
+     ],
+     "msg": "Value error, universe_rule.pick 은 universe(후보풀) 종목 수 이하여야 합니다.",
+     "type": "value_error"
+    }
+   ]
+  }
+ ]
+}
