@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose logs *)",
+      "Bash(docker compose ps*)",
+      "Bash(./gradlew *)",
+      "Bash(node .claude/hooks/md-lint.mjs)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/block-secret-edit.mjs" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "node .claude/hooks/backend-restart-reminder.mjs" },
+          { "type": "command", "command": "node .claude/hooks/md-lint.mjs --hook" }
+        ]
+      }
+    ]
+  }
+}
