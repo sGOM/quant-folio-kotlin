@@ -40,7 +40,7 @@ def walks(seed=7, n=120):
     idx = dates(n)
     normal = pd.Series(100 * np.exp(np.cumsum(rs.normal(0, 0.02, n))), index=idx)
     gappy = normal.copy()
-    gappy.iloc[[0, 5, 6, 7, 30, 61, 62, 100]] = np.nan
+    gappy.iloc[[p for p in (0, 5, 6, 7, 30, 61, 62, 100) if p < n]] = np.nan
     ties = pd.Series(np.round(rs.normal(0, 1, n)) + 10, index=idx)
     return {"normal": normal, "gappy": gappy, "ties": ties}
 
