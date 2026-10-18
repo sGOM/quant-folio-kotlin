@@ -26,6 +26,9 @@ class FakeExternalHttp : ExternalHttp {
     override fun postJson(url: String, json: String, headers: Map<String, String>, timeout: Duration): HttpBytes =
         handle(Call("POST", url, emptyMap(), json, headers))
 
+    override fun postForm(url: String, form: Map<String, String>, headers: Map<String, String>, timeout: Duration): HttpBytes =
+        handle(Call("POST", url, form, null, headers))
+
     private fun handle(call: Call): HttpBytes {
         calls += call
         val handler = handlers.firstOrNull { it.first(call) } ?: return HttpBytes(404, ByteArray(0))

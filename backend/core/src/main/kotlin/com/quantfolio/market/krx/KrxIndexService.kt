@@ -23,6 +23,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class ListedStock(val code: String, val name: String, val market: String)
 
+/** KRX 전종목 목록(테스트에서 교체할 수 있게 분리). */
+fun interface ListedStocks {
+    fun allListedStocks(): List<ListedStock>
+}
+
 data class EtfLeverage(
     val asOf: LocalDate,
     val totalMktcap: Double,
@@ -52,7 +57,7 @@ class KrxIndexService(
     private val sectors: SectorMapSnapshotRepository,
     private val calendar: MarketCalendar,
     private val clock: Clock,
-) : IndexMembers {
+) : IndexMembers, ListedStocks {
     private val log = LoggerFactory.getLogger(javaClass)
     private val membersCache = ConcurrentHashMap<Pair<String, LocalDate>, List<String>>()
     private val capsCache = ConcurrentHashMap<LocalDate, Map<String, Long>>()
@@ -107,7 +112,7 @@ class KrxIndexService(
     fun membershipUnion(dates: List<LocalDate>, index: String = "KOSPI200"): Map<String, List<String>> =
         dates.associate { it.format(YMD) to indexMembers(it, index) }
 
-    fun allListedStocks(): List<ListedStock> {
+    override fun allListedStocks(): List<ListedStock> {
         stocksCache?.let { return it }
         if (session.current() == null) {
             log.debug("KRX 미인증 — 전종목 목록 조회 건너뜀")

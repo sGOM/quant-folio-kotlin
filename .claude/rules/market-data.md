@@ -54,6 +54,16 @@ paths:
 - `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.
 - KRX 미인증(자격증명 없음)은 실패가 아니라 빈 결과. 캐시는 **성공했을 때만**.
 
+## 그 밖의 소스
+
+| 패키지 | 원본 | 핵심 규칙 |
+|---|---|---|
+| `ohlcv/` | `loader.py`·`ingest.py` | FDR→pykrx 순 네이버 차트, price_ticks 는 부족분(머리·꼬리, 5일 유예)만 보충 |
+| `kofia/` | `kofia.py` | 라벨 없는 컬럼은 확정된 것만 이름, 나머지 raw. 반대매매 비중 단독 게이트 금지 |
+| `kis/` | `kis_master.py` | cp949 고정폭. 관리·정리매매 차단은 스냅샷 10일 이내만 |
+| `dart/` | `opendart.py` | 키 없음·013 만 null, 나머지는 예외. `crtfc_key` 마스킹. account_id 우선·이름 폴백 |
+| `symbols/` | `symbols.py` | seed → KRX → FDR 병합, 외부 전부 실패면 캐시 보류 |
+
 ## 함정
 
 - 원본 데이터 소스: 종목 일봉 = FDR → 네이버 차트(수정주가), KRX MDC 계열 = `getJsonData.cmd` POST. 소스를 바꾸면 기존 DB 와 섞인다.

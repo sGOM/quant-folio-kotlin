@@ -22,6 +22,8 @@ interface ExternalHttp {
     ): HttpBytes
 
     fun postJson(url: String, json: String, headers: Map<String, String>, timeout: Duration): HttpBytes
+
+    fun postForm(url: String, form: Map<String, String>, headers: Map<String, String>, timeout: Duration = Duration.ofSeconds(20)): HttpBytes
 }
 
 @Component
@@ -41,6 +43,15 @@ class JdkExternalHttp : ExternalHttp {
 
     override fun postJson(url: String, json: String, headers: Map<String, String>, timeout: Duration): HttpBytes {
         val request = HttpRequest.newBuilder(URI.create(url)).timeout(timeout).POST(HttpRequest.BodyPublishers.ofString(json))
+        headers.forEach { (k, v) -> request.header(k, v) }
+        return send(request.build())
+    }
+
+    override fun postForm(url: String, form: Map<String, String>, headers: Map<String, String>, timeout: Duration): HttpBytes {
+        val body = form.entries.joinToString("&") { (k, v) -> enc(k) + "=" + enc(v) }
+        val request = HttpRequest.newBuilder(URI.create(url)).timeout(timeout)
+            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            .POST(HttpRequest.BodyPublishers.ofString(body))
         headers.forEach { (k, v) -> request.header(k, v) }
         return send(request.build())
     }
