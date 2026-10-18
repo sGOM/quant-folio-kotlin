@@ -6,6 +6,22 @@ import kotlin.math.sqrt
 
 enum class RankMethod { AVERAGE, MIN, MAX, FIRST, DENSE }
 
+/** 원소별 최댓값(NaN 은 건너뜀, 전부 NaN 이면 NaN) — pandas `concat([...], axis=1).max(axis=1)`. */
+fun rowMax(vararg series: Series): Series {
+    val first = series.first()
+    return Series(
+        first.index,
+        DoubleArray(first.size) { i ->
+            var best = Double.NaN
+            for (s in series) { val v = s.values[i]; if (!v.isNaN() && (best.isNaN() || v > best)) best = v }
+            best
+        },
+    )
+}
+
+/** 상수 시계열. */
+fun constant(index: List<LocalDate>, v: Double) = Series(index, DoubleArray(index.size) { v })
+
 /**
  * 날짜 인덱스 실수 시계열 — pandas Series 의 필요한 부분을 **같은 의미로** 재현한다(정답지: tools/oracle/gen_series.py).
  * 결측은 NaN. 불변이며 모든 연산은 새 Series 를 돌려준다.
@@ -108,11 +124,21 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
 
     fun rolling(window: Int, minPeriods: Int = window) = Rolling(this, window, minPeriods)
 
-    /** span 또는 alpha 중 하나. span → alpha = 2/(span+1). */
-    fun ewm(span: Double? = null, alpha: Double? = null, adjust: Boolean = true): Ewm {
+    /** span 또는 alpha 중 하나. span → alpha = 2/(span+1). minPeriods 는 관측(비결측) 개수 기준. */
+    fun ewm(span: Double? = null, alpha: Double? = null, adjust: Boolean = true, minPeriods: Int = 0): Ewm {
         val a = alpha ?: span?.let { 2.0 / (it + 1.0) } ?: error("span 또는 alpha 가 필요하다")
-        return Ewm(this, a, adjust)
+        return Ewm(this, a, adjust, minPeriods)
     }
+
+    /** pandas `where(cond, other)`: cond 가 거짓인 자리를 other 로. */
+    fun where(cond: BoolSeries, other: Double): Series = with(DoubleArray(size) { if (cond.values[it]) values[it] else other })
+
+    fun abs(): Series = map { kotlin.math.abs(it) }
+
+    /** numpy sign: 음수 -1, 0 은 0, 양수 1, NaN 은 NaN. */
+    fun sign(): Series = map { if (it.isNaN()) it else kotlin.math.sign(it) }
+
+    fun notNa(): BoolSeries = BoolSeries(index, BooleanArray(size) { !values[it].isNaN() })
 
     /** pandas rank(na_option='keep'). pct 는 rank / 유효 개수(dense 는 최대 dense rank). */
     fun rank(method: RankMethod = RankMethod.AVERAGE, pct: Boolean = false): Series {
@@ -178,6 +204,13 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
 }
 
 class BoolSeries(val index: List<LocalDate>, val values: BooleanArray) {
+    val size: Int get() = values.size
+
+    operator fun get(i: Int): Boolean = values[i]
+
+    /** cond 가 거짓인 자리를 other 로(pandas where). */
+    fun where(cond: BoolSeries, other: Boolean) = BoolSeries(index, BooleanArray(values.size) { if (cond.values[it]) values[it] else other })
+
     infix fun and(o: BoolSeries) = BoolSeries(index, BooleanArray(values.size) { values[it] && o.values[it] })
     infix fun or(o: BoolSeries) = BoolSeries(index, BooleanArray(values.size) { values[it] || o.values[it] })
     fun not() = BoolSeries(index, BooleanArray(values.size) { !values[it] })

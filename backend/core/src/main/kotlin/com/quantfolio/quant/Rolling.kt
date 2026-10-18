@@ -40,10 +40,12 @@ class Rolling(private val s: Series, private val window: Int, private val minPer
 }
 
 /**
- * pandas ewm(...).mean() — adjust·ignore_na=False·min_periods=0(→1) 의 cython `ewma` 를 그대로 옮겼다.
+ * pandas ewm(...).mean() — adjust·ignore_na=False·min_periods(최소 1) 의 cython `ewma` 를 그대로 옮겼다.
  * 결측 구간에서도 기존 가중치는 감쇠하고, 다음 관측에서 재정규화된다.
  */
-class Ewm(private val s: Series, private val alpha: Double, private val adjust: Boolean) {
+class Ewm(private val s: Series, private val alpha: Double, private val adjust: Boolean, minPeriods: Int = 0) {
+    private val minp = maxOf(minPeriods, 1)
+
     fun mean(): Series {
         val v = s.values
         val out = DoubleArray(v.size)
@@ -52,7 +54,7 @@ class Ewm(private val s: Series, private val alpha: Double, private val adjust: 
         val newWt = if (adjust) 1.0 else alpha
         var weighted = v[0]
         var nobs = if (weighted.isNaN()) 0 else 1
-        out[0] = if (nobs >= 1) weighted else Double.NaN
+        out[0] = if (nobs >= minp) weighted else Double.NaN
         var oldWt = 1.0
         for (i in 1 until v.size) {
             val cur = v[i]
@@ -67,7 +69,7 @@ class Ewm(private val s: Series, private val alpha: Double, private val adjust: 
             } else if (isObs) {
                 weighted = cur
             }
-            out[i] = if (nobs >= 1) weighted else Double.NaN
+            out[i] = if (nobs >= minp) weighted else Double.NaN
         }
         return Series(s.index, out)
     }

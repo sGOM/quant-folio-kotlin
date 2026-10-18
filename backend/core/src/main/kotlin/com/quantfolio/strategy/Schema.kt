@@ -1,7 +1,6 @@
 package com.quantfolio.strategy
 
-import java.math.BigDecimal
-import java.math.RoundingMode
+import com.quantfolio.quant.pyNum
 
 /** pydantic 과 같은 형식의 검증 오류 한 건(loc 은 판별자 태그부터). */
 data class ConfigError(val loc: List<Any>, val msg: String, val type: String)
@@ -203,27 +202,3 @@ object Validator {
         return if (q.size == 1) q[0] else q.dropLast(1).joinToString(", ") + " or " + q.last()
     }
 }
-
-/** Python repr 와 같은 숫자 표기(Int 는 그대로, 실수는 최단 표현·지수는 1e-05 형식). */
-fun pyNum(n: Number): String = when (n) {
-    is Int, is Long -> n.toString()
-    else -> pyFloat(n.toDouble())
-}
-
-fun pyFloat(d: Double): String {
-    if (d.isNaN()) return "nan"
-    if (d.isInfinite()) return if (d > 0) "inf" else "-inf"
-    val s = d.toString()
-    val e = s.indexOf('E')
-    if (e < 0) return s
-    val mantissa = s.substring(0, e).removeSuffix(".0")
-    val exp = s.substring(e + 1).toInt()
-    if (exp in -4..15) return BigDecimal(s).toPlainString().let { if ('.' in it) it else "$it.0" }
-    return mantissa + "e" + (if (exp < 0) "-" else "+") + kotlin.math.abs(exp).toString().padStart(2, '0')
-}
-
-/** Python `format(x, '.Nf')` — 정확한 이진값 기준 half-even(Java %f 의 half-up 과 다르다). */
-fun pyFixed(d: Double, digits: Int): String = BigDecimal(d).setScale(digits, RoundingMode.HALF_EVEN).toPlainString()
-
-/** Python `repr(str)`. */
-fun pyRepr(s: String): String = if ('\'' in s && '"' !in s) "\"$s\"" else "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
