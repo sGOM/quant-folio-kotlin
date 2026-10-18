@@ -20,6 +20,7 @@ dependencies {
     testFixturesApi("org.testcontainers:testcontainers-junit-jupiter")
     testFixturesApi("org.testcontainers:testcontainers-postgresql")
     testFixturesApi("org.springframework.boot:spring-boot-starter-test")
+    testFixturesApi("org.jetbrains.kotlin:kotlin-test-junit5")
 }
 
 allOpen {
