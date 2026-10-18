@@ -1,0 +1,57 @@
+[
+ {
+  "universe": [
+   "005930",
+   "000660"
+  ],
+  "rule": null,
+  "dumps": "{\"universe\": [\"000660\", \"005930\"], \"universe_rule\": {}}",
+  "fp": "67c77ef6dc2b295d"
+ },
+ {
+  "universe": [
+   "000660",
+   "005930",
+   "035420"
+  ],
+  "rule": {
+   "source": "KOSPI200",
+   "lookback": 120,
+   "pick": 20,
+   "min_market_cap": null
+  },
+  "dumps": "{\"universe\": [\"000660\", \"005930\", \"035420\"], \"universe_rule\": {\"lookback\": 120, \"min_market_cap\": null, \"pick\": 20, \"source\": \"KOSPI200\"}}",
+  "fp": "7fbfdb72040da703"
+ },
+ {
+  "universe": [],
+  "rule": {
+   "source": "fixed",
+   "min_market_cap": 500.0,
+   "flag": true,
+   "nested": {
+    "b": [
+     1,
+     2.5,
+     "가"
+    ],
+    "a": "é\"\\/\n"
+   }
+  },
+  "dumps": "{\"universe\": [], \"universe_rule\": {\"flag\": true, \"min_market_cap\": 500.0, \"nested\": {\"a\": \"\\u00e9\\\"\\\\/\\n\", \"b\": [1, 2.5, \"\\uac00\"]}, \"source\": \"fixed\"}}",
+  "fp": "e4b8afc11c7e79fa"
+ },
+ {
+  "universe": [
+   "900001"
+  ],
+  "rule": {
+   "ratio": 1e-07,
+   "big": 1e+16,
+   "neg": -0.0,
+   "x": 0.1
+  },
+  "dumps": "{\"universe\": [\"900001\"], \"universe_rule\": {\"big\": 1e+16, \"neg\": -0.0, \"ratio\": 1e-07, \"x\": 0.1}}",
+  "fp": "1d71b57cce36c38a"
+ }
+]

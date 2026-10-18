@@ -1,6 +1,8 @@
 package com.quantfolio.web.api
 
 import com.quantfolio.common.QuantfolioProperties
+import com.quantfolio.backtest.BacktestFailed
+import com.quantfolio.backtest.BacktestInputError
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.SourceRequestError
 import com.quantfolio.market.source.SourceSchemaError
@@ -58,6 +60,13 @@ class ApiErrorHandler(private val props: QuantfolioProperties) {
     /** 전략 설정 검증 실패 — pydantic 처럼 `loc` 이 body.config 부터(판별자 태그 → 필드). 문구·type 은 pydantic 원문. */
     @ExceptionHandler(StrategyConfigException::class)
     fun invalidConfig(e: StrategyConfigException) = unprocessable(e.errors.map { ValidationError(it.type, listOf("body", "config") + it.loc, it.msg) })
+
+    /** 백테스트 입력 부적합(원본 ValueError → 422) / 실행 실패(원본 500 `백테스트 실패: {e}`, 원인 문구 노출은 원본 그대로). */
+    @ExceptionHandler(BacktestInputError::class)
+    fun backtestInput(e: BacktestInputError) = ResponseEntity.unprocessableContent().body(mapOf("detail" to e.message))
+
+    @ExceptionHandler(BacktestFailed::class)
+    fun backtestFailed(e: BacktestFailed) = ResponseEntity.internalServerError().body(mapOf("detail" to e.message))
 
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun unreadable(e: HttpMessageNotReadableException) =

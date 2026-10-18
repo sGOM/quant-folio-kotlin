@@ -26,4 +26,7 @@ class Backtest(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 )
 
-interface BacktestRepository : JpaRepository<Backtest, Int>
+interface BacktestRepository : JpaRepository<Backtest, Int> {
+    fun findByStrategyIdOrderByIdDesc(strategyId: Int): List<Backtest>
+    fun findByStrategyIdAndPeriodStartAndPeriodEnd(strategyId: Int, periodStart: Instant, periodEnd: Instant): List<Backtest>
+}

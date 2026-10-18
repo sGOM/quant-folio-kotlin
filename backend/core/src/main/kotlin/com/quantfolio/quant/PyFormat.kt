@@ -39,3 +39,66 @@ fun pyFixed(d: Double, digits: Int, grouping: Boolean = false): String {
 
 /** Python `repr(str)`. */
 fun pyRepr(s: String): String = if ('\'' in s && '"' !in s) "\"$s\"" else "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+/**
+ * Python `json.dumps(value, sort_keys=?, default=str)` 와 바이트 동일한 직렬화(구분자 `", "`·`": "`, ensure_ascii).
+ * 해시·지문처럼 원본이 만든 문자열과 그대로 비교해야 하는 곳에만 쓴다(응답 JSON 은 Jackson).
+ */
+fun pyJsonDumps(value: Any?, sortKeys: Boolean = false): String = StringBuilder().also { pyJson(value, sortKeys, it) }.toString()
+
+private fun pyJson(v: Any?, sortKeys: Boolean, out: StringBuilder) {
+    when (v) {
+        null -> out.append("null")
+        is Boolean -> out.append(if (v) "true" else "false")
+        is Int, is Long, is Short, is Byte, is java.math.BigInteger -> out.append(v.toString())
+        is Double, is Float -> {
+            val d = (v as Number).toDouble()
+            out.append(
+                when {
+                    d.isNaN() -> "NaN"
+                    d.isInfinite() -> if (d > 0) "Infinity" else "-Infinity"
+                    else -> pyFloat(d)
+                },
+            )
+        }
+        is BigDecimal -> out.append(pyFloat(v.toDouble()))
+        is Map<*, *> -> {
+            val entries = v.entries.map { it.key.toString() to it.value }.let { e -> if (sortKeys) e.sortedBy { it.first } else e }
+            out.append('{')
+            entries.forEachIndexed { i, (k, x) ->
+                if (i > 0) out.append(", ")
+                pyJsonString(k, out)
+                out.append(": ")
+                pyJson(x, sortKeys, out)
+            }
+            out.append('}')
+        }
+        is Iterable<*> -> {
+            out.append('[')
+            v.forEachIndexed { i, x ->
+                if (i > 0) out.append(", ")
+                pyJson(x, sortKeys, out)
+            }
+            out.append(']')
+        }
+        else -> pyJsonString(v.toString(), out) // default=str
+    }
+}
+
+private fun pyJsonString(s: String, out: StringBuilder) {
+    out.append('"')
+    for (c in s) {
+        when {
+            c == '"' -> out.append("\\\"")
+            c == '\\' -> out.append("\\\\")
+            c == '\n' -> out.append("\\n")
+            c == '\r' -> out.append("\\r")
+            c == '\t' -> out.append("\\t")
+            c == '\b' -> out.append("\\b")
+            c == '\u000c' -> out.append("\\f")
+            c.code < 0x20 || c.code > 0x7e -> out.append("\\u").append(c.code.toString(16).padStart(4, '0'))
+            else -> out.append(c)
+        }
+    }
+    out.append('"')
+}
