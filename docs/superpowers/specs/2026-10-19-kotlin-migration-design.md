@@ -168,7 +168,9 @@ HTTP 요청·재시도·타임아웃·에러 분류(`services/data/errors.py`)�
 
 - 원본 requirements 에 고정된 버전(**pykrx 1.2.8, finance-datareader 0.9.96**)의 소스를 읽고, 각 함수가 보내는
   **HTTP 요청(KRX 데이터 포털 JSON 엔드포인트·KRX 로그인·네이버 금융)과 후처리(수정주가 여부 포함)**를
-  Kotlin 으로 그대로 재현한다. pykrx 종목별 일봉은 기본이 **수정주가**(네이버 경유)임에 주의.
+  Kotlin 으로 그대로 재현한다. 종목 일봉의 실효 소스는 `loader.py` 가 먼저 부르는 **FDR → 네이버 차트
+  `fchart.stock.naver.com/sise.nhn`(수정주가)** 이고, pykrx(`adjusted=True` 기본, 역시 네이버 경유)는 폴백이다.
+  KRX MDC 계열 함수는 대부분 같은 `getJsonData.cmd` POST(+`bld`)이므로 pykrx 클래스 구조가 아니라 **MDC 클라이언트 하나**로 옮긴다.
 - 이유: 기존 DB 데이터가 이 소스로 채워져 있고, 정답지 대조(§8)가 같은 입력을 전제한다.
 - KRX 공식 OPEN API 로의 교체는 **후속 과제**로 남긴다(별도 검증 필요, 공식 API 엔 PER·PBR·투자자별 순매수 없음).
 
