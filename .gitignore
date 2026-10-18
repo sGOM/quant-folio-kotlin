@@ -1,0 +1,9 @@
+.gradle/
+build/
+.idea/
+*.iml
+.superpowers/
+.env
+secrets/*.txt
+node_modules/
+.kotlin/
