@@ -1,6 +1,9 @@
 package com.quantfolio.web.api
 
 import com.quantfolio.common.QuantfolioProperties
+import com.quantfolio.market.source.DataSourceError
+import com.quantfolio.market.source.SourceRequestError
+import com.quantfolio.market.source.SourceSchemaError
 import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -26,6 +29,23 @@ class ApiErrorHandler(private val props: QuantfolioProperties) {
 
     @ExceptionHandler(ApiException::class)
     fun api(e: ApiException) = ResponseEntity.status(e.status).body(mapOf("detail" to e.detail))
+
+    /**
+     * 외부 데이터 소스 실패 → 원인별 HTTP. **전부 503 으로 뭉개지 않는다** — "재시도/사람이 고칠 것"을 가르려고 원인을 나눴다.
+     * Request(우리가 잘못 보냄)=500, Schema(상류 계약 변경)=502, 나머지(차단·한도·연결)=503.
+     */
+    @ExceptionHandler(DataSourceError::class)
+    fun dataSource(e: DataSourceError, request: HttpServletRequest): ResponseEntity<Map<String, Any>> {
+        val (status, detail) = when (e) {
+            is SourceRequestError -> HttpStatus.INTERNAL_SERVER_ERROR to "외부 데이터 소스 요청이 잘못됐습니다."
+            is SourceSchemaError -> HttpStatus.BAD_GATEWAY to "외부 데이터 소스 응답을 해석할 수 없습니다."
+            else -> HttpStatus.SERVICE_UNAVAILABLE to "외부 데이터 소스를 사용할 수 없습니다."
+        }
+        log.error("외부 데이터 소스 실패 ({} → {}): {}", request.requestURI, status.value(), e.message)
+        return ResponseEntity.status(status).body(
+            mapOf("detail" to detail, "source" to e.source, "cause" to e.causeName, "retryable" to e.retryable),
+        )
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun invalidBody(e: MethodArgumentNotValidException) = unprocessable(
