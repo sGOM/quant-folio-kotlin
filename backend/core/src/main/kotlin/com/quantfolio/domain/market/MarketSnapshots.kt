@@ -9,6 +9,9 @@ import jakarta.persistence.Table
 import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
+import org.springframework.data.jpa.repository.Query
+import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 import java.time.LocalDate
 
@@ -36,6 +39,18 @@ class KisStockMasterSnapshot(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 )
 
-interface SectorMapSnapshotRepository : JpaRepository<SectorMapSnapshot, Int>
+interface SectorMapSnapshotRepository : JpaRepository<SectorMapSnapshot, Int> {
+    @Query("select max(s.snapshotDate) from SectorMapSnapshot s where s.snapshotDate <= :asOf")
+    fun latestDateOnOrBefore(asOf: LocalDate): LocalDate?
+
+    fun findBySnapshotDate(snapshotDate: LocalDate): List<SectorMapSnapshot>
+
+    fun countBySnapshotDate(snapshotDate: LocalDate): Long
+
+    @Transactional
+    @Modifying
+    @Query("delete from SectorMapSnapshot s where s.snapshotDate = :snapshotDate")
+    fun deleteBySnapshotDate(snapshotDate: LocalDate): Int
+}
 
 interface KisStockMasterSnapshotRepository : JpaRepository<KisStockMasterSnapshot, Int>
