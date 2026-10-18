@@ -16,3 +16,4 @@
 - 성과귀속 롱숏(`Attribution.factorAttribution` 의 `ls_return`): 원본 `pair.sort_values(ascending=False)` 는 numpy quicksort 라
   **동점 순서가 구현(CPU SIMD 경로)마다 다르다.** Kotlin 은 안정 정렬. `score` 가 소수 4자리 반올림이라 실데이터에서
   상·하위 1/3 경계에 동점이 걸리면 값이 갈린다(2층 정답지에서 1건 관측). IC(평균순위)·매매 결정(안정 정렬 `list.sort`)은 무관.
+- 스크리너 라우트 캐시: 원본은 Redis 조회 실패 시 500, Kotlin 은 다른 지표 라우트처럼 캐시 미스로 보고 계산(`JsonCache`). Redis 장애 때만 다르다.
