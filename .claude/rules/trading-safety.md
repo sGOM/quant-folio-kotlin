@@ -33,7 +33,7 @@ paths:
 | 전송 결과 3갈래: 성공→submitted, `BrokerError`→rejected, **그 밖의 예외→pending 유지 + critical, 재전파** | `OrderExecutor` | 체결됐을 주문을 거부로 확정 → 장부 어긋남 |
 | 체결 조회 실패는 미체결(0)로 — 전량 체결로 간주 금지 | `OrderExecutor.resolveFill` | filled 확정 후 정합 대상에서 빠져 영구 오염 |
 | 정합은 **증분만** 기록, 접수불명은 잔고 교차확인(모의·매수)으로만, 5분 유예 | `Reconciler` | 중복 가산 / 전송 중 주문 오판 |
-| executor·reconcile·체결통보는 **같은 주문 락 키**(`reconcileLock`) | `Reconciler`·`FillNoticeApplier` | 같은 체결 이중 기록 |
+| reconcile·체결통보는 **같은 주문 락 키**(`reconcileLock`), executor 는 멱등 락(`lock:order:{key}`) | `Reconciler`·`FillNoticeApplier` | 같은 체결 이중 기록 |
 | 0 이하 현재가는 "시세 없음" — 손절·익절 판정에 쓰지 않는다 | 러너·`RiskManager` | −100% 로 오독해 전량 청산 |
 | 주문 순서: 실전 게이트(prod) → 정지/CB 게이트 → 실행기 | `BaseRunner.place` | 승인 없는 실전 주문 / CB 중 시장가 |
 
