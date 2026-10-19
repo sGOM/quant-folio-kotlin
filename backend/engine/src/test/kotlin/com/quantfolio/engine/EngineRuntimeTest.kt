@@ -64,4 +64,24 @@ class EngineRuntimeTest(
         assertEquals(1, a.size)
         assertEquals("체결 재조회 루프 연속 3회 실패 — 미체결 주문이 정합되지 않고 있을 수 있음. 마지막 원인: 2건 브로커 조회 실패(개별 주문/사용자 단위)", a.single().message)
     }
+
+    /** 수용 기준 7: 재기동 시 DB 의 live 전략 복구 + heartbeat 키. */
+    @Test
+    fun startRecoversLiveStrategiesAndBeatsHeart() {
+        val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        val live = strategies.save(Strategy(uid, "live", config = mapOf("type" to "rsi", "symbol" to "005930"), status = "live")).id!!
+        val draft = strategies.save(Strategy(uid, "draft", config = mapOf("type" to "rsi", "symbol" to "005930"))).id!!
+        redis.delete(RedisKeys.ENGINE_HEARTBEAT)
+        runtime.start()
+        try {
+            assertTrue(live in runtime.activeStrategies())
+            assertFalse(draft in runtime.activeStrategies())
+            val deadline = System.currentTimeMillis() + 5_000
+            while (redis.opsForValue().get(RedisKeys.ENGINE_HEARTBEAT) == null && System.currentTimeMillis() < deadline) Thread.sleep(50)
+            assertEquals("alive", redis.opsForValue().get(RedisKeys.ENGINE_HEARTBEAT))
+        } finally {
+            runtime.stop()
+        }
+        assertTrue(runtime.activeStrategies().isEmpty())
+    }
 }

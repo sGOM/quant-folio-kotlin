@@ -67,6 +67,7 @@ class RunnersTest(
     @MockitoBean lateinit var brokers: BrokerCredentials
     @MockitoBean lateinit var calendar: MarketCalendar
     @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
 
     /** 종목별 고정 시세, 주문은 즉시 전량 체결. */
     class Broker(val quotes: MutableMap<String, BigDecimal> = mutableMapOf(), var halted: Set<String> = emptySet()) : BrokerClient {
@@ -264,5 +265,25 @@ class RunnersTest(
         rebal(sid).tickOnce()
         assertEquals(1, alerts.findAll().count { it.code == "factor_outage" && it.strategyId == sid })
         assertTrue(ordersOf(sid).isEmpty())
+    }
+
+    /** 수용 기준 2: 지수 소스면 그 시점 구성종목(PIT)으로 선정, 조회 실패면 고정 universe 폴백 + 1회 경보. */
+    @Test
+    fun pitUniverseUsesIndexMembersAndAlertsOnceOnFallback() {
+        val members = (1..2).map { sym() }
+        val fixed = listOf(sym())
+        (members + fixed).forEach { c -> seed(c, 30) { i -> 1000.0 + i } }
+        val (_, sid) = strategy(rebalCfg(fixed, mapOf("selection" to mapOf("method" to "all", "universe_rule" to mapOf("source" to "KOSPI200")))))
+        given(krx.indexMembers(anyDate(), anyString())).willReturn(members)
+        rebal(sid).tickOnce()
+        assertEquals(members.toSet(), ordersOf(sid).map { it.symbol }.toSet()) // 고정 universe 가 아니라 그 시점 구성종목
+
+        val (_, sid2) = strategy(rebalCfg(fixed, mapOf("selection" to mapOf("method" to "all", "universe_rule" to mapOf("source" to "KOSPI200")))))
+        given(krx.indexMembers(anyDate(), anyString())).willThrow(com.quantfolio.market.source.SourceAuthError("krx", "차단"))
+        val r = rebal(sid2)
+        r.tickOnce()
+        r.rebalanceOnce(java.time.ZonedDateTime.now(), riskOff = false, barTag = "again")
+        assertEquals(fixed.toSet(), ordersOf(sid2).map { it.symbol }.toSet())
+        assertEquals(1, alerts.findAll().count { it.code == "pit_fallback" && it.strategyId == sid2 })
     }
 }
