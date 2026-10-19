@@ -8,6 +8,7 @@
 | 2 | `DataSourceErrors.secondsUntilMidnight` | `errors.py` | 프로세스 로컬 시각 기준 자정(UTC 컨테이너면 KST 09시). DART 한도는 KST 자정 리셋. | 쿨다운이 길어지거나 짧아짐 — 원본 주석이 수용한 오차 |
 | 3 | `KrxMdc.pykrx` | pykrx `KrxWebIo.read` | 730일 초과 조회에서 두 번째 조각부터 항상 `result["output"]` 에 이어붙여, `OutBlock_1` 응답(MDCSTAT01602 기간등락률)은 KeyError 로 실패 | 2년 초과 기간등락률 조회 불가(Unavailable) |
 | 4 | `KrxStockApi` int32 컬럼 | pykrx `astype(np.int32)` | 시가·종가·거래량 등 int32 컬럼이 2^31 을 넘으면 numpy OverflowError 로 그 시장 조회 전체가 실패 | 거래량 21억 주 초과 종목이 있는 날 해당 시장 데이터 누락(Unavailable) |
+| 5 | `TrackingController` | `routes/tracking.py` + `tracking.reconstruct_realized_curve` | 가격 패널 인덱스(tz-aware UTC)와 체결일(tz-naive KST 날짜)을 한 집합에 섞어 정렬 → 체결 종목에 시세가 하나라도 있으면 `TypeError` 로 500(원본 컨테이너에서 재현 확인). **크래시는 보존 대상이 아니라고 판정** — 의도대로 날짜끼리 비교해 정상 응답 | 원본에선 사실상 항상 실패하던 화면이 동작. 원본 결과와 비교할 기준값이 없다 |
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 
