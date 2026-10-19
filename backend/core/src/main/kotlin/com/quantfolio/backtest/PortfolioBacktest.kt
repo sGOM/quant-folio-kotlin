@@ -144,7 +144,8 @@ object PortfolioBacktest {
         return Series(s.index.subList(from, s.size), s.values.copyOfRange(from, s.size))
     }
 
-    private fun dynamicUniverse(hist: Panel, pool: List<String>, rule: Map<String, Any?>): List<String> {
+    /** 후보풀에서 d 시점 상대강도 상위 pick(이력이 lookback 미만인 종목은 자연 제외). 실거래 러너와 공유. */
+    fun dynamicUniverse(hist: Panel, pool: List<String>, rule: Map<String, Any?>): List<String> {
         val lookback = Cfg.int(Cfg.get(rule, "lookback", 120))
         val pick = Cfg.int(Cfg.get(rule, "pick", 20))
         return pool.mapNotNull { code ->

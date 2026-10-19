@@ -57,4 +57,11 @@ object RedisKeys {
 
     /** 실시간 체결가 캐시 `price:{symbol}`(TTL 120초) — 러너가 우선 쓰고 없으면 REST 폴백. */
     fun price(symbol: String): String = "price:$symbol"
+
+    /** 리밸런싱 러너 상태: 마지막 정기 실행 시각(ISO)·직전 레짐("1"=위험회피). TTL 90일. */
+    fun rebalanceLast(strategyId: Int): String = "rebalance:last:$strategyId"
+    fun rebalanceRegime(strategyId: Int): String = "rebalance:regime:$strategyId"
+
+    /** 단일종목 러너 트레일링 스탑 고점 `trail:{strategy}:{symbol}`(TTL 7일). */
+    fun trail(strategyId: Int, symbol: String): String = "trail:$strategyId:$symbol"
 }

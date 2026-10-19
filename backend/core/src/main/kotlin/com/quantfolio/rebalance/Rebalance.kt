@@ -225,6 +225,24 @@ object Rebalance {
         return sells + buys
     }
 
+    /**
+     * 지금 리밸런싱을 실행할지(원본 `is_rebalance_due`): 장 운영 중 + 실행시각(rebalance_time, 기본 14:30) 이상 + 이번 주기 미실행
+     * + weekly 는 요일 ≥ rebalance_weekday, monthly/quarterly 는 일 ≥ rebalance_dom(그 달 일수로 클램프). 지정일이 휴장이면 다음 영업일에 자연 발화.
+     * now·last 는 KST.
+     */
+    fun isRebalanceDue(cfg: Map<String, Any?>, last: java.time.ZonedDateTime?, now: java.time.ZonedDateTime, marketOpen: Boolean): Boolean {
+        val cadence = Cfg.get(cfg, "cadence", "monthly").toString()
+        if (!marketOpen) return false
+        val (h, m) = Cfg.get(cfg, "rebalance_time", "14:30").toString().split(":").let { it[0].toInt() to it[1].toInt() }
+        if (now.hour < h || (now.hour == h && now.minute < m)) return false
+        if (last != null && periodKey(last.toLocalDate(), cadence) == periodKey(now.toLocalDate(), cadence)) return false
+        when (cadence) {
+            "weekly" -> if (now.dayOfWeek.value - 1 < Cfg.int(Cfg.or(cfg, "rebalance_weekday", 0)).coerceIn(0, 4)) return false
+            "monthly", "quarterly" -> if (now.dayOfMonth < Cfg.int(Cfg.or(cfg, "rebalance_dom", 1)).coerceIn(1, now.toLocalDate().lengthOfMonth())) return false
+        }
+        return true
+    }
+
     /** cadence 별 '같은 주기' 키. daily=날짜, weekly=[ISO 연, 주], quarterly=[연, 분기0~3], monthly=[연, 월]. */
     fun periodKey(d: LocalDate, cadence: String): Any = when (cadence) {
         "daily" -> d
