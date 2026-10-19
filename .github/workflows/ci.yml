@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -21,6 +25,26 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       # Testcontainers 가 러너의 Docker 로 timescaledb·redis 를 띄운다.
       - run: ./gradlew build --console=plain
+
+  # 원본 frontend job 그대로 — 프론트는 무수정 복사본이라 계약 회귀는 e2e-smoke 가 잡는다.
+  frontend:
+    name: frontend (lint / typecheck / build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run test
+      - run: npm run build
 
   md-lint:
     runs-on: ubuntu-latest

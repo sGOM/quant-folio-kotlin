@@ -5,3 +5,8 @@ spring:
     import: classpath:quantfolio-core.yml
   main:
     web-application-type: none
+    # 웹 서버가 없고 스레드가 전부 가상(데몬)이라 이게 없으면 기동 직후 JVM 이 내려간다.
+    keep-alive: true
+  # 스키마 마이그레이션은 web 만 — 세 앱이 같은 DB 에 동시에 baseline 하지 않게(compose 는 web healthy 뒤에 기동).
+  flyway:
+    enabled: false

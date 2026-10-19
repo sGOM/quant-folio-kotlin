@@ -1,0 +1,93 @@
+name: E2E Smoke
+
+# 전체 Compose 스택(web/engine/worker/frontend/db/redis/proxy)을 띄우고 Playwright 로
+# "회원가입 → 로그인 → 전략 목록 → 백테스트 1회 → 모니터링" 핵심 경로를 검증한다.
+# 무거워서 필수 게이트(ci.yml)가 아니라 야간 크론 + 수동 트리거로만 돈다.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 18 * * *" # KST 03:00
+
+concurrency:
+  group: e2e-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: docker compose 전체 스택 + Playwright 스모크
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # 외부 키 없이 모의·미연동 상태로 충분 — 로그인·전략 CRUD·자체 데이터 백테스트만 본다.
+      # compose 는 13개 시크릿 파일이 모두 있어야 기동된다(빈 파일 허용).
+      - name: 시크릿 파일 생성
+        run: |
+          mkdir -p secrets
+          openssl rand -hex 32 > secrets/secret_key.txt
+          openssl rand -base64 32 | tr '+/' '-_' > secrets/credential_enc_key.txt
+          for n in kis_app_key kis_app_secret toss_app_key toss_app_secret krx_id krx_pw opendart_api_key \
+                   telegram_bot_token telegram_chat_id s3_backup_access_key_id s3_backup_secret_access_key; do
+            : > "secrets/$n.txt"
+          done
+
+      - run: cp .env.example .env
+
+      - name: Docker Compose 스택 기동
+        run: docker compose up -d --build
+
+      # web 은 Flyway 를 끝내고서야 healthy — 별도 마이그레이션 단계가 없다.
+      - name: web healthy 대기
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sk --max-time 5 http://localhost:8080/health | grep -q '"status":"ok"'; then
+              echo "healthy"; exit 0
+            fi
+            echo "waiting for stack... ($i)"; sleep 5
+          done
+          echo "스택이 제한 시간 내에 기동하지 않음"; exit 1
+
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Playwright 스모크 실행
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: npm run test:e2e
+
+      - name: Playwright 리포트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: 컨테이너 로그 수집
+        if: always()
+        run: |
+          mkdir -p /tmp/compose-logs
+          for svc in web engine worker frontend proxy db redis; do
+            docker compose logs "$svc" > "/tmp/compose-logs/$svc.log" 2>&1 || true
+          done
+      - name: 컨테이너 로그 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: /tmp/compose-logs
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: 스택 종료
+        if: always()
+        run: docker compose down -v

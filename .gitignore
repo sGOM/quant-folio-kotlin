@@ -8,3 +8,10 @@ secrets/*.txt
 node_modules/
 .kotlin/
 tools/oracle/tier2/
+
+# frontend 빌드·테스트 산출물
+.next/
+out/
+*.tsbuildinfo
+playwright-report/
+test-results/

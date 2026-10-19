@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * QuantFolio 디자인 토큰 — 다크 우선 금융 대시보드 팔레트.
+ * shadcn/ui 표준 CSS 변수 + 손익(profit/loss) 전용 색상을 정의한다.
+ */
+@layer base {
+  :root {
+    color-scheme: dark;
+
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 55%;
+
+    --accent: 0 0% 16%;
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 16%;
+    --input: 0 0% 18%;
+    --ring: 217 91% 60%;
+
+    /* 금융 전용: 상승/하락. 한국 브로커 관례(상승=적, 하락=청)를 따른다. KIS HTS·토스·삼성
+       등과 동일해 트레이더 직관과 일치. 색상에만 의존하지 않도록 부호·아이콘과 병행한다. */
+    --profit: 0 72% 56%;
+    --loss: 212 78% 56%;
+    --neutral-trend: 0 0% 60%;
+
+    /* 운영 상태 전용: 성공/가동/정상 = 초록, 실패/중지/거부 = 빨강.
+       손익(profit/loss)과는 의미축이 다르다 — 여기서는 한국 증시 관례(상승=적)를 따르지
+       않고, 보편적 신호등 규칙(초록=좋음, 빨강=나쁨)을 쓴다. 자격증명 등록·엔진 가동·
+       토큰 발급·전략 운용·주문 체결 등 '되고/안 됨' 상태에만 적용한다. */
+    --status-ok: 142 66% 45%;
+    --status-bad: 0 72% 51%;
+
+    --radius: 0.625rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  /* 표·수치 정렬용: 자릿수 폭을 고정한다. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * 네이티브 <select>/<option> 가독성 보정.
+   * Windows Chromium 등에서는 select 배경이 transparent 로 계산되면 OS 기본
+   * 콤보박스(흰 배경)로 렌더되므로, color-scheme 을 명시해 강제로 다크 위젯을
+   * 사용하게 하고 펼침 목록(option)의 배경·글씨색도 팝오버 톤으로 고정한다.
+   * (각 select 요소의 박스 배경/글씨색은 공용 INPUT/SELECT 클래스에서 처리)
+   */
+  select {
+    color-scheme: dark;
+  }
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+}

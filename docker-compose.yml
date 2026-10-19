@@ -1,0 +1,169 @@
+# 프로젝트명 quantfolio·볼륨 pgdata 는 원본과 같아야 한다 — 컷오버 때 기존 DB 볼륨(quantfolio_pgdata)을 그대로 쓴다.
+# 원본 스택이 떠 있는 동안 로컬 시험은 다른 프로젝트명으로: docker compose -p qf-smoke ... (docs/runbook 참고)
+name: quantfolio
+
+# 백엔드 3개 앱이 공유하는 시크릿. /run/secrets/<이름> 으로 마운트되고 Spring configtree 가 같은 이름의 속성으로 읽는다
+# (quantfolio-core.yml) — 평문 env 보다 우선, docker inspect·이미지 레이어에 남지 않는다.
+x-backend-secrets: &backend-secrets
+  - secret_key
+  - credential_enc_key
+  - kis_app_key
+  - kis_app_secret
+  - toss_app_key
+  - toss_app_secret
+  - krx_id
+  - krx_pw
+  - opendart_api_key
+  - telegram_bot_token
+  - telegram_chat_id
+  - s3_backup_access_key_id
+  - s3_backup_secret_access_key
+
+x-backend: &backend
+  build: ./backend
+  image: quantfolio-backend
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_JDBC_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-quant}
+    REDIS_URL: redis://redis:6379/0
+  secrets: *backend-secrets
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
+      POSTGRES_DB: ${POSTGRES_DB:-quant}
+    # 127.0.0.1 바인딩: DB 포트는 호스트 로컬에서만. 다른 컨테이너는 내부 네트워크(db:5432)로 접근한다.
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quant}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    <<: *backend
+    command: ["java", "-jar", "/app/web.jar"]
+    # 외부 접속은 proxy 를 통한다. 호스트 8000 은 로컬 디버깅용.
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # web 만 Flyway 를 돌린다 — healthy 는 마이그레이션이 끝나고 :8000 이 열렸다는 뜻.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  engine:
+    <<: *backend
+    command: ["java", "-jar", "/app/engine.jar"]
+    # 종료 시 러너마다 최대 10초 기다린다 — 기본 10초 SIGKILL 이면 주문 도중 끊길 수 있다.
+    stop_grace_period: 60s
+    depends_on:
+      web:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command: ["java", "-jar", "/app/worker.jar"]
+    stop_grace_period: 30s
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      # 야간 DB 백업 산출물. 서버 디스크와 함께 사라지므로 오프사이트 반출은 S3 설정으로.
+      - db_backups:/backups
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 빈 값 = 상대경로(같은 출처)로 API/WS 호출 → proxy 경유면 어떤 주소로 들어와도 동작.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      web:
+        condition: service_healthy
+    command: npm run dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # 단일 출처 리버스 프록시(외부 접속의 유일한 진입점).
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      WG_HOST: ${WG_HOST:-10.8.0.1}
+    ports:
+      - "${APP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 내부 CA 영속화(재시작해도 루트 CA 가 바뀌지 않게 → 폰 재설치 불필요).
+      - caddy_data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+# 시크릿 파일 소스(secrets/*.txt 는 커밋 제외). 안 쓰는 항목도 빈 파일은 있어야 기동된다 — secrets/README.md.
+secrets:
+  secret_key:
+    file: ./secrets/secret_key.txt
+  credential_enc_key:
+    file: ./secrets/credential_enc_key.txt
+  kis_app_key:
+    file: ./secrets/kis_app_key.txt
+  kis_app_secret:
+    file: ./secrets/kis_app_secret.txt
+  toss_app_key:
+    file: ./secrets/toss_app_key.txt
+  toss_app_secret:
+    file: ./secrets/toss_app_secret.txt
+  krx_id:
+    file: ./secrets/krx_id.txt
+  krx_pw:
+    file: ./secrets/krx_pw.txt
+  opendart_api_key:
+    file: ./secrets/opendart_api_key.txt
+  telegram_bot_token:
+    file: ./secrets/telegram_bot_token.txt
+  telegram_chat_id:
+    file: ./secrets/telegram_chat_id.txt
+  s3_backup_access_key_id:
+    file: ./secrets/s3_backup_access_key_id.txt
+  s3_backup_secret_access_key:
+    file: ./secrets/s3_backup_secret_access_key.txt
+
+volumes:
+  pgdata:
+  caddy_data:
+  db_backups:
