@@ -20,3 +20,5 @@
 - 스크리너 라우트 캐시: 원본은 Redis 조회 실패 시 500, Kotlin 은 다른 지표 라우트처럼 캐시 미스로 보고 계산(`JsonCache`). Redis 장애 때만 다르다.
 - `/ws` 인증 실패: 원본은 accept 전에 close(4401) 해 uvicorn 이 핸드셰이크 403 으로 응답 → 브라우저엔 1006 이라 프론트의 4401(로그인 이동) 분기가 동작하지 않고 재연결을 반복했다. Kotlin 은 accept 후 4401 로 닫아 프론트 계약대로 동작한다.
 - 뉴스 HTML 엔티티: 원본 `html.unescape` 는 HTML5 이름 엔티티 2,231개를 모두 푼다. Kotlin `NewsFeeds.htmlUnescape` 는 숫자 엔티티 전부 + 뉴스에 쓰이는 이름 44개만 — 표에 없는 드문 이름 엔티티는 원문 그대로 남는다(요약 표기만 다름).
+- 뉴스 전체 실패 알림 문구의 확인 위치: 원본 `app/services/news.py::FEEDS` → `NewsIngestor.FEEDS`(이전 후 실제 위치).
+- 워커 DB 대기(`wait_for_db`)는 옮기지 않았다 — Spring 은 기동 시 Flyway 가 DB 를 요구하고 실패하면 컨테이너 재시작 정책으로 재기동된다. 원본처럼 "DB 없이 기동"하지 않는다.
