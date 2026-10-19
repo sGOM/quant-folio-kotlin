@@ -2,6 +2,8 @@
 paths:
   - "backend/core/src/main/kotlin/com/quantfolio/live/**"
   - "backend/core/src/main/kotlin/com/quantfolio/security/**"
+  - "backend/core/src/main/kotlin/com/quantfolio/broker/**"
+  - "backend/engine/**"
 ---
 
 # 실거래 안전 — 실전 게이트·자격증명
@@ -22,6 +24,20 @@ paths:
 - 차단 등급은 `RED` 뿐(AMBER 통과). 금액 상한은 **초과만** 차단(같으면 통과), 일일 상한 0/미설정이면 검사 생략.
 - 거부 사유 문구는 원본 그대로(알림·로그 소비처가 있다). 금액은 Python `,.0f`(HALF_EVEN) 형식.
 - 입력 조립(최근 90일 체결 정합 리포트·전략별→사용자 공통 리스크 한도·KST 당일 체결 명목 합)은 엔진 쪽 책임.
+
+## 주문·체결 불변식 (엔진)
+
+| 규칙 | 위치 | 깨지면 |
+|---|---|---|
+| 멱등 3중 방어: 결정적 키 + Redis 락 + UNIQUE | `OrderExecutor` | 같은 신호 이중 주문 |
+| 전송 결과 3갈래: 성공→submitted, `BrokerError`→rejected, **그 밖의 예외→pending 유지 + critical, 재전파** | `OrderExecutor` | 체결됐을 주문을 거부로 확정 → 장부 어긋남 |
+| 체결 조회 실패는 미체결(0)로 — 전량 체결로 간주 금지 | `OrderExecutor.resolveFill` | filled 확정 후 정합 대상에서 빠져 영구 오염 |
+| 정합은 **증분만** 기록, 접수불명은 잔고 교차확인(모의·매수)으로만, 5분 유예 | `Reconciler` | 중복 가산 / 전송 중 주문 오판 |
+| executor·reconcile·체결통보는 **같은 주문 락 키**(`reconcileLock`) | `Reconciler`·`FillNoticeApplier` | 같은 체결 이중 기록 |
+| 0 이하 현재가는 "시세 없음" — 손절·익절 판정에 쓰지 않는다 | 러너·`RiskManager` | −100% 로 오독해 전량 청산 |
+| 주문 순서: 실전 게이트(prod) → 정지/CB 게이트 → 실행기 | `BaseRunner.place` | 승인 없는 실전 주문 / CB 중 시장가 |
+
+- 테스트는 가짜 증권사만. 엔진 테스트는 `quantfolio.engine.autostart=false`(test `config/application.yml`) — 켜면 다른 테스트의 live 전략을 복구해 주문을 낸다.
 
 ## 자격증명
 

@@ -22,3 +22,6 @@
 - 뉴스 HTML 엔티티: 원본 `html.unescape` 는 HTML5 이름 엔티티 2,231개를 모두 푼다. Kotlin `NewsFeeds.htmlUnescape` 는 숫자 엔티티 전부 + 뉴스에 쓰이는 이름 44개만 — 표에 없는 드문 이름 엔티티는 원문 그대로 남는다(요약 표기만 다름).
 - 뉴스 전체 실패 알림 문구의 확인 위치: 원본 `app/services/news.py::FEEDS` → `NewsIngestor.FEEDS`(이전 후 실제 위치).
 - 워커 DB 대기(`wait_for_db`)는 옮기지 않았다 — Spring 은 기동 시 Flyway 가 DB 를 요구하고 실패하면 컨테이너 재시작 정책으로 재기동된다. 원본처럼 "DB 없이 기동"하지 않는다.
+- 엔진 제어 채널: 원본은 pubsub 폴링 루프가 실패하면 재구독하며 3회 연속 실패 시 경보. Kotlin 은 `RedisMessageListenerContainer` 가 재연결을 맡아 그 경보가 없다(연결 장애는 heartbeat·web 헬스로 드러난다).
+- 접수불명 알림의 원인 표기 `{e!r}`(Python repr) → Kotlin `e.toString()`(예외 클래스명 + 메시지). 표기만 다름.
+- `RebalanceRunner.preview()`(원본 스크립트용 미리보기)는 옮기지 않았다 — 호출하는 라우트·스크립트가 없다.

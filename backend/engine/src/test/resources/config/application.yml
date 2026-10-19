@@ -1,0 +1,4 @@
+# 테스트에선 엔진 수명주기를 자동 시작하지 않는다 — 다른 테스트가 남긴 live 전략을 복구해 백그라운드 주문을 내지 않도록.
+quantfolio:
+  engine:
+    autostart: false
