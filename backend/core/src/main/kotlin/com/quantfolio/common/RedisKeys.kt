@@ -54,4 +54,7 @@ object RedisKeys {
     /** 증권사 접근토큰 캐시(분당 1회 발급 제한) — 원본과 같은 키여야 컷오버 때 재발급하지 않는다. 락은 키 + ":lock". */
     fun kisToken(env: String, appKey: String): String = "kis:token:$env:$appKey"
     fun tossToken(clientId: String): String = "toss:token:$clientId"
+
+    /** 실시간 체결가 캐시 `price:{symbol}`(TTL 120초) — 러너가 우선 쓰고 없으면 REST 폴백. */
+    fun price(symbol: String): String = "price:$symbol"
 }

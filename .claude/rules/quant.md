@@ -12,7 +12,7 @@ paths:
 ## 정답지(oracle)
 
 - `tools/oracle/run.sh gen_x.py` — 원본 이미지(`quantfolio-web`)에서 기준 커밋 소스를 마운트해 실행, `--network none`.
-  출력: `backend/core/src/test/resources/oracle/x.json`. 테스트는 `Oracle.load("x")` + `Oracle.assertClose`.
+  출력: `backend/core/src/test/resources/oracle/x.json`(다른 모듈 정답지는 `ORACLE_OUT=backend/<모듈>/src/test/resources/oracle`). 테스트는 `Oracle.load("x")` + `Oracle.assertClose`.
 - 입력은 스크립트가 시드로 만들고 **입력·출력을 함께** 저장한다(Kotlin 이 난수를 재현하지 않는다).
 - **1층(커밋)은 합성 입력만.** 실데이터 결과(2층)는 커밋 금지 — 공개 저장소.
 - 새 계산을 옮길 때: 원본 함수로 정답지 스크립트 추가 → 실패 테스트 → 구현. 경계값(NaN·동점·짧은 길이)을 입력에 일부러 넣는다.

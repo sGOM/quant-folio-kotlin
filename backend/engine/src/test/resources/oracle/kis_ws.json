@@ -1,0 +1,60 @@
+{
+ "key": "abcdefghijklmnopqrstuvwxyz012345",
+ "iv": "0123456789abcdef",
+ "cases": [
+  {
+   "plain": "x^x^0000123^x^02^x^x^x^005930^3^70100^x^x^x^x^x^x^x^x^x^x^x^x",
+   "cipher": "gmuL8mQHysYC4qTmI+pMZgKO7+ekLKpWNSv3yh+VYbmD5mhz22Nj6j+4oKFHhZJJbcrXsY7iUyhrGpJmShqO+A==",
+   "decrypted": "x^x^0000123^x^02^x^x^x^005930^3^70100^x^x^x^x^x^x^x^x^x^x^x^x",
+   "notice": {
+    "odno": "0000123",
+    "symbol": "005930",
+    "qty": 3,
+    "price": "70100",
+    "side": "buy"
+   }
+  },
+  {
+   "plain": "x^x^0000124^x^01^x^x^x^000660^0^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "cipher": "Dfqn/2hbH9Ley+jtMGfRAQSeFjDekK6YFavlbuoUqZVo+NQ3KafJEok/+BD87qofsbkC5+F97kg3lQKoAR7pUA==",
+   "decrypted": "x^x^0000124^x^01^x^x^x^000660^0^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "notice": null
+  },
+  {
+   "plain": "x^x^ ^x^02^x^x^x^005930^1^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "cipher": "Tdrcu1Q3fxyfxmdwfmqLe/m2X9Hp3g0aXF9lKnTlOqc6qHix7iyUspIQmpIzzK1VwC4E1rM5rahE/NbHMcCs8Q==",
+   "decrypted": "x^x^ ^x^02^x^x^x^005930^1^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "notice": null
+  },
+  {
+   "plain": "x^x^0000125^x^01^x^x^x^000660^2^abc^x^x^x^x^x^x^x^x^x^x^x^x",
+   "cipher": "PAGWXrUJLG3Ut5IO85oPEa2z6JN7oMIouPvLs9BnXPX8JvoOgoo9+YqB3gIPMWo/guwtnIhEgOXE2I62/tRlnQ==",
+   "decrypted": "x^x^0000125^x^01^x^x^x^000660^2^abc^x^x^x^x^x^x^x^x^x^x^x^x",
+   "notice": {
+    "odno": "0000125",
+    "symbol": "000660",
+    "qty": 2,
+    "price": "0",
+    "side": "sell"
+   }
+  },
+  {
+   "plain": "a^b^c",
+   "cipher": "NEawMCTEaVfsN0d+Ra8vHA==",
+   "decrypted": "a^b^c",
+   "notice": null
+  },
+  {
+   "plain": "x^x^0000126^x^02^x^x^x^삼성^1^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "cipher": "1Sc77arwLQSU7hdIPhzuAzGABhoaf9EPuw00wS3TzGUWtdEd6UoY9YR5LdkSWOdJzaqpreBi4YOjzWzRDaoxZw==",
+   "decrypted": "x^x^0000126^x^02^x^x^x^삼성^1^1^x^x^x^x^x^x^x^x^x^x^x^x",
+   "notice": {
+    "odno": "0000126",
+    "symbol": "삼성",
+    "qty": 1,
+    "price": "1",
+    "side": "buy"
+   }
+  }
+ ]
+}
