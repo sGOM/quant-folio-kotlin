@@ -1,0 +1,199 @@
+{
+ "rss": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n<channel><title>채널</title>\n<item><title><![CDATA[삼성전자, <b>사상 최대</b> 실적 &amp; 배당]]></title><link>https://n.example/a?x=1&amp;y=2</link>\n<description><![CDATA[<p>삼성전자우와 SK하이닉스가&nbsp;강세 &hellip; &lt;b&gt;굵게&lt;/b&gt;</p>]]></description>\n<pubDate>Mon, 13 Oct 2026 09:30:00 +0900</pubDate></item>\n<item><title>제목만</title><link>https://n.example/b</link><description>제목만</description><pubDate>Tue, 14 Oct 2026 01:00:00 GMT</pubDate></item>\n<item><title>RISK 관리와 SK 텔레콤</title><link>https://n.example/c</link><description></description><dc:date>2026-10-15T08:00:00</dc:date></item>\n<item><title>   </title><link>https://n.example/notitle</link></item>\n<item><title>링크 없음</title></item>\n<item><title>날짜 이상</title><link>https://n.example/d</link><pubDate>not a date</pubDate><description>가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가 나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라 </description></item>\n</channel></rss>",
+ "atom": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\">\n<entry><title type=\"html\">LG에너지솔루션 &amp;amp; LG</title>\n<link rel=\"alternate\" href=\"https://atom.example/1\"/><link rel=\"self\" href=\"https://atom.example/1/self\"/>\n<summary>첫 요약</summary><content>두번째 본문</content>\n<updated>2026-10-16T10:00:00Z</updated><published>2026-10-16T09:00:00+09:00</published></entry>\n<entry><title>NAVER 와 카카오</title><link href=\"https://atom.example/2\"/><updated>2026-10-17T12:30:45.123+00:00</updated></entry>\n</feed>",
+ "many": "<rss><channel><item><title>t0</title><link>https://m/0</link></item><item><title>t1</title><link>https://m/1</link></item><item><title>t2</title><link>https://m/2</link></item><item><title>t3</title><link>https://m/3</link></item><item><title>t4</title><link>https://m/4</link></item><item><title>t5</title><link>https://m/5</link></item><item><title>t6</title><link>https://m/6</link></item><item><title>t7</title><link>https://m/7</link></item><item><title>t8</title><link>https://m/8</link></item><item><title>t9</title><link>https://m/9</link></item><item><title>t10</title><link>https://m/10</link></item><item><title>t11</title><link>https://m/11</link></item><item><title>t12</title><link>https://m/12</link></item><item><title>t13</title><link>https://m/13</link></item><item><title>t14</title><link>https://m/14</link></item><item><title>t15</title><link>https://m/15</link></item><item><title>t16</title><link>https://m/16</link></item><item><title>t17</title><link>https://m/17</link></item><item><title>t18</title><link>https://m/18</link></item><item><title>t19</title><link>https://m/19</link></item><item><title>t20</title><link>https://m/20</link></item><item><title>t21</title><link>https://m/21</link></item><item><title>t22</title><link>https://m/22</link></item><item><title>t23</title><link>https://m/23</link></item><item><title>t24</title><link>https://m/24</link></item><item><title>t25</title><link>https://m/25</link></item><item><title>t26</title><link>https://m/26</link></item><item><title>t27</title><link>https://m/27</link></item><item><title>t28</title><link>https://m/28</link></item><item><title>t29</title><link>https://m/29</link></item><item><title>t30</title><link>https://m/30</link></item><item><title>t31</title><link>https://m/31</link></item><item><title>t32</title><link>https://m/32</link></item><item><title>t33</title><link>https://m/33</link></item><item><title>t34</title><link>https://m/34</link></item><item><title>t35</title><link>https://m/35</link></item><item><title>t36</title><link>https://m/36</link></item><item><title>t37</title><link>https://m/37</link></item><item><title>t38</title><link>https://m/38</link></item><item><title>t39</title><link>https://m/39</link></item><item><title>t40</title><link>https://m/40</link></item><item><title>t41</title><link>https://m/41</link></item><item><title>t42</title><link>https://m/42</link></item><item><title>t43</title><link>https://m/43</link></item><item><title>t44</title><link>https://m/44</link></item><item><title>t45</title><link>https://m/45</link></item><item><title>t46</title><link>https://m/46</link></item><item><title>t47</title><link>https://m/47</link></item><item><title>t48</title><link>https://m/48</link></item><item><title>t49</title><link>https://m/49</link></item><item><title>t50</title><link>https://m/50</link></item><item><title>t51</title><link>https://m/51</link></item><item><title>t52</title><link>https://m/52</link></item><item><title>t53</title><link>https://m/53</link></item><item><title>t54</title><link>https://m/54</link></item><item><title>t55</title><link>https://m/55</link></item><item><title>t56</title><link>https://m/56</link></item><item><title>t57</title><link>https://m/57</link></item><item><title>t58</title><link>https://m/58</link></item><item><title>t59</title><link>https://m/59</link></item></channel></rss>",
+ "parsed": {
+  "rss": [
+   {
+    "title": "삼성전자, 사상 최대 실적 & 배당",
+    "url": "https://n.example/a?x=1&y=2",
+    "description": "<p>삼성전자우와 SK하이닉스가&nbsp;강세 &hellip; &lt;b&gt;굵게&lt;/b&gt;</p>",
+    "published_at": "2026-10-13T00:30:00+00:00"
+   },
+   {
+    "title": "제목만",
+    "url": "https://n.example/b",
+    "description": "제목만",
+    "published_at": "2026-10-14T01:00:00+00:00"
+   },
+   {
+    "title": "RISK 관리와 SK 텔레콤",
+    "url": "https://n.example/c",
+    "description": "",
+    "published_at": "2026-10-14T23:00:00+00:00"
+   },
+   {
+    "title": "날짜 이상",
+    "url": "https://n.example/d",
+    "description": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가 나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라  나다라",
+    "published_at": null
+   }
+  ],
+  "atom": [
+   {
+    "title": "LG에너지솔루션 & LG",
+    "url": "https://atom.example/1/self",
+    "description": "첫 요약",
+    "published_at": "2026-10-16T10:00:00+00:00"
+   },
+   {
+    "title": "NAVER 와 카카오",
+    "url": "https://atom.example/2",
+    "description": "",
+    "published_at": "2026-10-17T12:30:45.123000+00:00"
+   }
+  ],
+  "many": 50
+ },
+ "dates": [
+  {
+   "raw": "Mon, 13 Oct 2026 09:30:00 +0900",
+   "out": "2026-10-13T00:30:00+00:00"
+  },
+  {
+   "raw": "Tue, 14 Oct 2026 01:00:00 GMT",
+   "out": "2026-10-14T01:00:00+00:00"
+  },
+  {
+   "raw": "13 Oct 2026 09:30:00 -0000",
+   "out": "2026-10-13T00:30:00+00:00"
+  },
+  {
+   "raw": "2026-10-15T08:00:00",
+   "out": "2026-10-14T23:00:00+00:00"
+  },
+  {
+   "raw": "2026-10-16T10:00:00Z",
+   "out": "2026-10-16T10:00:00+00:00"
+  },
+  {
+   "raw": "2026-10-17T12:30:45.123+00:00",
+   "out": "2026-10-17T12:30:45.123000+00:00"
+  },
+  {
+   "raw": "garbage",
+   "out": null
+  },
+  {
+   "raw": "",
+   "out": null
+  },
+  {
+   "raw": null,
+   "out": null
+  },
+  {
+   "raw": "2026-10-18",
+   "out": "2026-10-17T15:00:00+00:00"
+  }
+ ],
+ "strip": [
+  {
+   "raw": "<p>a&nbsp;b</p>",
+   "out": "a b"
+  },
+  {
+   "raw": "&lt;b&gt;x&lt;/b&gt;",
+   "out": "x"
+  },
+  {
+   "raw": "  여러   공백\n\t줄 ",
+   "out": "여러 공백 줄"
+  },
+  {
+   "raw": "&amp;amp;",
+   "out": "&amp;"
+  },
+  {
+   "raw": "&#x41;&#66;",
+   "out": "AB"
+  },
+  {
+   "raw": "a < b > c",
+   "out": "a c"
+  },
+  {
+   "raw": "&middot;&hellip;&rsquo;",
+   "out": "·…’"
+  }
+ ],
+ "summaries": [
+  {
+   "title": "제목",
+   "desc": "제목",
+   "out": null
+  },
+  {
+   "title": "제목",
+   "desc": "",
+   "out": null
+  },
+  {
+   "title": "<b>제목</b>",
+   "desc": "제목",
+   "out": null
+  },
+  {
+   "title": "t",
+   "desc": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가",
+   "out": "가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가가…"
+  },
+  {
+   "title": "t",
+   "desc": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  yy",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+  }
+ ],
+ "name_map": {
+  "005930": "삼성전자",
+  "005935": "삼성전자우",
+  "000660": "SK하이닉스",
+  "003600": "SK",
+  "017670": "SK텔레콤",
+  "373220": "LG에너지솔루션",
+  "003550": "LG",
+  "035420": "NAVER",
+  "035720": "카카오",
+  "999990": "가",
+  "012345": "RISK2"
+ },
+ "matches": [
+  {
+   "text": "삼성전자우와 SK하이닉스가 강세",
+   "out": [
+    "000660",
+    "005935"
+   ]
+  },
+  {
+   "text": "RISK 관리와 SK 텔레콤",
+   "out": [
+    "003600"
+   ]
+  },
+  {
+   "text": "SK텔레콤, LG에너지솔루션",
+   "out": [
+    "017670",
+    "373220"
+   ]
+  },
+  {
+   "text": "LG 와 NAVER(035420)",
+   "out": [
+    "003550",
+    "035420"
+   ]
+  },
+  {
+   "text": "가나다 RISK2",
+   "out": [
+    "012345"
+   ]
+  },
+  {
+   "text": "",
+   "out": []
+  }
+ ]
+}
