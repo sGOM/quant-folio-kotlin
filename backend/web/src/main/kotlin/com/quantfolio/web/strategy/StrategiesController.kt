@@ -1,5 +1,8 @@
 package com.quantfolio.web.strategy
 
+import com.quantfolio.broker.BrokerClient
+import com.quantfolio.broker.BrokerCredentials
+import com.quantfolio.broker.BrokerError
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.backtest.BacktestRepository
@@ -268,13 +271,56 @@ data class KisCredentialsIn(
     @field:Size(min = 1, max = 32) val kisAccountNo: String,
 )
 
-/**
- * 증권사 자격증명 등록(원본 `routes/kis.py` 의 credentials·toss-quote). 키·시크릿은 암호화 저장.
- * 연동 검증(`/health`)·현재가(`/quote`)는 증권사 클라이언트 이전(7단계)과 함께 붙는다.
- */
+data class KisHealth(val broker: String, val env: String, val isPaperTrading: Boolean, val tokenIssued: Boolean, val message: String)
+
+data class QuoteOut(
+    val symbol: String, val price: Double, val change: Double, val changeRate: Double, val volume: Long,
+    val high: Double, val low: Double, val open: Double, val currency: String,
+)
+
+/** 증권사 자격증명 등록·연동 검증·현재가(원본 `routes/kis.py`). 키·시크릿은 암호화 저장. */
 @RestController
 @RequestMapping("/api/kis")
-class KisController(private val users: UserRepository, private val cipher: CredentialCipher, private val props: QuantfolioProperties) {
+class KisController(
+    private val users: UserRepository,
+    private val cipher: CredentialCipher,
+    private val props: QuantfolioProperties,
+    private val brokers: BrokerCredentials,
+) {
+    private val log = org.slf4j.LoggerFactory.getLogger(javaClass)
+
+    private fun client(user: User): BrokerClient = try {
+        brokers.forUser(user)
+    } catch (e: BrokerError) {
+        throw ApiException(HttpStatus.BAD_REQUEST, e.message ?: "")
+    }
+
+    /** 등록된 자격증명으로 토큰을 발급해 연동을 검증. 토스는 모의투자가 없어 항상 prod. */
+    @GetMapping("/health")
+    fun health(@CurrentUser user: User): KisHealth {
+        val c = client(user)
+        val (env, paper) = if (user.broker == "toss") "prod" to false else props.kis.env to props.kis.isPaperTrading
+        return try {
+            c.verifyConnection()
+            KisHealth(user.broker, env, paper, true, "토큰 발급 성공 — 연동 정상")
+        } catch (e: BrokerError) {
+            log.warn("증권사 연동 검증 실패(broker={}): {}", user.broker, e.message)
+            KisHealth(user.broker, env, paper, false, "연동 실패: ${e.message}")
+        }
+    }
+
+    /** 현재가. 통합 시세(토스) 자격증명이 있으면 토스로 국내·해외 통합, 없으면 주문 브로커(국내 한정). */
+    @GetMapping("/quote/{symbol}")
+    fun quote(@CurrentUser user: User, @PathVariable symbol: String): QuoteOut {
+        val c = brokers.quoteClient(user) ?: client(user)
+        val q = try {
+            c.getQuote(symbol)
+        } catch (e: BrokerError) {
+            throw ApiException(HttpStatus.BAD_GATEWAY, e.message ?: "")
+        }
+        return QuoteOut(q.symbol, q.price.toDouble(), q.change.toDouble(), q.changeRate.toDouble(), q.volume, q.high.toDouble(), q.low.toDouble(), q.open.toDouble(), q.currency)
+    }
+
     @PutMapping("/credentials")
     fun credentials(@CurrentUser user: User, @Valid @RequestBody payload: KisCredentialsIn): UserOut {
         user.broker = payload.broker

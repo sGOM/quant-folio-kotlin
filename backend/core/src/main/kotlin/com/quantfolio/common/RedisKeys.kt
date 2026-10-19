@@ -50,4 +50,8 @@ object RedisKeys {
     /** 전략별 MDD 킬스위치 상태 JSON `{"hwm":float,"killed":bool,"kill_date":"YYYY-MM-DD"|null}` */
     const val MDD_STATE_PREFIX = "rebalance:mdd:"
     fun mddState(strategyId: Int): String = "$MDD_STATE_PREFIX$strategyId"
+
+    /** 증권사 접근토큰 캐시(분당 1회 발급 제한) — 원본과 같은 키여야 컷오버 때 재발급하지 않는다. 락은 키 + ":lock". */
+    fun kisToken(env: String, appKey: String): String = "kis:token:$env:$appKey"
+    fun tossToken(clientId: String): String = "toss:token:$clientId"
 }

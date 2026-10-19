@@ -1,6 +1,7 @@
 package com.quantfolio.web.engine
 
 import com.quantfolio.broker.BrokerCredentials
+import com.quantfolio.broker.BrokerError
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
@@ -109,14 +110,31 @@ data class PositionOut(val symbol: String, val qty: Double, val avgPrice: Double
 data class OrderOut(val id: Int, val symbol: String, val side: String, val qty: Double, val price: Double?, val status: String, val reason: String?, val createdAt: Instant)
 
 /**
- * 매매 조회(원본 `routes/trading.py`). 잔고의 신뢰 소스는 증권사 실계좌 — 브로커 클라이언트(7단계)가 붙기 전까지는
- * 원본의 폴백 경로(로컬 DB 그림자 잔고, 전략 무관 합산)만 동작한다.
+ * 매매 조회(원본 `routes/trading.py`). 잔고의 신뢰 소스는 **증권사 실계좌** — 로컬 DB 는 이 시스템이 낸 주문만 알아서
+ * 수동 매매·다른 계좌 보유를 놓친다. 자격증명 미등록·조회 실패일 때만 DB 그림자 잔고(전략 무관 합산)로 폴백.
  */
 @RestController
 @RequestMapping("/api/trading")
-class TradingController(private val jdbc: NamedParameterJdbcTemplate) {
+class TradingController(private val jdbc: NamedParameterJdbcTemplate, private val brokers: BrokerCredentials) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     @GetMapping("/positions")
-    fun positions(@CurrentUser user: User): List<PositionOut> =
+    fun positions(@CurrentUser user: User): List<PositionOut> {
+        val broker = try {
+            brokers.forUser(user)
+        } catch (e: BrokerError) {
+            return dbPositions(user)
+        }
+        val balance = try {
+            broker.getBalance()
+        } catch (e: BrokerError) {
+            log.warn("실계좌 잔고 조회 실패 — 로컬 포지션으로 폴백 user={}: {}", user.id, e.message)
+            return dbPositions(user)
+        }
+        return balance.positionsNormalized().map { PositionOut(it.symbol, it.qty.toDouble(), it.avgPrice?.toDouble()) }
+    }
+
+    private fun dbPositions(user: User): List<PositionOut> =
         jdbc.query("select symbol, qty, avg_price from positions where user_id = :u and qty > 0", MapSqlParameterSource("u", user.id)) { rs, _ ->
             PositionOut(rs.getString(1), rs.getBigDecimal(2).toDouble(), rs.getBigDecimal(3).toDouble())
         }
