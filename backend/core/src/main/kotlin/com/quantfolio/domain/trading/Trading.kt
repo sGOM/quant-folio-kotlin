@@ -68,10 +68,15 @@ class RiskLimit(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 )
 
-interface OrderRepository : JpaRepository<Order, Int>
+interface OrderRepository : JpaRepository<Order, Int> {
+    fun existsByIdempotencyKey(key: String): Boolean
+}
 
 interface ExecutionRepository : JpaRepository<Execution, Int>
 
-interface PositionRepository : JpaRepository<Position, Int>
+interface PositionRepository : JpaRepository<Position, Int> {
+    /** strategyId 가 null 이면 strategy_id IS NULL 로 찾는다(Spring Data 파생 쿼리 규칙). */
+    fun findByUserIdAndStrategyIdAndSymbol(userId: Int, strategyId: Int?, symbol: String): Position?
+}
 
 interface RiskLimitRepository : JpaRepository<RiskLimit, Int>
