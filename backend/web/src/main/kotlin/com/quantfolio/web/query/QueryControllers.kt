@@ -17,7 +17,6 @@ import com.quantfolio.metrics.StockMetric
 import com.quantfolio.metrics.StockMetricsService
 import com.quantfolio.metrics.StocksOut
 import com.quantfolio.metrics.TurnaroundScreenOut
-import com.quantfolio.quant.pyFloat
 import com.quantfolio.web.api.ApiException
 import com.quantfolio.web.api.JsonCache
 import com.quantfolio.web.auth.CurrentUser
