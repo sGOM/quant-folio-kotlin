@@ -91,7 +91,7 @@ class BacktestsControllerTest(
             jsonPath("$.strategy_id") { value(s.id) }
             jsonPath("$.period_start") { value("2023-01-01T15:00:00Z") } // KST 00:00
             jsonPath("$.period_end") { value("2023-12-29T14:59:59Z") } // KST 23:59:59
-            jsonPath("$.result.equity_curve[0].t") { value("2023-01-02T00:00:00") }
+            jsonPath("$.result.equity_curve[0].t") { value("2023-01-02T00:00:00+00:00") } // 원본 DB 의 단일종목 결과와 같은 형식
         }
         val body = json.readTree(r.andReturn().response.contentAsString)
         assertEquals(body.get("result").get("total_return").asDouble(), body.get("total_return").asDouble(), 1e-6)
