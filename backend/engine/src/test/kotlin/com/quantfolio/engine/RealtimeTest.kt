@@ -63,4 +63,12 @@ class RealtimeTest {
             }
         }
     }
+
+    /** 원본 int()/Decimal() 은 앞뒤 공백을 받는다 — 공백 낀 수량을 0 으로 읽어 체결을 버리면 모의 매도는 복구되지 않는다. */
+    @Test
+    fun fillNoticeAcceptsPaddedNumbers() {
+        val f = MutableList(23) { "" }
+        f[2] = "0000123"; f[4] = "02"; f[8] = "005930"; f[9] = " 10"; f[10] = " 70000 "
+        assertEquals(FillNotice("0000123", "005930", 10, BigDecimal("70000"), "buy"), KisFrames.parseFillNotice(f.joinToString("^")))
+    }
 }

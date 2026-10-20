@@ -50,7 +50,7 @@ class EngineRuntimeTest(
         assertEquals(1, runtime.activeStrategies().count { it == sid })
         runtime.handleControl("not json")
         runtime.handleControl("""{"action": "start"}""")
-        runtime.handleControl("""{"action": "stop", "strategy_id": "$sid"}""")
+        runtime.handleControl("""{"action": "stop", "strategy_id": $sid.0}""") // 원본 int(7.0) = 7
         assertFalse(sid in runtime.activeStrategies())
         assertEquals(false, redis.opsForSet().isMember(RedisKeys.ACTIVE_STRATEGIES, sid.toString()))
     }

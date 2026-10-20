@@ -160,7 +160,7 @@ class OrderExecutor(
      * reconcile 대상에서 빠지고, 실제 미체결이었을 때 장부가 영구 오염된다.
      */
     private fun resolveFill(broker: BrokerClient, order: Order, signalPrice: BigDecimal): Pair<Int, BigDecimal> {
-        val id = order.kisOrderId ?: return 0 to signalPrice
+        val id = order.kisOrderId?.takeIf { it.isNotEmpty() } ?: return 0 to signalPrice // 원본 `if not` — 빈 주문번호로 조회하지 않는다
         val info = try {
             broker.getOrderExecution(id, order.symbol)
         } catch (e: BrokerError) {

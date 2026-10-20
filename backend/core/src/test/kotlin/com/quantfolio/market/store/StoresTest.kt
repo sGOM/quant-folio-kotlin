@@ -24,7 +24,8 @@ class StoresTest(
     @Autowired private val ticks: PriceTickStore,
 ) {
     private var dayCounter = 0L
-    private fun freshDay(): LocalDate = LocalDate.of(2001, 1, 1).plusDays(UUID.randomUUID().mostSignificantBits.mod(9000L) + dayCounter++)
+    // 다른 테스트의 고정 날짜(2001~2026)와 겹치지 않는 구간 — 겹치면 공유 DB 에서 순서에 따라 깨진다
+    private fun freshDay(): LocalDate = LocalDate.of(2101, 1, 1).plusDays(UUID.randomUUID().mostSignificantBits.mod(9000L) + dayCounter++)
     private fun uniq() = UUID.randomUUID().toString().take(8)
 
     // ── stock_daily_snapshots ──

@@ -81,9 +81,9 @@ object KisFrames {
         val odno = f[2].trim()
         val symbol = f[8].trim()
         if (odno.isEmpty() || symbol.isEmpty()) return null
-        val qty = f[9].ifEmpty { "0" }.toIntOrNull() ?: 0
+        val qty = f[9].ifEmpty { "0" }.trim().toIntOrNull() ?: 0 // 원본 int()/Decimal() 은 앞뒤 공백을 받는다
         if (qty <= 0) return null
-        val price = runCatching { BigDecimal(f[10].ifEmpty { "0" }) }.getOrDefault(BigDecimal.ZERO)
+        val price = runCatching { BigDecimal(f[10].ifEmpty { "0" }.trim()) }.getOrDefault(BigDecimal.ZERO)
         return FillNotice(odno, symbol, qty, price, if (f[4] == "01") "sell" else "buy")
     }
 }

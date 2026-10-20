@@ -165,7 +165,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
                     recordFailure("$tickWord 타임아웃(${tickTimeoutSec}초)")
                 } catch (e: ExecutionException) {
                     log.error("{} {} {} 오류", label, strategyId, tickWord, e.cause)
-                    recordFailure("$tickWord 오류: ${e.cause?.message}")
+                    recordFailure("$tickWord 오류: ${(e.cause ?: e).let { it.message ?: it.javaClass.simpleName }}") // 메시지 없는 예외도 원인이 남게
                 } catch (e: InterruptedException) {
                     abort.set(true) // 엔진 종료로 중단 — 진행 중 틱은 더 주문하지 않는다
                     break
@@ -272,6 +272,9 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     }
 
     private val tickAbort = ThreadLocal<AtomicBoolean>()
+
+    /** 이 틱이 버려졌나 — 주문뿐 아니라 "이번 주기 실행됨" 같은 상태 기록도 하지 않아야 한다(원본은 취소가 그 전에 끊는다). */
+    protected val tickAbandoned: Boolean get() = tickAbort.get()?.get() == true
 
     private companion object {
         const val POSITION_LOCK_TTL = 30L

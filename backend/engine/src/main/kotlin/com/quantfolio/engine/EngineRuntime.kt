@@ -105,7 +105,13 @@ class EngineRuntime(
     fun handleControl(raw: String) {
         val (action, sid) = try {
             val m = json.readValue<Map<String, Any?>>(raw)
-            m.getValue("action").toString() to m.getValue("strategy_id").toString().toInt()
+            // 원본 int(data["strategy_id"]) — 숫자(7.0)·bool 도 받는다(float 은 소수점 버림)
+            val sid = when (val v = m.getValue("strategy_id")) {
+                is Boolean -> if (v) 1 else 0
+                is Number -> v.toInt()
+                else -> v.toString().trim().toInt()
+            }
+            m.getValue("action").toString() to sid
         } catch (e: Exception) {
             log.warn("잘못된 제어 메시지: {}", raw)
             return
@@ -189,7 +195,8 @@ class EngineRuntime(
             realtime.shutdown()
             return
         }
-        for ((uid, info) in kisCredsByUser()) {
+        // 종목 없는(리밸런싱만 운용) 사용자는 건드리지 않는다 — 원본은 symbol 이 없으면 그 사용자를 건너뛴다
+        for ((uid, info) in kisCredsByUser().filterValues { it.second.isNotEmpty() }) {
             runCatching { realtime.ensurePrices(uid, info.first.first, info.first.second, info.second) }
                 .onFailure { log.error("PriceFeed ensure 실패 user={}", uid, it) }
         }

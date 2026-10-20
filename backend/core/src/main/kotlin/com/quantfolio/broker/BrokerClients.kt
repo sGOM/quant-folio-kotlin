@@ -270,7 +270,7 @@ class TossClient(
         for (attempt in 0..1) {
             val r = s.http.send(method, "$baseUrl$path", query, headers(withAccount), json = body?.let { s.json.writeValueAsString(it) })
             if (r.status == 429 && attempt == 0) {
-                val wait = ((r.header("Retry-After") ?: r.header("X-RateLimit-Reset"))?.toDoubleOrNull() ?: 1.0).coerceIn(0.5, MAX_RETRY_AFTER)
+                val wait = ((r.header("Retry-After")?.takeIf { it.isNotBlank() } ?: r.header("X-RateLimit-Reset"))?.toDoubleOrNull() ?: 1.0).coerceIn(0.5, MAX_RETRY_AFTER)
                 LoggerFactory.getLogger(javaClass).warn("토스 rate limit(429) — {}s 후 재시도 {}", wait, path)
                 s.sleeper((wait * 1000).toLong())
                 continue

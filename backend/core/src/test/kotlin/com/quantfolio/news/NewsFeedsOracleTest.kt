@@ -47,4 +47,13 @@ class NewsFeedsOracleTest {
             assertEquals(json.convertValue<List<String>>(c.get("out")), NewsFeeds.matchSymbols(c.get("text").asString(), names), c.get("text").asString())
         }
     }
+
+    /** 원본 str.strip() 은 유니코드 공백(NBSP·전각 공백)도 지운다 — url 이 달라지면 같은 기사가 두 번 적재된다. */
+    @org.junit.jupiter.api.Test
+    fun unicodeWhitespaceIsStrippedLikePython() {
+        val rss = "<rss><channel><item><title>　제목　</title><link>https://n/a </link></item></channel></rss>"
+        val item = NewsFeeds.parseFeed(rss).single()
+        assertEquals("https://n/a", item.url)
+        assertEquals("제목", item.title)
+    }
 }

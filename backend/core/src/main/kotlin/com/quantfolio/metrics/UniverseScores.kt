@@ -68,7 +68,7 @@ class UniverseScores(
         val pc21 = snapshots.priceChange(MetricsCommon.approxStart(asOf, 21), asOf, mkts).associateBy { it.symbol }
         val pc63 = snapshots.priceChange(MetricsCommon.approxStart(asOf, 63), asOf, mkts).associateBy { it.symbol }
         val pc126 = snapshots.priceChange(MetricsCommon.approxStart(asOf, 126), asOf, mkts).associateBy { it.symbol }
-        val w = p.factorWeights ?: FactorScores.DEFAULT_WEIGHTS
+        val w = p.factorWeights?.takeIf { it.isNotEmpty() } ?: FactorScores.DEFAULT_WEIGHTS // 원본 `or` — 빈 맵도 기본 가중치
         fun weighted(k: String) = (w[k] ?: 0.0) > 0
         if (weighted("momentum") && pc21.isEmpty() && pc63.isEmpty() && pc126.isEmpty()) {
             throw IllegalStateException("모멘텀 팩터 데이터 전량 조회 실패(등락률 21/63/126일 모두 빈 응답) — 왜곡된 목표 산출 방지 위해 리밸런싱 건너뜀(다음 주기 재시도)")

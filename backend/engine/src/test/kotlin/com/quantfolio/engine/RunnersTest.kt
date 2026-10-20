@@ -72,8 +72,12 @@ class RunnersTest(
     /** 종목별 고정 시세, 주문은 즉시 전량 체결. */
     class Broker(val quotes: MutableMap<String, BigDecimal> = mutableMapOf(), var halted: Set<String> = emptySet()) : BrokerClient {
         val placed = mutableListOf<Triple<String, String, Int>>()
+        var quoteDelayMs = 0L
         override fun verifyConnection() = true
-        override fun getQuote(symbol: String) = Quote(symbol, quotes[symbol] ?: BigDecimal("1000"), halted = symbol in halted)
+        override fun getQuote(symbol: String): Quote {
+            if (quoteDelayMs > 0) Thread.sleep(quoteDelayMs)
+            return Quote(symbol, quotes[symbol] ?: BigDecimal("1000"), halted = symbol in halted)
+        }
         override fun placeOrder(symbol: String, side: String, qty: Int, price: Int, orderType: String): OrderResult {
             placed += Triple(symbol, side, qty)
             return OrderResult("ODNO-" + UUID.randomUUID())
@@ -315,5 +319,24 @@ class RunnersTest(
         t.join(java.time.Duration.ofSeconds(10))
         Thread.sleep(500)
         assertTrue(ordersOf(sid).isEmpty(), ordersOf(sid).map { it.reason }.toString())
+    }
+
+    /** 버려진 리밸런싱 틱은 이번 주기를 "실행됨"으로 기록하지 않는다 — 기록하면 그 달 리밸런싱이 조용히 건너뛰어진다(원본은 취소가 _set_last 전에 끊는다). */
+    @Test
+    fun abandonedRebalanceTickDoesNotConsumeCadence() {
+        val codes = (1..2).map { sym() }
+        codes.forEachIndexed { k, c -> seed(c, 30) { i -> 1000.0 + (k + 1) * 10.0 * i } }
+        val (_, sid) = strategy(rebalCfg(codes))
+        broker.quoteDelayMs = 2_000 // 시세 조회 무응답 — 인터럽트는 quotes() 의 catch 가 삼킨다
+        val r = RebalanceRunner(sid, ctx, tickTimeoutSec = 1)
+        val stop = java.util.concurrent.CountDownLatch(1)
+        val t = Thread.ofVirtual().start { r.run(stop) }
+        Thread.sleep(1_500)
+        stop.countDown()
+        t.join(java.time.Duration.ofSeconds(15))
+        Thread.sleep(5_000) // 버려진 틱이 끝까지 돌 시간
+        broker.quoteDelayMs = 0
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(false, redis.hasKey(RedisKeys.rebalanceLast(sid)))
     }
 }

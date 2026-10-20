@@ -35,12 +35,11 @@ import java.time.ZonedDateTime
  * (정기 cadence·레짐 재진입·콜드스타트·킬스위치 재가동) → 목표비중 → 드리프트 초과분 주문(매도 → 매수).
  * 멱등 키에 실행일·사유 태그가 들어가 같은 날 중복 발화해도 이중 주문이 없다.
  */
-class RebalanceRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyId, ctx) {
+class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTimeoutSec: Long = 300L) : BaseRunner(strategyId, ctx) {
     override val log = LoggerFactory.getLogger("engine.rebalance_runner")!!
     override val label = "리밸런싱 전략"
     override val tickWord = "점검"
     override val pollIntervalSec = 60L
-    override val tickTimeoutSec = 300L
 
     private val json = JsonMapper.builder().build()
     private var pitFallbackActive = false
@@ -115,6 +114,10 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategy
         }
         log.info("리밸런싱 전략 {} {} ({})", strategyId, kind, now)
         rebalanceOnce(now, riskOff = false, barTag = tag)
+        if (tickAbandoned) {
+            log.warn("리밸런싱 전략 {} 틱 중단됨 — 이번 주기를 실행됨으로 기록하지 않고 다음 점검에서 재시도", strategyId)
+            return
+        }
         if (due || bootstrap) setLast(now) // 재진입은 cadence 스케줄을 소비하지 않는다
         if (rearm) clearRearmPending()
     }
