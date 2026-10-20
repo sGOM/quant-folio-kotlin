@@ -75,4 +75,14 @@ class NewsIngestorTest(
         assertFalse(articles.existsById(old.id!!))
         assertTrue(articles.existsById(keep.id!!))
     }
+
+    /** 종목명 매핑 실패는 수집 실패 — 매핑 없이 저장하면 url 중복 건너뛰기 때문에 나중에도 태그가 붙지 않는다(원본도 전파). */
+    @Test
+    fun nameMapFailureFailsIngestInsteadOfSavingUntagged() {
+        val broken = Mockito.mock(SymbolCatalog::class.java).also { Mockito.`when`(it.nameMap()).thenThrow(IllegalStateException("seed 손상")) }
+        val http = FakeExternalHttp()
+        val before = articles.count()
+        kotlin.test.assertFailsWith<IllegalStateException> { NewsIngestor(http, broken, jdbc, tx, clock).ingest() }
+        kotlin.test.assertEquals(before, articles.count())
+    }
 }

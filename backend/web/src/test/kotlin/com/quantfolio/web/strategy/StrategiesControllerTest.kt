@@ -104,6 +104,25 @@ class StrategiesControllerTest(
         }.andExpect { status { isUnprocessableContent() } }
     }
 
+    /** 저장 응답의 config 는 DB 에서 다시 읽은 jsonb 순서(원본 db.refresh) — 다음 GET 과 텍스트가 같아야 한다. */
+    @Test
+    fun saveResponseConfigKeyOrderMatchesGet() {
+        val me = Me()
+        fun keys(raw: String): List<String> {
+            @Suppress("UNCHECKED_CAST")
+            val cfg = json.readValue(raw, LinkedHashMap::class.java)["config"] as Map<String, Any?>
+            return cfg.keys.toList()
+        }
+        val created = mvc.post("/api/strategies") {
+            cookie(me.cookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"순서","config":{"type":"sma_crossover","symbol":"005930"}}"""
+        }.andReturn().response.contentAsString
+        val id = json.readTree(created).get("id").asInt()
+        val got = mvc.get("/api/strategies/$id") { cookie(me.cookie) }.andReturn().response.contentAsString
+        kotlin.test.assertEquals(keys(got), keys(created))
+    }
+
     @Test
     fun listOrderAndOwnershipIsolation() {
         val me = Me()

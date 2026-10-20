@@ -34,3 +34,4 @@
 - frontend `Dockerfile`: 원본 `npm install`(lockfile 미사용)은 현재 레지스트리에서 `edgesOut` null 오류로 재현 가능하게 실패 → `package-lock.json` + `npm ci`. 앱 코드는 무수정.
 - e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 13개 모두 생성. `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
 - Caddy 의 `/docs`·`/openapi.json`·`/redoc` 라우트는 남겼지만 Kotlin web 은 해당 문서를 제공하지 않는다(404).
+- 요청 DTO 의 `@Size`(전략 이름 255·설명 2000·닉네임 50·비밀번호 8~128)는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.

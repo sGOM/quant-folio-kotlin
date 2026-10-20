@@ -108,7 +108,8 @@ class StrategiesController(
 
     private fun likeCount(id: Int): Int = jdbc.queryForObject("select count(*) from strategy_likes where strategy_id = :id", MapSqlParameterSource("id", id), Int::class.java) ?: 0
 
-    private fun save(s: Strategy) = strategies.saveAndFlush(s).toOut()
+    /** 저장 후 DB 에서 다시 읽어 응답(원본 `db.refresh`) — config 는 jsonb 키 순서, 시각은 DB 값이라 이후 GET 과 같다. */
+    private fun save(s: Strategy) = strategies.findById(strategies.saveAndFlush(s).id!!).get().toOut()
 
     @GetMapping
     fun list(@CurrentUser user: User): List<StrategyOut> =

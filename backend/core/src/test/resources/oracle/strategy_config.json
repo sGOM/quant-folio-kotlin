@@ -1955,6 +1955,110 @@
      "type": "value_error"
     }
    ]
+  },
+  {
+   "name": "int_overflow",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fast": 4294967301,
+    "slow": 4294967310
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "fast"
+     ],
+     "msg": "Input should be less than or equal to 240",
+     "type": "less_than_equal"
+    },
+    {
+     "loc": [
+      "sma_crossover",
+      "slow"
+     ],
+     "msg": "Input should be less than or equal to 480",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "int_overflow_str",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fast": "4294967301"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "fast"
+     ],
+     "msg": "Input should be less than or equal to 240",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "cash_nan_str",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "cash": "nan"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "cash"
+     ],
+     "msg": "Input should be greater than 0",
+     "type": "greater_than"
+    }
+   ]
+  },
+  {
+   "name": "fees_inf_str",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fees": "inf"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "fees"
+     ],
+     "msg": "Input should be less than or equal to 0.01",
+     "type": "less_than_equal"
+    }
+   ]
+  },
+  {
+   "name": "fees_neg_inf_str",
+   "input": {
+    "type": "sma_crossover",
+    "symbol": "005930",
+    "fees": "-Infinity"
+   },
+   "ok": false,
+   "errors": [
+    {
+     "loc": [
+      "sma_crossover",
+      "fees"
+     ],
+     "msg": "Input should be greater than or equal to 0",
+     "type": "greater_than_equal"
+    }
+   ]
   }
  ]
 }

@@ -165,7 +165,9 @@ class BacktestsControllerTest(
         mvc.get("/api/backtests/${b.id}/dsr") { cookie(me.cookie) }.andExpect {
             status { isOk() }
             jsonPath("$.backtest_id") { value(b.id) }
-            jsonPath("$.period_start") { value("2022-12-31T15:00:00Z") }
+            // 원본 DSR 라우트는 응답 모델 없이 jsonable_encoder → isoformat(+00:00). BacktestOut(응답 모델)의 Z 와 다르다
+            jsonPath("$.period_start") { value("2022-12-31T15:00:00+00:00") }
+            jsonPath("$.period_end") { value("2023-12-29T14:59:59+00:00") }
             jsonPath("$.N") { value(2) }
         }
     }

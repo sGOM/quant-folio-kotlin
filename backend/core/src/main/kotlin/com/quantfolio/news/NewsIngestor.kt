@@ -26,7 +26,7 @@ class NewsIngestor(
 
     /** 수집 결과: feeds_ok·feeds_failed(소스명)·fetched(중복 url 제거 후)·inserted. 전체 실패면 호출자가 알림. */
     fun ingest(): Map<String, Any> {
-        val nameMap = runCatching { catalog.nameMap() }.getOrDefault(emptyMap())
+        val nameMap = catalog.nameMap() // 실패는 전파(원본도) — 매핑 없이 저장한 기사는 다시 태그되지 않는다
         val now = clock.instant()
         var ok = 0
         val failed = mutableListOf<String>()

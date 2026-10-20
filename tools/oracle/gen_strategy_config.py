@@ -105,6 +105,12 @@ inputs = {
     "bad_time": {"type": "rebalance", "universe": ["005930", "000660"], "selection": {"top_n": 1}, "rebalance_time": "25:00"},
     "bad_time_format": {"type": "rebalance", "universe": ["005930", "000660"], "selection": {"top_n": 1}, "rebalance_time": "abc"},
     "pick_gt_universe": {"type": "rebalance", "universe": ["005930", "000660"], "selection": {"top_n": 1, "universe_rule": {"pick": 5}}},
+    # 3회차 리뷰: Int 범위 밖 정수(랩어라운드 금지)·NaN/Inf 문자열(경계 비교에서 탈락)
+    "int_overflow": {"type": "sma_crossover", "symbol": "005930", "fast": 4294967301, "slow": 4294967310},
+    "int_overflow_str": {"type": "sma_crossover", "symbol": "005930", "fast": "4294967301"},
+    "cash_nan_str": {"type": "sma_crossover", "symbol": "005930", "cash": "nan"},
+    "fees_inf_str": {"type": "sma_crossover", "symbol": "005930", "fees": "inf"},
+    "fees_neg_inf_str": {"type": "sma_crossover", "symbol": "005930", "fees": "-Infinity"},
 }
 
 cases = []

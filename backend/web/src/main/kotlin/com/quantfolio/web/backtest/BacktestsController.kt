@@ -46,6 +46,7 @@ class BacktestsController(
     private val strategies: StrategyRepository,
     private val backtests: BacktestRepository,
     private val runner: BacktestRunner,
+    private val tx: org.springframework.transaction.support.TransactionTemplate,
 ) {
     private fun ownedStrategy(user: User, id: Int): Strategy =
         strategies.findById(id).filter { it.userId == user.id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
@@ -68,16 +69,20 @@ class BacktestsController(
         val start = req.periodStart!!
         val end = req.periodEnd!!
         val result = runner.run(strategy.config, start, end)
-        val bt = backtests.saveAndFlush(
-            Backtest(
-                strategy.id!!, BacktestRunner.kstStart(start), BacktestRunner.kstEnd(end),
-                num(result["total_return"]), num(result["mdd"]), num(result["sharpe"]), result,
-            ),
-        )
-        if (strategy.status == "draft") {
-            strategy.status = "backtested"
-            strategies.save(strategy)
-        }
+        // 백테스트 행과 전략 상태 전환은 한 커밋(원본과 같음) — 따로면 상태 갱신 실패 시 저장된 실행이 500 으로 보이고 재시도가 DSR 시행 수를 부풀린다.
+        val bt = tx.execute {
+            val saved = backtests.saveAndFlush(
+                Backtest(
+                    strategy.id!!, BacktestRunner.kstStart(start), BacktestRunner.kstEnd(end),
+                    num(result["total_return"]), num(result["mdd"]), num(result["sharpe"]), result,
+                ),
+            )
+            if (strategy.status == "draft") {
+                strategy.status = "backtested"
+                strategies.save(strategy)
+            }
+            saved
+        }!!
         return backtests.findById(bt.id!!).get().toOut()
     }
 
@@ -100,7 +105,10 @@ class BacktestsController(
         val candidates = backtests.findByStrategyIdAndPeriodStartAndPeriodEnd(bt.strategyId, bt.periodStart, bt.periodEnd).mapNotNull { it.result?.takeIf { r -> r.isNotEmpty() } }
         val fp = target["universe_fingerprint"]
         val homogeneous = if (fp != null && fp != "") candidates.filter { it["universe_fingerprint"] == fp } else candidates
-        return linkedMapOf<String, Any?>("backtest_id" to bt.id, "strategy_id" to bt.strategyId, "period_start" to bt.periodStart, "period_end" to bt.periodEnd) +
+        return linkedMapOf<String, Any?>("backtest_id" to bt.id, "strategy_id" to bt.strategyId, "period_start" to iso(bt.periodStart), "period_end" to iso(bt.periodEnd)) +
             DeflatedSharpe.analyze(target, homogeneous)
     }
+
+    /** 원본 DSR 라우트는 응답 모델 없이 jsonable_encoder(= isoformat, `+00:00`) — `Instant` 그대로면 Jackson 이 `Z` 로 쓴다. */
+    private fun iso(t: java.time.Instant) = com.quantfolio.alert.pyIsoformat(t.atZone(java.time.ZoneOffset.UTC))
 }

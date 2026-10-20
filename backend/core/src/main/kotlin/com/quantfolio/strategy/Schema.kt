@@ -138,13 +138,15 @@ object Validator {
     private fun checkConstraints(f: F, v: Any, loc: List<Any>, errors: MutableList<ConfigError>): Boolean {
         if (v is Number) {
             val d = v.toDouble()
-            f.ge?.let { if (d < it.toDouble()) return fail(errors, loc, "Input should be greater than or equal to ${pyNum(it)}", "greater_than_equal") }
-            f.gt?.let { if (d <= it.toDouble()) return fail(errors, loc, "Input should be greater than ${pyNum(it)}", "greater_than") }
-            f.le?.let { if (d > it.toDouble()) return fail(errors, loc, "Input should be less than or equal to ${pyNum(it)}", "less_than_equal") }
+            // "통과 조건이 거짓이면 실패"로 쓴다 — NaN 은 모든 비교가 거짓이라 pydantic 처럼 경계가 있으면 탈락한다.
+            f.ge?.let { if (!(d >= it.toDouble())) return fail(errors, loc, "Input should be greater than or equal to ${pyNum(it)}", "greater_than_equal") }
+            f.gt?.let { if (!(d > it.toDouble())) return fail(errors, loc, "Input should be greater than ${pyNum(it)}", "greater_than") }
+            f.le?.let { if (!(d <= it.toDouble())) return fail(errors, loc, "Input should be less than or equal to ${pyNum(it)}", "less_than_equal") }
         }
         if (v is String) {
-            f.minLen?.let { if (v.length < it) return fail(errors, loc, "String should have at least $it character${if (it == 1) "" else "s"}", "string_too_short") }
-            f.maxLen?.let { if (v.length > it) return fail(errors, loc, "String should have at most $it character${if (it == 1) "" else "s"}", "string_too_long") }
+            val n = v.codePointCount(0, v.length) // pydantic 은 코드포인트 수(이모지 1자) — String.length 는 UTF-16 단위
+            f.minLen?.let { if (n < it) return fail(errors, loc, "String should have at least $it character${if (it == 1) "" else "s"}", "string_too_short") }
+            f.maxLen?.let { if (n > it) return fail(errors, loc, "String should have at most $it character${if (it == 1) "" else "s"}", "string_too_long") }
         }
         if (v is List<*>) {
             f.minLen?.let { if (v.size < it) return fail(errors, loc, "List should have at least $it item${if (it == 1) "" else "s"} after validation, not ${v.size}", "too_short") }
@@ -158,16 +160,21 @@ object Validator {
         return false
     }
 
-    private fun toInt(v: Any?, loc: List<Any>, errors: MutableList<ConfigError>): Int? = when (v) {
+    /** Int 범위 밖 정수는 잘라내지 않고 크기를 유지해 경계 검사에 넘긴다(Python int 는 무한 정밀도 — `toInt()` 랩어라운드 금지). */
+    private fun intOrWide(v: java.math.BigInteger): Number =
+        if (v.bitLength() < 32) v.toInt() else v
+
+    private fun toInt(v: Any?, loc: List<Any>, errors: MutableList<ConfigError>): Number? = when (v) {
         is Boolean -> if (v) 1 else 0
         is Int -> v
-        is Long -> v.toInt()
+        is Long -> intOrWide(java.math.BigInteger.valueOf(v))
+        is java.math.BigInteger -> intOrWide(v)
         is Number -> {
             val d = v.toDouble()
-            if (d == Math.floor(d) && d.isFinite()) d.toInt()
+            if (d == Math.floor(d) && d.isFinite()) intOrWide(java.math.BigDecimal(d).toBigInteger())
             else null.also { errors += ConfigError(loc, "Input should be a valid integer, got a number with a fractional part", "int_from_float") }
         }
-        is String -> v.trim().toIntOrNull() ?: null.also {
+        is String -> v.trim().toBigIntegerOrNull()?.let { intOrWide(it) } ?: null.also {
             errors += ConfigError(loc, "Input should be a valid integer, unable to parse string as an integer", "int_parsing")
         }
         else -> null.also { errors += ConfigError(loc, "Input should be a valid integer", "int_type") }
@@ -176,10 +183,18 @@ object Validator {
     private fun toFloat(v: Any?, loc: List<Any>, errors: MutableList<ConfigError>): Double? = when (v) {
         is Boolean -> if (v) 1.0 else 0.0
         is Number -> v.toDouble()
-        is String -> v.trim().toDoubleOrNull() ?: null.also {
+        is String -> pyFloatString(v.trim()) ?: null.also {
             errors += ConfigError(loc, "Input should be a valid number, unable to parse string as a number", "float_parsing")
         }
         else -> null.also { errors += ConfigError(loc, "Input should be a valid number", "float_type") }
+    }
+
+    /** Python `float(str)` 처럼 nan/inf/infinity(대소문자·부호 무관)도 받는다 — Java 는 "NaN"·"Infinity" 만 안다. */
+    private fun pyFloatString(s: String): Double? = when (s.lowercase().removePrefix("+")) {
+        "nan", "-nan" -> Double.NaN
+        "inf", "infinity" -> Double.POSITIVE_INFINITY
+        "-inf", "-infinity" -> Double.NEGATIVE_INFINITY
+        else -> s.toDoubleOrNull()
     }
 
     private fun toBool(v: Any?, loc: List<Any>, errors: MutableList<ConfigError>): Boolean? = when (v) {

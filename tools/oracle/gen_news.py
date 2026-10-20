@@ -34,7 +34,9 @@ def enc_items(items):
     return [{**i, "published_at": i["published_at"].isoformat() if i["published_at"] else None} for i in items]
 
 dates = ["Mon, 13 Oct 2026 09:30:00 +0900", "Tue, 14 Oct 2026 01:00:00 GMT", "13 Oct 2026 09:30:00 -0000", "2026-10-15T08:00:00",
-         "2026-10-16T10:00:00Z", "2026-10-17T12:30:45.123+00:00", "garbage", "", None, "2026-10-18"]
+         "2026-10-16T10:00:00Z", "2026-10-17T12:30:45.123+00:00", "garbage", "", None, "2026-10-18",
+         # 3회차 리뷰: Python 3.12 fromisoformat 이 받는 변형(공백 구분·분까지·기본형·주차)
+         "2026-10-20 10:00:00", "2026-10-20 10:00", "20261020", "20261020T100000", "2026-W43-2", "2026-10-20 10:00:00+09:00"]
 strips = ["<p>a&nbsp;b</p>", "&lt;b&gt;x&lt;/b&gt;", "  여러   공백\n\t줄 ", "&amp;amp;", "&#x41;&#66;", "a < b > c", "&middot;&hellip;&rsquo;"]
 save("news", {
     "rss": RSS, "atom": ATOM, "many": many,

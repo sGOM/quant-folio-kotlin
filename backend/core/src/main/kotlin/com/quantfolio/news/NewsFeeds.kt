@@ -41,10 +41,10 @@ object NewsFeeds {
         return text
     }
 
-    fun parseFeed(xml: String): List<FeedItem> = parseFeed(xml.toByteArray(Charsets.UTF_8), declared = false)
+    fun parseFeed(xml: String): List<FeedItem> = parseFeed(xml.toByteArray(Charsets.UTF_8))
 
     /** RSS 2.0(channel/item)·Atom(feed/entry). 제목·링크 없는 항목은 버리고 피드당 50건까지. */
-    fun parseFeed(bytes: ByteArray, declared: Boolean = true): List<FeedItem> {
+    fun parseFeed(bytes: ByteArray): List<FeedItem> {
         val factory = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
             setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) // 외부 엔티티(XXE) 차단
@@ -121,20 +121,32 @@ object NewsFeeds {
             }
             return if (offset == null) local.atZone(MarketClock.KST).toInstant() else local.toInstant(offset)
         }
-        val iso = s.replace("Z", "+00:00")
-        return try {
-            OffsetDateTime.parse(iso).toInstant()
-        } catch (_: DateTimeParseException) {
-            try {
-                LocalDateTime.parse(iso).atZone(MarketClock.KST).toInstant()
-            } catch (_: DateTimeParseException) {
-                try {
-                    LocalDate.parse(iso, DateTimeFormatter.ISO_LOCAL_DATE).atStartOfDay(MarketClock.KST).toInstant()
-                } catch (_: DateTimeParseException) {
-                    null
-                }
+        return isoInstant(s.replace("Z", "+00:00"))
+    }
+
+    private val BASIC_ISO = Regex("""(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?)?""")
+
+    private fun <T> orNull(f: () -> T): T? = try {
+        f()
+    } catch (_: java.time.DateTimeException) {
+        null
+    }
+
+    /**
+     * Python 3.12 `datetime.fromisoformat` 근사: 날짜·시각 구분자는 'T' 아닌 한 글자도(공백), 시각은 분까지도, 기본형
+     * `YYYYMMDD[THHMM[SS]]`, 주차 `YYYY-Www-D`. tz 없으면 KST(원본 규칙). 형태별 원본 결과는 news 정답지.
+     */
+    private fun isoInstant(s: String): Instant? {
+        val iso = if (s.length > 10 && s[4] == '-' && s[10] != 'T') s.substring(0, 10) + "T" + s.substring(11) else s
+        return orNull { OffsetDateTime.parse(iso).toInstant() }
+            ?: orNull { LocalDateTime.parse(iso).atZone(MarketClock.KST).toInstant() }
+            ?: orNull { LocalDate.parse(iso, DateTimeFormatter.ISO_LOCAL_DATE).atStartOfDay(MarketClock.KST).toInstant() }
+            ?: orNull { LocalDate.parse(iso, DateTimeFormatter.ISO_WEEK_DATE).atStartOfDay(MarketClock.KST).toInstant() }
+            ?: BASIC_ISO.matchEntire(s)?.let { m ->
+                val (y, mo, d, hh, mm, ss) = m.destructured
+                orNull { LocalDateTime.of(y.toInt(), mo.toInt(), d.toInt(), hh.ifEmpty { "0" }.toInt(), mm.ifEmpty { "0" }.toInt(), ss.ifEmpty { "0" }.toInt()) }
+                    ?.atZone(MarketClock.KST)?.toInstant()
             }
-        }
     }
 
     /**
