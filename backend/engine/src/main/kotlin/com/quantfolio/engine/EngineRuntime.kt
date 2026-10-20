@@ -71,7 +71,18 @@ class EngineRuntime(
         log.info("정리 중 — 전략 {}개 종료", runners.size)
         shutdown.countDown()
         listeners.removeMessageListener(control)
-        runners.keys.toList().forEach { stopStrategy(it) }
+        // 전부 먼저 신호하고 공유 마감 시각까지 기다린다 — 하나씩 10초씩 기다리면 러너가 많을 때 compose stop_grace_period 를 넘겨 SIGKILL.
+        val all = runners.toMap()
+        runners.clear()
+        all.values.forEach { it.first.countDown() }
+        val deadline = System.nanoTime() + Duration.ofSeconds(STOP_WAIT_SEC).toNanos()
+        for ((sid, entry) in all) {
+            val t = entry.second
+            t.join(Duration.ofNanos(maxOf(0L, deadline - System.nanoTime())))
+            if (t.isAlive) t.interrupt()
+            redis.opsForSet().remove(RedisKeys.ACTIVE_STRATEGIES, sid.toString())
+            log.info("전략 {} stop", sid)
+        }
         realtime.shutdown()
         loops.forEach { it.interrupt() }
         running = false
@@ -215,5 +226,10 @@ class EngineRuntime(
         if (reconcileFails == RedisKeys.FAILURE_ALERT_THRESHOLD) {
             alerts.publish(null, 0, "critical", "체결 재조회 루프 연속 ${reconcileFails}회 실패 — 미체결 주문이 정합되지 않고 있을 수 있음. 마지막 원인: $reason", "runner_failures")
         }
+    }
+
+    private companion object {
+        /** 종료 시 러너 전체를 기다리는 시간. compose engine `stop_grace_period`(60s)보다 짧아야 한다. */
+        const val STOP_WAIT_SEC = 20L
     }
 }

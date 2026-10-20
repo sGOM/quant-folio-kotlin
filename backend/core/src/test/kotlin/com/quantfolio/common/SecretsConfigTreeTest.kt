@@ -19,7 +19,7 @@ class SecretsConfigTreeTest {
 
     @Test
     fun configTreeTrimsTrailingNewline(@TempDir dir: Path) {
-        Files.writeString(dir.resolve("credential_enc_key"), "abc=\n")
+        Files.writeString(dir.resolve("credential_enc_key"), " abc=\n\n") // 원본은 strip() — 빈 줄·공백도 무시했다
         val app = SpringApplication(Empty::class.java).apply { setWebApplicationType(WebApplicationType.NONE) }
         app.run("--spring.config.import=configtree:${dir.toString().replace(java.io.File.separatorChar, '/')}/", "--spring.main.banner-mode=off").use {
             assertEquals("abc=", it.environment.getProperty("credential_enc_key"))

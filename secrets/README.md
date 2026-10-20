@@ -2,7 +2,7 @@
 
 비밀(마스터 키·증권사 API 키)을 **평문 `.env` 대신 파일**로 보관하는 디렉터리입니다.
 docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운트하고, Spring
-`configtree` 가 같은 이름의 속성으로 읽습니다(끝 개행은 떼어 냄). 따라서 비밀이 `docker inspect`·이미지 레이어·
+`configtree` 가 같은 이름의 속성으로 읽습니다(앞뒤 공백·개행은 떼어 냄 — 원본 `strip()` 과 같음). 따라서 비밀이 `docker inspect`·이미지 레이어·
 프로세스 환경(`/proc`)에 남지 않습니다.
 
 > ⚠️ 이 디렉터리의 `*.txt` 는 `.gitignore` 로 커밋에서 제외됩니다. 절대 커밋하지 마세요.

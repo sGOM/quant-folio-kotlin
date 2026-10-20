@@ -25,7 +25,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # 외부 키 없이 모의·미연동 상태로 충분 — 로그인·전략 CRUD·자체 데이터 백테스트만 본다.
+      # 외부 키 없이 모의·미연동 상태로 돈다 — 로그인·전략 CRUD·자체 데이터 백테스트만 본다.
       # compose 는 13개 시크릿 파일이 모두 있어야 기동된다(빈 파일 허용).
       - name: 시크릿 파일 생성
         run: |

@@ -6,3 +6,6 @@ spring:
 
 server:
   port: 8000
+  # Caddy 가 TLS 를 끝내고 평문으로 넘긴다 — X-Forwarded-Proto/Host 를 믿어야 https 같은 출처 요청이 CORS 403 이 안 된다.
+  # native(Tomcat RemoteIpValve)는 내부망 프록시(사설 IP)에서 온 헤더만 믿는다.
+  forward-headers-strategy: native

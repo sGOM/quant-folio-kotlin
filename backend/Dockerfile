@@ -3,7 +3,8 @@
 FROM eclipse-temurin:25-jdk-noble AS build
 WORKDIR /src
 COPY . .
-RUN ./gradlew :web:bootJar :engine:bootJar :worker:bootJar --no-daemon --console=plain \
+# 캐시 마운트: 소스 한 줄 바꿀 때마다 Gradle 배포판·의존성을 다시 받지 않게.
+RUN --mount=type=cache,target=/root/.gradle ./gradlew :web:bootJar :engine:bootJar :worker:bootJar --no-daemon --console=plain \
  && mkdir /out \
  && cp web/build/libs/web-*-SNAPSHOT.jar /out/web.jar \
  && cp engine/build/libs/engine-*-SNAPSHOT.jar /out/engine.jar \

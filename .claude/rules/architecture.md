@@ -38,7 +38,7 @@ paths:
 ## 설정
 
 - `core/src/main/resources/quantfolio-core.yml` 을 세 앱이 import 한다. 값 우선순위:
-  `/run/secrets/<name>` 파일(configtree) > 원본과 같은 이름의 환경변수(.env 호환) > 기본값.
+  `/run/secrets/<name>` 파일(configtree, 앞뒤 공백 제거) > 원본과 같은 이름의 환경변수(.env 호환) > 기본값.
 - 부팅 거부(안전측): `KIS_ENV=prod` 인데 `KIS_PROD_APPROVED` 아님, `APP_ENV=prod` 인데 시크릿 누락·`COOKIE_SECURE=false`.
 - DB URL 은 `DATABASE_JDBC_URL`(원본 `DATABASE_URL` 은 SQLAlchemy 형식이라 쓰지 않는다).
 

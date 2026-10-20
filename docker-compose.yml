@@ -20,8 +20,8 @@ x-backend-secrets: &backend-secrets
   - s3_backup_secret_access_key
 
 x-backend: &backend
+  # image: 고정 태그를 두지 않는다 — 태그는 프로젝트 전역이라 qf-smoke 빌드가 운영 스택 이미지를 덮어쓴다.
   build: ./backend
-  image: quantfolio-backend
   restart: unless-stopped
   env_file: .env
   environment:
@@ -81,7 +81,7 @@ services:
   engine:
     <<: *backend
     command: ["java", "-jar", "/app/engine.jar"]
-    # 종료 시 러너마다 최대 10초 기다린다 — 기본 10초 SIGKILL 이면 주문 도중 끊길 수 있다.
+    # 종료 시 러너 전체를 최대 20초 기다린다(EngineRuntime.STOP_WAIT_SEC) — 기본 10초 SIGKILL 이면 주문 도중 끊길 수 있다.
     stop_grace_period: 60s
     depends_on:
       web:
