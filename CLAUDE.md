@@ -32,6 +32,8 @@ node .claude/hooks/md-lint.mjs             # Claude 문서 린트 (CI 와 동일
   날짜는 `MarketClock.todayKst()` 로만 얻는다.
 - **Redis 키·채널 문자열은 `RedisKeys` 에만.** 원본 Python 과 문자열이 같아야 컷오버 때 상태가 이어진다.
 - **원본 동작 보존이 원칙.** 원본 버그를 발견해도 고치지 말고 기록한다(설계 §11).
+- **Python 의미를 null 의미로 옮기지 않는다.** `a or b`·`if not x` 는 빈 문자열·0 도 거짓(`?:` 는 null 만 거른다),
+  `d["k"]` 는 없으면 KeyError(`d["k"].toString()` 은 `"null"` 문자열로 통과). 셀프 리뷰 4회차 9건 중 6건이 이 유형.
 - 시크릿은 `secrets/*.txt` → `/run/secrets/*` 마운트(configtree). 편집은 훅이 막는다.
 
 ## 전역 원칙
