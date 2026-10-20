@@ -67,6 +67,16 @@ class KrxSnapshotsTest(
         assertEquals(2, calls("MDCSTAT03501"))
     }
 
+    /** 시장전환일에 같은 종목이 두 시장 응답에 실려도 최초(원격) 응답에서 한 번만, 마지막 값(원본 `_fetch_per_market` §55). */
+    @Test
+    fun duplicateTickerAcrossMarketsKeepsLast() {
+        fundamentals("STK", "300001" to "10.0")
+        fundamentals("KSQ", "300001" to "20.0")
+        val rows = snapshots.fundamentals(LocalDate.of(2003, 5, 9), listOf("KOSPI", "KOSDAQ"))
+        assertEquals(1, rows.count { it.symbol == "300001" })
+        assertEquals(20.0, rows.single { it.symbol == "300001" }.per)
+    }
+
     @Test
     fun partialFailureNotFinal() {
         fundamentals("STK", "300001" to "10")

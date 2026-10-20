@@ -91,6 +91,24 @@ class AuthControllerTest(
         }.andExpect { status { isUnprocessableContent() }; jsonPath("$.detail[0].loc[1]") { value("email") } }
     }
 
+    /** 원본 EmailStr(pydantic+email-validator) 정규화 — 앞뒤 공백 제거·도메인 소문자, 도메인에 점 없으면 422(원본 컨테이너 실측). */
+    @Test
+    fun registerNormalizesEmailLikeOriginal() {
+        val local = "N" + UUID.randomUUID().toString().take(8)
+        mvc.post("/api/auth/register") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email":"  $local@Test.DEV ","password":"password-1"}"""
+        }.andExpect { status { isCreated() }; jsonPath("$.email") { value("$local@test.dev") } }
+        mvc.post("/api/auth/register") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email":"$local@TEST.dev","password":"password-1"}"""
+        }.andExpect { status { isConflict() } }
+        mvc.post("/api/auth/register") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email":"a@localhost","password":"password-1"}"""
+        }.andExpect { status { isUnprocessableContent() }; jsonPath("$.detail[0].loc[1]") { value("email") } }
+    }
+
     @Test
     fun loginSetsCookieAndResets() {
         val e = email()

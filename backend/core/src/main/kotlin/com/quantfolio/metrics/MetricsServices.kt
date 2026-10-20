@@ -131,7 +131,7 @@ class SectorMetricsService(private val snapshots: SnapshotSource) {
     fun compute(market: String, asOf: LocalDate): SectorsOut {
         val histStart = MetricsCommon.approxStart(asOf, 252, buffer = 30)
         val refReturns = mapOf("KOSPI" to REF_KOSPI, "KOSDAQ" to REF_KOSDAQ).mapValues { (_, ticker) ->
-            val bars = runCatching { snapshots.indexOhlcv(histStart, asOf, ticker) }.getOrNull()
+            val bars = snapshots.indexOhlcv(histStart, asOf, ticker) // 실패는 전파(원본도 감싸지 않음) — 결측으로 바꿔 캐시하지 않는다
             if (bars != null && bars.size >= 126) {
                 val c = bars.map { it.close ?: Double.NaN }
                 com.quantfolio.quant.Num.safe(c.last() / c[c.size - 126] - 1)

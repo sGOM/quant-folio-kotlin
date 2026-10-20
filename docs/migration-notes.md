@@ -12,6 +12,7 @@
 | 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 |
 | 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) |
 | 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 |
+| 9 | `AuthController.login` | `routes/auth.py::login` | 가입은 EmailStr 로 정규화(공백 제거·도메인 소문자)해 저장하지만 로그인은 입력 그대로 조회. | `A@Example.COM` 으로 가입하면 저장은 `A@example.com` — 같은 문자열로 로그인하면 401 |
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 

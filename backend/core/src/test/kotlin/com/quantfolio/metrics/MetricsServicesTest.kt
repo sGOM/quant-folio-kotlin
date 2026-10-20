@@ -45,6 +45,7 @@ class MetricsServicesTest {
         var caps = listOf<StockDaily>()
         var periods = listOf<StockPeriod>()
         var index: List<IndexBar>? = null
+        var indexError: Exception? = null
         var snapshot: List<StockDaily>? = null
         var tickers: () -> List<String> = { emptyList() }
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = emptyList<StockDaily>()
@@ -52,7 +53,7 @@ class MetricsServicesTest {
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periods
         override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = emptyList<StockPeriod>()
         override fun marketOhlcvSnapshot(day: LocalDate, market: String) = snapshot
-        override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String) = index
+        override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = indexError?.let { throw it } ?: index
         override fun indexTickers(day: LocalDate, market: String) = tickers()
         override fun indexName(day: LocalDate, ticker: String) = "업종$ticker"
     }
@@ -125,6 +126,13 @@ class MetricsServicesTest {
     @Test
     fun sectorsRaiseWhenEveryTickerListFails() {
         val src = FakeSource().apply { tickers = { throw SourceAuthError("krx", "차단") } }
+        assertThrows<SourceAuthError> { SectorMetricsService(src).compute("ALL", asOf) }
+    }
+
+    /** 기준지수(1001·2001) 조회 실패는 "rs 결측"이 아니라 실패 — 원본은 감싸지 않아 503, 캐시 안 됨. 결측으로 굳혀 6시간 캐시하면 안 된다. */
+    @Test
+    fun sectorsRaiseWhenReferenceIndexFails() {
+        val src = FakeSource().apply { indexError = SourceAuthError("krx", "차단") }
         assertThrows<SourceAuthError> { SectorMetricsService(src).compute("ALL", asOf) }
     }
 }

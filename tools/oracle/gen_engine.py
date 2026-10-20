@@ -14,7 +14,7 @@ from oracle_lib import save
 
 def ohlcv(seed, n=160):
     rs = np.random.RandomState(seed)
-    idx = pd.bdate_range("2022-01-03", periods=n)
+    idx = pd.bdate_range("2022-01-03", periods=n, tz="UTC")  # 운영 로더(get_close_series)처럼 tz-aware UTC — isoformat 에 +00:00
     close = 30000 * np.exp(np.cumsum(rs.normal(0, 0.02, n)))
     open_ = close * (1 + rs.normal(0, 0.006, n))
     high = np.maximum(open_, close) * (1 + np.abs(rs.normal(0, 0.008, n)))

@@ -68,7 +68,8 @@ object SingleBacktest {
         )
     }
 
-    private fun iso(close: Series, i: Int) = close.index[i].atStartOfDay().format(ISO_SECONDS)
+    /** 원본은 tz-aware UTC 인덱스(get_close_series)라 `isoformat()` 에 `+00:00` 이 붙는다 — 리밸런싱(tz 제거)과 다르다. */
+    private fun iso(close: Series, i: Int) = close.index[i].atStartOfDay().format(ISO_SECONDS) + "+00:00"
 
     private fun markersOf(close: Series, mask: BoolSeries, type: String) =
         close.index.indices.filter { mask[it] }.map { mapOf("t" to iso(close, it), "type" to type, "price" to Num.safe(close[it])) }

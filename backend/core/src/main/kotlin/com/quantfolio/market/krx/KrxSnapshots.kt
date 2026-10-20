@@ -66,7 +66,7 @@ class KrxSnapshots(
             "fundamentals", CacheKeys.of(asOf, markets),
             readLocal = { daily.read(asOf, markets) },
             fetchRemote = {
-                perMarket(markets, "펀더멘털", ymd(asOf)) { mkt ->
+                perMarket(markets, "펀더멘털", ymd(asOf), { it.symbol }) { mkt ->
                     api.fundamentalByTicker(ymd(asOf), mkt).map {
                         StockDaily(it.symbol, market = mkt, per = it.per.takeIf { p -> p > 0 }, pbr = it.pbr, div = it.div)
                     }
@@ -87,7 +87,7 @@ class KrxSnapshots(
             "market_cap", CacheKeys.of(asOf, markets),
             readLocal = { daily.read(asOf, markets) },
             fetchRemote = {
-                perMarket(markets, "시가총액", ymd(asOf)) { mkt ->
+                perMarket(markets, "시가총액", ymd(asOf), { it.symbol }) { mkt ->
                     api.marketCapByTicker(ymd(asOf), mkt).map {
                         StockDaily(it.symbol, market = mkt, marketCap = it.marketCap, volume = it.volume, tradingValue = it.tradingValue, shares = it.shares)
                     }
@@ -106,7 +106,7 @@ class KrxSnapshots(
             "price_change", CacheKeys.of(ymd(start), ymd(end), markets),
             readLocal = { periods.read(start, end, "", markets) },
             fetchRemote = {
-                perMarket(markets, "가격변동", "${ymd(start)}~${ymd(end)}") { mkt ->
+                perMarket(markets, "가격변동", "${ymd(start)}~${ymd(end)}", { it.symbol }) { mkt ->
                     api.priceChangeByTicker(ymd(start), ymd(end), mkt).map {
                         StockPeriod(it.symbol, market = mkt, name = it.name, changePct = it.changePct, open = it.open.toDouble(),
                             close = it.close.toDouble(), volume = it.volume, tradingValue = it.tradingValue)
@@ -228,8 +228,11 @@ class KrxSnapshots(
         indexes.mergeCoverage(ticker, from, to)
     }
 
-    /** 시장별 조회 골격. (합친 행, 전 시장 성공 여부). 같은 종목이 두 시장에 실리면 마지막 값(§55). */
-    private fun <T : Any> perMarket(markets: List<String>, what: String, `when`: String, fetchOne: (String) -> List<T>): Pair<List<T>, Boolean> {
+    /**
+     * 시장별 조회 골격. (합친 행, 전 시장 성공 여부). 같은 종목이 두 시장에 실리면(시장전환일) 마지막 값만, 그 위치에(pandas
+     * `duplicated(keep="last")`, 원본 §55) — 저장소 쓰기만 정리하면 최초 응답(중복)과 이후 로컬 히트(정리됨)의 모양이 달라진다.
+     */
+    private fun <T : Any> perMarket(markets: List<String>, what: String, `when`: String, symbolOf: (T) -> String, fetchOne: (String) -> List<T>): Pair<List<T>, Boolean> {
         val rows = mutableListOf<T>()
         val errors = mutableListOf<DataSourceError>()
         var ok = 0
@@ -246,7 +249,8 @@ class KrxSnapshots(
             }
         }
         if (errors.isNotEmpty() && ok == 0) throw DataSourceErrors.representative(errors)
-        return rows to (errors.isEmpty() && ok == markets.size)
+        val lastAt = rows.withIndex().associate { (i, r) -> symbolOf(r) to i }
+        return rows.filterIndexed { i, r -> lastAt[symbolOf(r)] == i } to (errors.isEmpty() && ok == markets.size)
     }
 
     /** pykrx 경로 예외 → Unavailable(원본: pykrx 는 임의 예외를 던진다). 이미 분류된 예외는 그대로. 쿨다운 기록. */

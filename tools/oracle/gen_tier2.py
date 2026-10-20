@@ -21,7 +21,7 @@ single_cfgs = {
 }
 single = []
 for s in symbols[:10]:
-    f = frames[s].loc["2021-01-01":]
+    f = frames[s].loc["2021-01-01":].tz_localize("UTC")  # 운영 로더처럼 tz-aware UTC(isoformat 에 +00:00)
     for name, cfg in single_cfgs.items():
         data = f if requires_ohlc(cfg) else f["close"]
         single.append({"symbol": s, "config": name, "result": run_backtest(data, cfg)})

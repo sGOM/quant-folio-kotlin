@@ -117,11 +117,11 @@ class WorkerJobs(
         return linkedMapOf("date" to ymd, "ok" to ok, "failed" to failedNames.size)
     }
 
-    /** 실패하면 warning(24h dedup) 후 예외 전파 — 스케줄러 로그에도 남는다. */
-    private fun <T> withOutageAlert(code: String, label: String, block: () -> T): T = try {
+    /** 실패하면 warning(dedup 기본 24h — 원본 값 그대로) 후 예외 전파 — 스케줄러 로그에도 남는다. */
+    private fun <T> withOutageAlert(code: String, label: String, dedupHours: Double = 24.0, block: () -> T): T = try {
         block()
     } catch (e: Exception) {
-        alerts.publish(null, 0, "warning", "$label: ${e.message}", code, dedupWindowHours = 24.0)
+        alerts.publish(null, 0, "warning", "$label: ${e.message}", code, dedupWindowHours = dedupHours)
         throw e
     }
 
@@ -185,7 +185,7 @@ class WorkerJobs(
     /** 알림 보존정책: 읽음 90일·미확인 180일 초과 삭제(04:00). 실패는 warning 후 전파. */
     fun cleanupOldAlerts(): Map<String, Any?> {
         val now = clock.instant()
-        val deleted = withOutageAlert("alert_cleanup_failed", "alerts 보존정책 정리 실패") {
+        val deleted = withOutageAlert("alert_cleanup_failed", "alerts 보존정책 정리 실패", dedupHours = 20.0) { // 원본 20h — 매일 04:00 재발이 24h 창에 걸리지 않게
             jdbc.update(
                 "delete from alerts where (is_read and created_at < :r) or (not is_read and created_at < :u)",
                 MapSqlParameterSource("r", Timestamp.from(now.minus(Duration.ofDays(90)))).addValue("u", Timestamp.from(now.minus(Duration.ofDays(180)))),

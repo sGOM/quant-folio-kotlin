@@ -2,14 +2,26 @@ package com.quantfolio.web.auth
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.user.User
+import com.fasterxml.jackson.annotation.JsonProperty
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
 
-data class RegisterRequest(
-    @field:NotBlank @field:Email(message = "올바른 이메일 주소가 아닙니다.") val email: String,
+class RegisterRequest(
+    @JsonProperty("email") rawEmail: String,
     @field:Size(min = 8, max = 128, message = "비밀번호는 8~128자여야 합니다.") val password: String,
-)
+) {
+    /**
+     * 원본 `EmailStr`(pydantic + email-validator)처럼 정규화한 값을 저장·중복검사에 쓴다: 앞뒤 공백 제거, 도메인 소문자,
+     * 도메인에 점이 없으면 거부(원본 컨테이너 실측). 로그인은 원본처럼 입력 그대로 조회한다.
+     */
+    @field:NotBlank
+    @field:Email(regexp = ".+@[^@]+\\.[^@]+", message = "올바른 이메일 주소가 아닙니다.")
+    val email: String = rawEmail.trim().let { e ->
+        val at = e.lastIndexOf('@')
+        if (at < 0) e else e.substring(0, at + 1) + e.substring(at + 1).lowercase()
+    }
+}
 
 data class ProfileUpdate(
     @field:Size(max = 50, message = "닉네임은 50자 이하여야 합니다.") val displayName: String? = null,
