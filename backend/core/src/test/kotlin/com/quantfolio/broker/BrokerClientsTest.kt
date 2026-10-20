@@ -1,5 +1,7 @@
 package com.quantfolio.broker
 
+import com.quantfolio.common.RedisKeys
+
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.TestApp
 import com.quantfolio.test.ContainersConfig
@@ -172,5 +174,30 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         val f = toss.getOrderExecution("42")
         assertTrue(f.fullyFilled)
         assertEquals(BigDecimal("70010"), f.avgPrice)
+    }
+
+    /** 원본 truthiness 검사 그대로: 빈 토큰·HASH 없음·빈 orderId 는 실패, 문자열 expires_in 도 숫자로(원본 int()). */
+    @Test
+    fun emptyOrMissingBrokerFieldsFailLikeOriginal() {
+        val http = FakeHttp()
+        val key = "k-" + UUID.randomUUID()
+        http.on({ it.url.endsWith("/oauth2/tokenP") }) { BrokerResponse(200, """{"access_token":"","expires_in":86400}""") }
+        assertThrows<KisError> { KisClient(key, "secret", "50012345-01", support(http)).accessToken() }
+        assertEquals(false, redis.hasKey(RedisKeys.kisToken("vts", key))) // 빈 토큰을 하루 동안 캐시하지 않는다
+
+        val h2 = FakeHttp()
+        val kis = kisWithToken(h2)
+        h2.on({ it.url.endsWith("/uapi/hashkey") }) { BrokerResponse(200, """{"msg1":"오류"}""") }
+        h2.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(200, """{"rt_cd":"0","output":{"ODNO":"1"}}""") }
+        assertThrows<IllegalStateException> { kis.placeOrder("005930", "buy", 1) }
+        assertEquals(0, h2.calls.count { it.url.endsWith("/order-cash") }) // HASH 없으면 주문을 보내지 않는다
+
+        val h3 = FakeHttp()
+        val cid = "cid-" + UUID.randomUUID()
+        val toss = TossClient(cid, "cs", "ACC1", support(h3))
+        h3.on({ it.url.endsWith("/oauth2/token") }) { BrokerResponse(200, """{"access_token":"T","expires_in":"3600"}""") }
+        h3.on({ it.url.endsWith("/api/v1/orders") }) { BrokerResponse(201, """{"orderId":""}""") }
+        assertThrows<TossError> { toss.placeOrder("005930", "buy", 1) }
+        assertTrue(redis.getExpire(RedisKeys.tossToken(cid)) in 1..3600)
     }
 }

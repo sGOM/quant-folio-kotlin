@@ -214,7 +214,8 @@ class KisRealtime(
     fun approvalKey(appKey: String, appSecret: String): String {
         val r = http.send("POST", "${props.kis.baseUrl}/oauth2/Approval", json = json.writeValueAsString(linkedMapOf("grant_type" to "client_credentials", "appkey" to appKey, "secretkey" to appSecret)))
         if (r.status !in 200..299) throw IllegalStateException("approval_key 발급 실패: HTTP ${r.status}")
-        return json.readValue<Map<String, Any?>>(r.body)["approval_key"].toString()
+        // 원본 `resp.json()["approval_key"]` 은 없으면 KeyError — "null" 로 구독하면 실패가 성공처럼 보여 피드 장애 경보가 안 난다
+        return json.readValue<Map<String, Any?>>(r.body)["approval_key"]?.toString() ?: throw IllegalStateException("approval_key 응답에 키 없음")
     }
 
     /** 사용자의 시세 피드를 원하는 종목 집합으로 맞춘다(같으면 무시, 다르면 재구독, 비면 정리). */
@@ -308,7 +309,7 @@ class KisRealtime(
                         continue
                     }
                     val out = ((msg["body"] as? Map<String, Any?>)?.get("output") as? Map<String, Any?>).orEmpty()
-                    if (out["key"] != null && out["iv"] != null) {
+                    if (!out["key"]?.toString().isNullOrEmpty() && !out["iv"]?.toString().isNullOrEmpty()) { // 원본 truthiness — 빈 값으로 기존 키를 덮지 않는다
                         key = out["key"].toString()
                         iv = out["iv"].toString()
                     }

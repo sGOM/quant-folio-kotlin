@@ -44,6 +44,11 @@ class StrategyLike(
 
 interface StrategyRepository : JpaRepository<Strategy, Int> {
     fun findByUserId(userId: Int): List<Strategy>
+
+    /** status 만 바꾼다(원본 dirty tracking 의 UPDATE status, updated_at). 오래 전에 읽은 엔티티를 save 로 병합하면 그사이 수정이 덮인다. */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("update Strategy s set s.status = 'backtested', s.updatedAt = CURRENT_TIMESTAMP where s.id = :id and s.status = 'draft'")
+    fun markBacktested(id: Int): Int
 }
 
 interface StrategyLikeRepository : JpaRepository<StrategyLike, Int>

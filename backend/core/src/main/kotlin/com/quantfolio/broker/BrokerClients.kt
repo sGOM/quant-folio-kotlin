@@ -97,8 +97,8 @@ class KisClient(
         val r = s.http.send("POST", "$baseUrl/oauth2/tokenP", json = s.json.writeValueAsString(linkedMapOf("grant_type" to "client_credentials", "appkey" to appKey, "appsecret" to appSecret)))
         if (r.status != 200) throw KisError("토큰 발급 실패: HTTP ${r.status} ${r.body.take(200)}")
         val data = s.parse(r.body)
-        val token = data["access_token"] as String? ?: throw KisError("토큰 응답에 access_token 없음: $data")
-        token to ((data["expires_in"] as? Number)?.toInt() ?: data["expires_in"]?.toString()?.toInt() ?: 86400)
+        val token = (data["access_token"] as String?)?.takeIf { it.isNotEmpty() } ?: throw KisError("토큰 응답에 access_token 없음: $data") // 원본 `if not token`
+        token to expiresIn(data)
     }
 
     private fun authHeaders(trId: String) = linkedMapOf(
@@ -178,7 +178,8 @@ class KisClient(
             json = s.json.writeValueAsString(body),
         )
         if (r.status != 200) throw KisError("hashkey 발급 실패: HTTP ${r.status}")
-        return s.parse(r.body)["HASH"].toString()
+        // 원본 `resp.json()["HASH"]` 은 없으면 KeyError — 주문을 보내기 전에 멈춘다("null" 을 hashkey 로 실어 보내지 않는다)
+        return s.parse(r.body)["HASH"]?.toString() ?: throw IllegalStateException("hashkey 응답에 HASH 없음")
     }
 
     override fun placeOrder(symbol: String, side: String, qty: Int, price: Int, orderType: String): OrderResult {
@@ -253,8 +254,8 @@ class TossClient(
         val r = s.http.send("POST", "$baseUrl/oauth2/token", form = linkedMapOf("grant_type" to "client_credentials", "client_id" to clientId, "client_secret" to clientSecret))
         if (r.status != 200) throw TossError("토큰 발급 실패: HTTP ${r.status} ${r.body.take(200)}")
         val data = s.parse(r.body)
-        val token = data["access_token"] as String? ?: throw TossError("토큰 응답에 access_token 없음: $data")
-        token to ((data["expires_in"] as? Number)?.toInt() ?: 86400)
+        val token = (data["access_token"] as String?)?.takeIf { it.isNotEmpty() } ?: throw TossError("토큰 응답에 access_token 없음: $data")
+        token to expiresIn(data)
     }
 
     private fun headers(withAccount: Boolean): Map<String, String> {
@@ -306,7 +307,9 @@ class TossClient(
         val body = linkedMapOf<String, Any?>("symbol" to symbol, "side" to tossSide, "orderType" to tossType, "quantity" to qty)
         if (tossType == "LIMIT") body["price"] = price
         val data = request("POST", "/api/v1/orders", withAccount = true, body = body) as Map<String, Any?>
-        val id = data["orderId"] ?: data["order_id"] ?: throw TossError("주문 응답에 orderId 없음: $data")
+        // 원본 `a or b` + `if not order_id` — 빈 문자열도 없음으로 본다(빈 주문번호로는 정합이 체결을 못 찾는다)
+        val id = listOf(data["orderId"], data["order_id"]).firstOrNull { it != null && it.toString().isNotEmpty() }
+            ?: throw TossError("주문 응답에 orderId 없음: $data")
         return OrderResult(id.toString(), raw = data)
     }
 
@@ -330,3 +333,7 @@ class TossClient(
         const val MAX_RETRY_AFTER = 5.0
     }
 }
+
+/** 원본 `int(body.get("expires_in", 86400))` — 숫자 문자열도 받는다. */
+internal fun expiresIn(data: Map<String, Any?>): Int =
+    (data["expires_in"] as? Number)?.toInt() ?: data["expires_in"]?.toString()?.toInt() ?: 86400

@@ -33,6 +33,7 @@ class KisStockMaster(
     private val cooldowns: Cooldowns,
     private val repo: KisStockMasterSnapshotRepository,
     private val clock: Clock,
+    private val tx: org.springframework.transaction.support.TransactionTemplate,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -52,7 +53,10 @@ class KisStockMaster(
     }
 
     /** 두 시장을 tradeDate(기본 KST 오늘)로 적재. 한 시장 실패는 건너뛰고, 둘 다 실패면 대표 예외. 적재 건수 반환. */
-    fun snapshot(tradeDate: LocalDate? = null): Int {
+    // 두 시장을 한 트랜잭션으로(원본: 한 세션·커밋 1회) — 두 번째 시장 저장 실패가 첫 시장 교체만 남겨 그날 스냅샷을 반쯤 지우지 않게.
+    fun snapshot(tradeDate: LocalDate? = null): Int = tx.execute { snapshotInTx(tradeDate) }!!
+
+    private fun snapshotInTx(tradeDate: LocalDate?): Int {
         val day = tradeDate ?: MarketClock.todayKst(clock)
         val errors = mutableListOf<DataSourceError>()
         var saved = 0

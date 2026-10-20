@@ -26,10 +26,13 @@ import kotlin.test.assertNull
 
 @SpringBootTest(classes = [TestApp::class])
 @Import(ContainersConfig::class)
-class KisStockMasterTest(@Autowired private val repo: KisStockMasterSnapshotRepository) {
+class KisStockMasterTest(
+    @Autowired private val repo: KisStockMasterSnapshotRepository,
+    @Autowired private val tx: org.springframework.transaction.support.TransactionTemplate,
+) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp()
-    private val master = KisStockMaster(http, Cooldowns(clock), repo, clock)
+    private val master = KisStockMaster(http, Cooldowns(clock), repo, clock, tx)
     private val cp949 = Charset.forName("MS949")
 
     /** 원본 고정폭 규격으로 한 줄을 만든다. values 에 없는 필드는 공백. */
@@ -95,6 +98,20 @@ class KisStockMasterTest(@Autowired private val repo: KisStockMasterSnapshotRepo
     fun bothMarketsFailRaisesRepresentative() {
         http.on({ true }) { HttpBytes(503, ByteArray(0)) }
         assertThrows<SourceUnavailableError> { master.snapshot(LocalDate.of(2001, 2, 3)) }
+    }
+
+    /** 두 시장 적재는 한 트랜잭션(원본: 한 세션·커밋 1회) — 두 번째 시장 저장이 실패하면 첫 시장 교체도 되돌려 그날 스냅샷이 반쯤 사라지지 않게. */
+    @Test
+    fun secondMarketFailureRollsBackWholeSnapshot() {
+        val day = LocalDate.of(2001, 4, 2)
+        serve("KOSPI", zip(line("KOSPI", "820001", "KR0", "구코스피")))
+        serve("KOSDAQ", zip(line("KOSDAQ", "830001", "KR1", "구코스닥"), entry = "kosdaq_code.mst"))
+        master.snapshot(day)
+        // 같은 종목이 두 시장 파일에 함께 실림 → (symbol, trade_date) 유니크 위반으로 KOSDAQ 저장 실패
+        serve("KOSPI", zip(line("KOSPI", "840001", "KR0", "신코스피")))
+        serve("KOSDAQ", zip(line("KOSDAQ", "840001", "KR1", "중복"), entry = "kosdaq_code.mst"))
+        assertThrows<Exception> { master.snapshot(day) }
+        assertEquals(setOf("820001", "830001"), repo.findAll().filter { it.tradeDate == day }.map { it.symbol }.toSet())
     }
 
     @Test

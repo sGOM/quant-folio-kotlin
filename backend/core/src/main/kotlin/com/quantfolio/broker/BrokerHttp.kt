@@ -27,7 +27,11 @@ class JdkBrokerHttp : BrokerHttp {
         val req = HttpRequest.newBuilder(URI.create(if (qs.isEmpty()) url else "$url?$qs")).timeout(Duration.ofSeconds(10))
         headers.forEach { (k, v) -> req.header(k, v) }
         val body = when {
-            json != null -> HttpRequest.BodyPublishers.ofString(json)
+            json != null -> {
+                // 원본 httpx `post(json=...)` 처럼 기본 Content-Type — JDK 클라이언트는 붙이지 않는다(KIS 토큰·승인키 요청이 헤더 없이 나갔다)
+                if (headers.keys.none { it.equals("content-type", ignoreCase = true) }) req.header("Content-Type", "application/json")
+                HttpRequest.BodyPublishers.ofString(json)
+            }
             form != null -> {
                 req.header("Content-Type", "application/x-www-form-urlencoded")
                 HttpRequest.BodyPublishers.ofString(form.entries.joinToString("&") { (k, v) -> enc(k) + "=" + enc(v) })

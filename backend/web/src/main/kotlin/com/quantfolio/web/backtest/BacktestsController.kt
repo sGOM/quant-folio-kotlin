@@ -77,10 +77,7 @@ class BacktestsController(
                     num(result["total_return"]), num(result["mdd"]), num(result["sharpe"]), result,
                 ),
             )
-            if (strategy.status == "draft") {
-                strategy.status = "backtested"
-                strategies.save(strategy)
-            }
+            strategies.markBacktested(strategy.id!!) // 실행 전에 읽은 엔티티를 save 하면 백테스트 도중의 이름·설정 수정을 덮는다
             saved
         }!!
         return backtests.findById(bt.id!!).get().toOut()
