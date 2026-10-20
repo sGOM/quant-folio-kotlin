@@ -218,6 +218,8 @@ class KisRealtime(
     }
 
     /** 사용자의 시세 피드를 원하는 종목 집합으로 맞춘다(같으면 무시, 다르면 재구독, 비면 정리). */
+    // 제어 처리 스레드와 체결통보 재동기화 루프가 동시에 부른다 — 확인 후 생성(check-then-act)이 겹치면 추적 안 되는 WS 리스너가 남는다.
+    @Synchronized
     fun ensurePrices(userId: Int, appKey: String, appSecret: String, symbols: Set<String>) {
         if (priceFeeds[userId]?.symbols == symbols) return
         removePrices(userId)
@@ -230,6 +232,7 @@ class KisRealtime(
         log.info("PriceFeed 시작 user={} symbols={}", userId, symbols.sorted())
     }
 
+    @Synchronized
     fun removePrices(userId: Int) {
         failCounts.remove(userId)
         priceFeeds.remove(userId)?.let { it.stop.countDown(); it.thread.interrupt() }
@@ -265,6 +268,7 @@ class KisRealtime(
     fun noticeUsers(): Set<Int> = noticeFeeds.keys.toSet()
 
     /** 체결통보 구독(계좌 전체 1구독). KIS_HTS_ID 미설정이면 no-op. */
+    @Synchronized
     fun ensureNotices(userId: Int, appKey: String, appSecret: String) {
         val hts = props.kis.htsId
         if (hts.isNullOrEmpty()) {
@@ -280,6 +284,7 @@ class KisRealtime(
         log.info("체결통보 리스너 시작 user={}", userId)
     }
 
+    @Synchronized
     fun removeNotices(userId: Int) {
         noticeFeeds.remove(userId)?.let { it.stop.countDown(); it.thread.interrupt() }
     }
@@ -357,6 +362,7 @@ class KisRealtime(
         }
     }
 
+    @Synchronized
     fun shutdown() {
         priceFeeds.keys.toList().forEach { removePrices(it) }
         noticeFeeds.keys.toList().forEach { removeNotices(it) }

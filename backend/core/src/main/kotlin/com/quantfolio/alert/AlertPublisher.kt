@@ -10,6 +10,9 @@ import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.support.TransactionTemplate
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
@@ -35,14 +38,22 @@ class AlertPublisher(
     private val http: ExternalHttp,
     private val props: QuantfolioProperties,
     private val clock: Clock,
+    txManager: PlatformTransactionManager,
 ) {
     private val log = LoggerFactory.getLogger("engine.alerts")
+
+    /**
+     * 알림 적재는 호출자 트랜잭션과 분리(원본도 별도 세션). 체결 트랜잭션 안에서 부르면 적재 실패가 체결 기록을 통째로 롤백시키고,
+     * 반대로 호출자가 롤백하면 접수불명 같은 critical 알림이 사라진다.
+     */
+    private val ownTx = TransactionTemplate(txManager).apply { propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW }
 
     fun publish(userId: Int?, strategyId: Int, severity: String, message: String, code: String? = null, dedupWindowHours: Double? = null) {
         log.warn("엔진 알림[{}] 전략 {}{}: {}", severity, strategyId, code?.let { "($it)" } ?: "", message)
         val now = clock.instant()
         var dup = false
         try {
+            ownTx.executeWithoutResult {
             if (dedupWindowHours != null && code != null) {
                 val cutoff = now.minusMillis((dedupWindowHours * 3_600_000).toLong())
                 dup = jdbc.queryForObject(
@@ -57,6 +68,7 @@ class AlertPublisher(
                     MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sev", severity).addValue("c", code)
                         .addValue("m", message).addValue("t", Timestamp.from(now)),
                 )
+            }
             }
         } catch (e: Exception) {
             log.warn("알림 DB 영속화 실패: {}", e.message)

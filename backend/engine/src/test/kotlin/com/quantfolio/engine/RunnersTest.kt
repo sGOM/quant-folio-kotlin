@@ -286,4 +286,34 @@ class RunnersTest(
         assertEquals(fixed.toSet(), ordersOf(sid2).map { it.symbol }.toSet())
         assertEquals(1, alerts.findAll().count { it.code == "pit_fallback" && it.strategyId == sid2 })
     }
+
+    /** 타임아웃으로 끊긴 틱은 주문하지 않는다. 틱 안의 catch(Exception) 가 인터럽트를 삼켜도(시세 조회 실패 처리 등) 마찬가지. */
+    @Test
+    fun timedOutTickNeverPlacesOrder() {
+        val code = sym()
+        val (_, sid) = strategy(mapOf("type" to "rsi", "symbol" to code))
+        val r = object : BaseRunner(sid, ctx) {
+            override val log = org.slf4j.LoggerFactory.getLogger("test.slow")!!
+            override val label = "테스트"
+            override val tickWord = "tick"
+            override val pollIntervalSec = 1L
+            override val tickTimeoutSec = 1L
+            override fun logStart() = Unit
+            override fun tickOnce() {
+                try {
+                    Thread.sleep(3_000) // 외부 I/O 무응답
+                } catch (e: Exception) {
+                    // 원래 코드의 조회 실패 처리처럼 인터럽트를 삼키고 계속
+                }
+                place(code, "buy", 1, BigDecimal("1000"), "slow", "늦은 틱")
+            }
+        }
+        val stop = java.util.concurrent.CountDownLatch(1)
+        val t = Thread.ofVirtual().start { r.run(stop) }
+        Thread.sleep(1_800) // 1초 타임아웃 지나고 다음 틱 전
+        stop.countDown()
+        t.join(java.time.Duration.ofSeconds(10))
+        Thread.sleep(500)
+        assertTrue(ordersOf(sid).isEmpty(), ordersOf(sid).map { it.reason }.toString())
+    }
 }

@@ -36,6 +36,8 @@ paths:
 | reconcile·체결통보는 **같은 주문 락 키**(`reconcileLock`), executor 는 멱등 락(`lock:order:{key}`) | `Reconciler`·`FillNoticeApplier` | 같은 체결 이중 기록 |
 | 0 이하 현재가는 "시세 없음" — 손절·익절 판정에 쓰지 않는다 | 러너·`RiskManager` | −100% 로 오독해 전량 청산 |
 | 주문 순서: 실전 게이트(prod) → 정지/CB 게이트 → 실행기 | `BaseRunner.place` | 승인 없는 실전 주문 / CB 중 시장가 |
+| 타임아웃·종료로 버려진 틱은 주문하지 않는다(표식 검사 — 인터럽트는 `catch (e: Exception)` 가 삼킨다) | `BaseRunner.tickAborted` | 겹친 틱 이중 배분 / 정지 후 주문 |
+| start·stop·피드 동기화는 직렬(`@Synchronized`) — 제어 메시지는 각자 다른 스레드로 온다 | `EngineRuntime`·`KisRealtime` | 정지한 전략이 계속 매매 / 추적 안 되는 WS 리스너 |
 
 - 테스트는 가짜 증권사만. 엔진 테스트는 `quantfolio.engine.autostart=false`(test `config/application.yml`) — 켜면 다른 테스트의 live 전략을 복구해 주문을 낸다.
 

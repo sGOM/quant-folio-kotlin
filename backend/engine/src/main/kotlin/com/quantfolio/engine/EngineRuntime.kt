@@ -67,6 +67,7 @@ class EngineRuntime(
         loops += loop("engine-fill-notice", 60) { syncNoticesGuarded() }
     }
 
+    @Synchronized
     override fun stop() {
         log.info("정리 중 — 전략 {}개 종료", runners.size)
         shutdown.countDown()
@@ -133,6 +134,11 @@ class EngineRuntime(
         }
     }
 
+    /**
+     * start/stop 은 직렬로 — 컨테이너가 제어 메시지를 각자 다른 스레드로 넘겨, 실전 게이트 평가 중 들어온 stop 이 빈 러너를 보고
+     * 지나가면 멈춘 전략이 계속 매매한다(원본은 단일 루프로 순서 처리).
+     */
+    @Synchronized
     fun startStrategy(sid: Int) {
         if (runners.containsKey(sid)) return
         if (!liveGateAllowsStart(sid)) return
@@ -145,6 +151,7 @@ class EngineRuntime(
         syncNoticesGuarded()
     }
 
+    @Synchronized
     fun stopStrategy(sid: Int) {
         runners.remove(sid)?.let { (stop, t) ->
             stop.countDown()
@@ -195,6 +202,7 @@ class EngineRuntime(
         (desired.keys - current).forEach { uid -> desired.getValue(uid).first.let { (k, s) -> realtime.ensureNotices(uid, k, s) } }
     }
 
+    @Synchronized
     private fun syncNoticesGuarded() {
         try {
             syncNotices()

@@ -290,7 +290,7 @@ class KrxIndexService(
         emptyMap()
     }
 
-    /** 원본 `date.today()` — 컨테이너 UTC 날짜(보존, docs/migration-notes.md). */
+    /** 원본 `date.today()` — 컨테이너 UTC 날짜(보존, docs/migration-notes.md #8). */
     private fun todayUtc(): LocalDate = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)
 
     companion object {

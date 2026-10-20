@@ -64,4 +64,13 @@ object RedisKeys {
 
     /** 단일종목 러너 트레일링 스탑 고점 `trail:{strategy}:{symbol}`(TTL 7일). */
     fun trail(strategyId: Int, symbol: String): String = "trail:$strategyId:$symbol"
+
+    /** 토큰 발급 single-flight 락 = 토큰 캐시 키 + ":lock". */
+    fun tokenLock(tokenKey: String): String = "$tokenKey:lock"
+
+    /** web 조회 캐시(원본 라우트와 같은 키). 스크리너 키의 실수는 Python str(float) 표기. */
+    fun metricsCache(kind: String, market: String, asOf: java.time.LocalDate): String = "metrics:$kind:$market:$asOf"
+    fun recommendCache(asOf: java.time.LocalDate): String = "recommend:kospi200:$asOf"
+    fun screenerTurnaroundCache(market: String, asOf: java.time.LocalDate, topN: Int, smallcapPct: Double, surge: Double, maxDebt: Double): String =
+        "screener:turnaround:$market:$asOf:$topN:${com.quantfolio.quant.pyFloat(smallcapPct)}:${com.quantfolio.quant.pyFloat(surge)}:${com.quantfolio.quant.pyFloat(maxDebt)}"
 }

@@ -14,6 +14,7 @@ paths:
 
 - 사람이 알아야 하는 실패는 `AlertPublisher.publish` — DB(알림함) + 사용자 채널(WS) + critical 은 텔레그램.
   세 경로는 서로를 막지 않는다(한쪽 실패는 로그만).
+- DB 적재는 **자체 트랜잭션(REQUIRES_NEW)** — 호출자(체결 기록 등) 롤백에 알림이 휩쓸리지도, 알림 실패가 체결을 롤백시키지도 않는다.
 - 상태형 경보(매 주기 재발하는 것)는 **dedup 창**을 준다. 값은 원본 그대로(20h·24h·6h) — 바꾸면 알림 피로/누락이 생긴다.
 - 전역 알림은 `user_id = null`, `strategy_id = 0`. `alerts.user_id` 는 users FK 라 임의 id 로는 적재가 실패한다.
 - 이벤트 페이로드는 원본 `json.dumps` 문자열 그대로(`pyJsonDumps`, ensure_ascii) — 엔진·프론트가 같은 채널을 공유.

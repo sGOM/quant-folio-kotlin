@@ -34,6 +34,7 @@ class AlertPublisherTest(
     @Autowired private val jdbc: NamedParameterJdbcTemplate,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val cf: RedisConnectionFactory,
+    @Autowired private val txManager: org.springframework.transaction.PlatformTransactionManager,
 ) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:02:03.456789Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp().apply { onText({ "api.telegram.org" in it.url }, body = "{}") }
@@ -44,7 +45,7 @@ class AlertPublisherTest(
     private fun publisher(telegram: Boolean) = AlertPublisher(
         jdbc, redis, http,
         QuantfolioProperties(telegram = if (telegram) QuantfolioProperties.Telegram("TOKEN", "CHAT") else QuantfolioProperties.Telegram()),
-        clock,
+        clock, txManager,
     )
 
     private fun listen(channel: String): Pair<RedisMessageListenerContainer, LinkedBlockingQueue<String>> {
@@ -94,5 +95,16 @@ class AlertPublisherTest(
         assertEquals(2, alerts.findAll().count { it.code == code })
         assertEquals(1, http.calls.count { "api.telegram.org" in it.url }) // warning 은 텔레그램 없음
         assertTrue(alerts.findAll().filter { it.code == code }.all { it.userId == null })
+    }
+
+    /** 호출자 트랜잭션이 롤백돼도 알림은 남는다(원본은 별도 세션) — 접수불명 critical 이 체결 롤백과 함께 사라지면 안 된다. */
+    @Test
+    fun alertSurvivesCallerRollback() {
+        val code = "rollback_" + java.util.UUID.randomUUID()
+        org.springframework.transaction.support.TransactionTemplate(txManager).executeWithoutResult {
+            publisher(false).publish(null, 0, "critical", "롤백 시험", code)
+            it.setRollbackOnly()
+        }
+        kotlin.test.assertEquals(1, alerts.findAll().count { a -> a.code == code })
     }
 }

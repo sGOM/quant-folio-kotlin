@@ -140,8 +140,10 @@ class ReconcilerTest(
         assertEquals(0, recorded(o))
         redis.delete(RedisKeys.reconcileLock(o.id!!))
 
+        order(uid, sid, "000660", 1, "submitted", "ODNO-E")
+        order(uid, sid, "035420", 1, "submitted", "ODNO-F")
         given(brokers.forUser(anyUser())).willThrow(BrokerError("자격증명 없음"))
         val stats = reconciler.reconcileOpenOrders(uid)
-        assertTrue(stats.getValue("errors") >= 1)
+        assertEquals(1, stats.getValue("errors")) // 주문 3건이어도 실패한 사용자 1명 = 1건(원본과 같은 의미)
     }
 }

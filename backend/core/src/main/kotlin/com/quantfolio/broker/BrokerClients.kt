@@ -26,7 +26,7 @@ class BrokerSupport(
     /** Redis 토큰 캐시 + 분산 락(single-flight) — 여러 전략이 동시에 기동해도 발급은 한 번(KIS 분당 1회 제한). */
     fun cachedToken(cacheKey: String, label: String, issue: () -> Pair<String, Int>): String {
         redis.opsForValue().get(cacheKey)?.let { return it }
-        val lockKey = "$cacheKey:lock"
+        val lockKey = RedisKeys.tokenLock(cacheKey)
         val gotLock = redis.opsForValue().setIfAbsent(lockKey, "1", Duration.ofSeconds(TOKEN_LOCK_TTL)) == true
         if (!gotLock) {
             repeat(TOKEN_LOCK_WAIT) {

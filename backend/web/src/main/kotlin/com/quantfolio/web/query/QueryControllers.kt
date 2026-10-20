@@ -1,5 +1,6 @@
 package com.quantfolio.web.query
 
+import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.user.User
 import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.symbols.SymbolCatalog
@@ -72,7 +73,7 @@ class MetricsController(
 
     private fun <T : Any> cached(kind: String, market: String, label: String, type: Class<T>, isEmpty: (T) -> Boolean, compute: () -> T): T {
         val asOf = common.lastBusinessDay()
-        val key = "metrics:$kind:$market:$asOf"
+        val key = RedisKeys.metricsCache(kind, market, asOf)
         cache.get(key, type)?.let { return it }
         val data = try {
             compute()
@@ -140,7 +141,7 @@ class RecommendController(private val common: MetricsCommon, private val cache: 
     @GetMapping("/api/recommend/kospi200")
     fun kospi200(@CurrentUser user: User): RecommendOut {
         val asOf = common.lastBusinessDay()
-        val key = "recommend:kospi200:$asOf"
+        val key = RedisKeys.recommendCache(asOf)
         cache.get(key, RecommendOut::class.java)?.let { return it }
         val data = recommend.kospi200Scored(asOf)
         if (data.items.isNotEmpty()) cache.put(key, data, JsonCache.EOD_TTL)
@@ -163,8 +164,7 @@ class ScreenerController(private val common: MetricsCommon, private val cache: J
         @RequestParam(name = "max_debt", defaultValue = "1.5") @DecimalMin(value = "0", inclusive = false) @DecimalMax("10") maxDebt: Double,
     ): TurnaroundScreenOut {
         val asOf = common.lastBusinessDay()
-        // 키의 실수 표기는 Python str(float) 그대로(원본 캐시와 키가 같아야 한다).
-        val key = "screener:turnaround:$market:$asOf:$topN:${pyFloat(smallcapPct)}:${pyFloat(surge)}:${pyFloat(maxDebt)}"
+        val key = RedisKeys.screenerTurnaroundCache(market, asOf, topN, smallcapPct, surge, maxDebt)
         cache.get(key, TurnaroundScreenOut::class.java)?.let { return it }
         val result = screener.screenTurnaround(asOf, market, topN, smallcapPct, surge = surge, maxDebt = maxDebt)
         if (result.items.isNotEmpty() && result.financialFilterApplied) cache.put(key, result, JsonCache.EOD_TTL)

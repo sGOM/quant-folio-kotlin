@@ -9,6 +9,9 @@
 | 3 | `KrxMdc.pykrx` | pykrx `KrxWebIo.read` | 730일 초과 조회에서 두 번째 조각부터 항상 `result["output"]` 에 이어붙여, `OutBlock_1` 응답(MDCSTAT01602 기간등락률)은 KeyError 로 실패 | 2년 초과 기간등락률 조회 불가(Unavailable) |
 | 4 | `KrxStockApi` int32 컬럼 | pykrx `astype(np.int32)` | 시가·종가·거래량 등 int32 컬럼이 2^31 을 넘으면 numpy OverflowError 로 그 시장 조회 전체가 실패 | 거래량 21억 주 초과 종목이 있는 날 해당 시장 데이터 누락(Unavailable) |
 | 5 | `TrackingController` | `routes/tracking.py` + `tracking.reconstruct_realized_curve` | 가격 패널 인덱스(tz-aware UTC)와 체결일(tz-naive KST 날짜)을 한 집합에 섞어 정렬 → 체결 종목에 시세가 하나라도 있으면 `TypeError` 로 500(원본 컨테이너에서 재현 확인). **크래시는 보존 대상이 아니라고 판정** — 의도대로 날짜끼리 비교해 정상 응답 | 원본에선 사실상 항상 실패하던 화면이 동작. 원본 결과와 비교할 기준값이 없다 |
+| 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 |
+| 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) |
+| 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 |
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 

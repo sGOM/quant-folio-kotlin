@@ -57,15 +57,23 @@ class Reconciler(
         val brokerCache = HashMap<Int, BrokerClient?>()
         val balanceCache = HashMap<Int, Map<String, Pair<Int, BigDecimal?>>>()
 
-        fun broker(uid: Int): BrokerClient? = brokerCache.getOrPut(uid) {
-            val user = users.findById(uid).orElse(null) ?: return@getOrPut null
-            try {
-                brokers.forUser(user)
-            } catch (e: BrokerError) {
-                log.warn("브로커 생성 실패 user={}: {}", uid, e.message)
-                stats["errors"] = stats.getValue("errors") + 1 // 자격증명 만료가 조용히 넘어가지 않게
+        // getOrPut 은 저장된 null 을 "없음"으로 보고 다시 만든다 — 실패한 사용자는 주문마다가 아니라 사용자당 한 번만 센다(원본 `if uid not in brokers`).
+        fun broker(uid: Int): BrokerClient? {
+            if (uid in brokerCache) return brokerCache[uid]
+            val user = users.findById(uid).orElse(null)
+            val b = if (user == null) {
                 null
+            } else {
+                try {
+                    brokers.forUser(user)
+                } catch (e: BrokerError) {
+                    log.warn("브로커 생성 실패 user={}: {}", uid, e.message)
+                    stats["errors"] = stats.getValue("errors") + 1 // 자격증명 만료가 조용히 넘어가지 않게
+                    null
+                }
             }
+            brokerCache[uid] = b
+            return b
         }
 
         fun balance(uid: Int, b: BrokerClient) = balanceCache.getOrPut(uid) {

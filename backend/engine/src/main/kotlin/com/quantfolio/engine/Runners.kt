@@ -36,6 +36,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeoutException
 
 internal fun grouped(n: Number): String = DecimalFormat("#,##0").format(n)
@@ -149,11 +150,16 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         logStart()
         Executors.newVirtualThreadPerTaskExecutor().use { pool ->
             while (stop.count > 0) {
-                val f = pool.submit { tickOnce() }
+                val abort = AtomicBoolean(false)
+                val f = pool.submit {
+                    tickAbort.set(abort)
+                    tickOnce()
+                }
                 try {
                     f.get(tickTimeoutSec, TimeUnit.SECONDS)
                     recordSuccess()
                 } catch (e: TimeoutException) {
+                    abort.set(true) // 인터럽트는 틱 안의 catch 가 삼킬 수 있다 — 주문 직전 이 표식으로 막는다
                     f.cancel(true)
                     log.warn("{} {} {} 타임아웃({}초) — 외부 조회 지연으로 판단, 이번 틱 중단하고 다음 주기 재시도", label, strategyId, tickWord, tickTimeoutSec)
                     recordFailure("$tickWord 타임아웃(${tickTimeoutSec}초)")
@@ -161,6 +167,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
                     log.error("{} {} {} 오류", label, strategyId, tickWord, e.cause)
                     recordFailure("$tickWord 오류: ${e.cause?.message}")
                 } catch (e: InterruptedException) {
+                    abort.set(true) // 엔진 종료로 중단 — 진행 중 틱은 더 주문하지 않는다
                     break
                 }
                 if (stop.await(pollIntervalSec, TimeUnit.SECONDS)) break
@@ -210,6 +217,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
 
     /** 주문: 실전 게이트(prod 만) → 정지/CB 게이트 → 실행기(멱등 키 = 전략·종목·방향·신호봉). */
     protected fun place(symbol: String, side: String, qty: Int, price: BigDecimal, barTs: String, reason: String?) {
+        if (tickAborted(symbol, side, qty)) return
         if (!ctx.props.kis.isPaperTrading) {
             val gate = ctx.liveGate.evaluate(userId!!, strategyId, BigDecimal(qty) * price)
             if (!gate.passed) {
@@ -219,6 +227,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
             }
         }
         if (!haltGatePassed(symbol, side, qty)) return
+        if (tickAborted(symbol, side, qty)) return
         ctx.executor.execute(broker, userId!!, strategyId, symbol, side, qty, price, OrderExecutor.idempotencyKey(strategyId, symbol, side, barTs), reason)
     }
 
@@ -251,6 +260,18 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         )
         return false
     }
+
+    /**
+     * 타임아웃·종료로 버려진 틱인가. 원본 asyncio 는 취소(CancelledError)가 코루틴을 끝냈지만, 가상 스레드의 인터럽트는
+     * 틱 안의 `catch (e: Exception)` 가 삼켜 주문까지 진행할 수 있다 — 버려진 틱의 주문은 이중 배분·정지 후 주문이 된다.
+     */
+    private fun tickAborted(symbol: String, side: String, qty: Int): Boolean {
+        if (tickAbort.get()?.get() != true) return false
+        log.warn("{} {} 틱 중단됨 — 주문 취소 {} {} {}주", label, strategyId, symbol, side, qty)
+        return true
+    }
+
+    private val tickAbort = ThreadLocal<AtomicBoolean>()
 
     private companion object {
         const val POSITION_LOCK_TTL = 30L

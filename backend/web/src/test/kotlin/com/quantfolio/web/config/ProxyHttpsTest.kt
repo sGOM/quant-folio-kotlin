@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(ContainersConfig::class)
-class ProxyHttpsTest {
+class ProxyHttpsTest(@org.springframework.beans.factory.annotation.Autowired private val redis: org.springframework.data.redis.core.StringRedisTemplate) {
     @LocalServerPort var port: Int = 0
 
     @Test
@@ -27,9 +27,12 @@ class ProxyHttpsTest {
             .header("Origin", "https://10.8.0.1")
             .header("X-Forwarded-Proto", "https")
             .header("X-Forwarded-Host", "10.8.0.1")
+            .header("X-Forwarded-For", "10.8.0.77") // Caddy 가 덮어쓴 실제 접속 IP(WireGuard 사설망)
             .POST(HttpRequest.BodyPublishers.ofString("username=nobody%40t.dev&password=wrong-password"))
             .build()
         val res = HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.ofString())
         assertEquals(401, res.statusCode(), res.body())
+        // Tomcat RemoteIpValve 가 XFF 를 소비해도 로그인 스로틀은 같은 접속 IP 로 센다
+        assertEquals(true, redis.hasKey(com.quantfolio.common.RedisKeys.loginFailByIp("10.8.0.77")))
     }
 }
