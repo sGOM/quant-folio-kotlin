@@ -11,15 +11,15 @@
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "node .claude/hooks/block-secret-edit.mjs" }]
+        "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-secret-edit.mjs"] }]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "node .claude/hooks/backend-restart-reminder.mjs" },
-          { "type": "command", "command": "node .claude/hooks/md-lint.mjs --hook" }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/backend-restart-reminder.mjs"] },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/md-lint.mjs", "--hook"] }
         ]
       }
     ]
