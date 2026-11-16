@@ -4,7 +4,11 @@ build/
 *.iml
 .superpowers/
 .env
-secrets/*.txt
+# secrets/ 는 README 외 전부 무시(account_num 처럼 .txt 가 아닌 파일 포함)
+secrets/*
+!secrets/README.md
+# 로컬 격리 스택(KIS 모의 실측 등) compose override
+docker-compose.*.local.yml
 node_modules/
 .kotlin/
 tools/oracle/tier2/
