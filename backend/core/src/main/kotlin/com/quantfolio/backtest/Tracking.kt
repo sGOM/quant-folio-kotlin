@@ -1,7 +1,7 @@
 package com.quantfolio.backtest
 
 import com.quantfolio.quant.Panel
-import com.quantfolio.quant.Series
+import com.quantfolio.quant.Stats
 import com.quantfolio.quant.pyFixed
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -38,9 +38,7 @@ object Tracking {
         val days = (priceDates + execs.map { it.date }).toSortedSet().filter { !it.isBefore(first) && !it.isAfter(end) }.ifEmpty { listOf(first) }
         // panel.reindex(days).ffill().bfill()
         val px: Map<String, DoubleArray> = if (!hasPanel) emptyMap() else closePanel.symbols.associateWith { s ->
-            val col = closePanel.column(s)
-            val byDate = col.index.withIndex().associate { (i, d) -> d to col.values[i] }
-            val filled = Series(days, DoubleArray(days.size) { byDate[days[it]] ?: Double.NaN }).ffill().values
+            val filled = closePanel.column(s).reindex(days).ffill().values
             val firstValid = filled.indexOfFirst { !it.isNaN() }
             if (firstValid > 0) for (i in 0 until firstValid) filled[i] = filled[firstValid]
             filled
@@ -120,23 +118,13 @@ object Tracking {
         val bRet = (1 until bc.size).map { bc[it] / bc[it - 1] - 1.0 }
         val pairs = rRet.indices.filter { !rRet[it].isNaN() && !bRet[it].isNaN() }
         val diff = pairs.map { rRet[it] - bRet[it] }
-        if (diff.size >= 2) metrics["tracking_error"] = std(diff, 1) * sqrt(252.0)
+        if (diff.size >= 2) metrics["tracking_error"] = Stats.std(diff, 1) * sqrt(252.0)
         if (pairs.size >= 2) {
             val a = pairs.map { rRet[it] }
             val c = pairs.map { bRet[it] }
-            if (std(a, 0) > 0 && std(c, 0) > 0) {
-                val ma = a.average()
-                val mc = c.average()
-                val cov = a.indices.sumOf { (a[it] - ma) * (c[it] - mc) }
-                metrics["correlation"] = cov / sqrt(a.sumOf { (it - ma) * (it - ma) } * c.sumOf { (it - mc) * (it - mc) })
-            }
+            if (Stats.std(a, 0) > 0 && Stats.std(c, 0) > 0) metrics["correlation"] = Stats.pearson(a.toDoubleArray(), c.toDoubleArray())
         }
         return out
-    }
-
-    internal fun std(x: List<Double>, ddof: Int): Double {
-        val m = x.average()
-        return sqrt(x.sumOf { (it - m) * (it - m) } / (x.size - ddof))
     }
 }
 
@@ -154,20 +142,15 @@ object FillQuality {
 
     private fun stats(v: List<Double>): Map<String, Any?> {
         if (v.isEmpty()) return linkedMapOf("n" to 0, "mean" to null, "std" to null, "median" to null, "p90" to null, "p95" to null)
+        val sorted = v.sorted()
         return linkedMapOf(
-            "n" to v.size, "mean" to v.average(), "std" to if (v.size >= 2) Tracking.std(v, 1) else 0.0,
-            "median" to percentile(v, 50.0), "p90" to percentile(v, 90.0), "p95" to percentile(v, 95.0),
+            "n" to v.size, "mean" to v.average(), "std" to if (v.size >= 2) Stats.std(v, 1) else 0.0,
+            "median" to percentile(sorted, 50.0), "p90" to percentile(sorted, 90.0), "p95" to percentile(sorted, 95.0),
         )
     }
 
-    /** numpy percentile(linear). */
-    private fun percentile(v: List<Double>, q: Double): Double {
-        val s = v.sorted()
-        val pos = q / 100.0 * (s.size - 1)
-        val lo = pos.toInt()
-        val hi = minOf(lo + 1, s.size - 1)
-        return s[lo] + (s[hi] - s[lo]) * (pos - lo)
-    }
+    /** numpy percentile(linear). 정렬된 값을 받는다. */
+    private fun percentile(sorted: List<Double>, q: Double): Double = Stats.quantileSorted(sorted, q / 100.0)
 
     fun gradeM1(mean: Double?, std: Double?, n: Int, assumption: Double, minSample: Int): String {
         if (n < minSample || mean == null) return "INSUFFICIENT"

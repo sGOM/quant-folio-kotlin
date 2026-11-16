@@ -4,10 +4,10 @@ import com.quantfolio.backtest.BacktestRunner
 import com.quantfolio.backtest.DeflatedSharpe
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
-import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.web.api.ApiException
+import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotNull
@@ -48,9 +48,6 @@ class BacktestsController(
     private val runner: BacktestRunner,
     private val tx: org.springframework.transaction.support.TransactionTemplate,
 ) {
-    private fun ownedStrategy(user: User, id: Int): Strategy =
-        strategies.findById(id).filter { it.userId == user.id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
-
     private fun ownedBacktest(user: User, id: Int): Backtest {
         val bt = backtests.findById(id).orElse(null)
         if (bt == null || strategies.findById(bt.strategyId).map { it.userId != user.id }.orElse(true)) {
@@ -65,7 +62,7 @@ class BacktestsController(
     @PostMapping("/strategies/{id}/backtest")
     @ResponseStatus(HttpStatus.CREATED)
     fun run(@CurrentUser user: User, @PathVariable id: Int, @Valid @RequestBody req: BacktestRequest): BacktestOut {
-        val strategy = ownedStrategy(user, id)
+        val strategy = strategies.owned(user, id)
         val start = req.periodStart!!
         val end = req.periodEnd!!
         val result = runner.run(strategy.config, start, end)
@@ -85,7 +82,7 @@ class BacktestsController(
 
     @GetMapping("/strategies/{id}/backtests")
     fun list(@CurrentUser user: User, @PathVariable id: Int): List<BacktestOut> {
-        ownedStrategy(user, id)
+        strategies.owned(user, id)
         return backtests.findByStrategyIdOrderByIdDesc(id).map { it.toOut() }
     }
 

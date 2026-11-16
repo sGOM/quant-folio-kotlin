@@ -1,8 +1,5 @@
 package com.quantfolio.market.source
 
-import org.springframework.web.client.HttpClientErrorException
-import org.springframework.web.client.HttpServerErrorException
-import org.springframework.web.client.ResourceAccessException
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDateTime
@@ -78,18 +75,6 @@ object DataSourceErrors {
         SourceSchemaError::class,
         SourceUnavailableError::class,
     )
-
-    /** HTTP 클라이언트 예외 → 원인. 불확실하면 Unavailable(재시도 가능) 쪽으로 보수적으로 떨어뜨린다. */
-    fun classifyHttp(source: String, e: Exception): DataSourceError = when (e) {
-        is HttpClientErrorException -> when (val code = e.statusCode.value()) {
-            429 -> SourceQuotaError(source, "HTTP 429 요청 한도 초과")
-            401, 403 -> SourceAuthError(source, "HTTP $code 인증·권한 거부")
-            else -> SourceRequestError(source, "HTTP $code 잘못된 요청")
-        }
-        is HttpServerErrorException -> SourceUnavailableError(source, "HTTP ${e.statusCode.value()} 서버 오류")
-        is ResourceAccessException -> SourceUnavailableError(source, "연결 실패: ${e.message}")
-        else -> SourceUnavailableError(source, "알 수 없는 오류: ${e.message}")
-    }
 
     /** 집계가 전량 실패했을 때 올릴 대표 예외. 메시지에 원인별 건수를 담아 로그 한 줄로 드러낸다. */
     fun representative(errors: List<DataSourceError>): DataSourceError {

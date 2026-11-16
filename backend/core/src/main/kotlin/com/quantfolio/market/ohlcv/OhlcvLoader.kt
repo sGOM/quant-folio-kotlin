@@ -1,5 +1,6 @@
 package com.quantfolio.market.ohlcv
 
+import com.quantfolio.common.MarketClock
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import org.slf4j.LoggerFactory
@@ -25,7 +26,7 @@ class OhlcvLoader(private val naver: NaverDaily, private val ticks: PriceTickSto
         val fdr = runCatching { naver.fdr(symbol, start, end) }
             .onFailure { log.warn("FinanceDataReader 실패({}): {}", symbol, it.message) }.getOrNull()
         val bars = if (fdr.isNullOrEmpty()) {
-            runCatching { naver.pykrx(symbol, start, end, LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)) }
+            runCatching { naver.pykrx(symbol, start, end, MarketClock.todayUtcLegacy(clock)) }
                 .onFailure { log.warn("pykrx 실패({}): {}", symbol, it.message) }.getOrNull()
         } else {
             fdr

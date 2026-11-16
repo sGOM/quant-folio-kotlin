@@ -1,18 +1,18 @@
 package com.quantfolio.market.dart
 
+import com.quantfolio.common.MarketClock
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
 import com.quantfolio.market.store.CacheKeys
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.FetchLedger
+import com.quantfolio.quant.Stats
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.LocalDate
-import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.sqrt
 
 /**
  * OpenDART 재무의 로컬 우선 조회와 종목별 팩터 입력(원본 `opendart.py` 의 캐시·집계부).
@@ -61,7 +61,7 @@ class DartFinancials(
         }
         if (!client.enabled()) return null
         // 원본 date.today() — 컨테이너 UTC(보존)
-        val final = !LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC).isBefore(DartFinancialStore.confirmedDate(null, year))
+        val final = !MarketClock.todayUtcLegacy(clock).isBefore(DartFinancialStore.confirmedDate(null, year))
         ledger.put(LEDGER_SOURCE, cacheKey, 0, final)
         return null
     }
@@ -96,34 +96,50 @@ class DartFinancials(
         if (!client.enabled() || codes.isEmpty()) return emptyMap()
         val map = corpCodeMap() ?: return emptyMap()
         val (year, reprt) = if (useTtm) DartMetrics.latestReportPeriod(asOf) else DartMetrics.announcementLaggedYear(asOf) to DartMetrics.REPORT_ANNUAL
-        val out = linkedMapOf<String, Map<String, Any?>>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = 0
-        for (raw in codes) {
-            if (cooldowns.stopAggregate(OpenDartClient.SOURCE, errors, ok)) break
-            val code = raw.trim().padStart(6, '0')
-            val corp = map[code] ?: continue
-            val (m, prev, prev2) = try {
-                if (useTtm) {
-                    Triple(ttmMetrics(corp, year, reprt), ttmMetrics(corp, year - 1, reprt), ttmMetrics(corp, year - 2, reprt))
-                } else {
-                    Triple(annualMetrics(corp, year), annualMetrics(corp, year - 1), annualMetrics(corp, year - 2))
-                }
-            } catch (e: DataSourceError) {
-                errors += e
-                continue
+        val partial = { ok: Int, errors: List<DataSourceError> ->
+            log.error("OpenDART 부분 실패 — 성공 {} / 실패 {} / 전체 {}(대표: {})", ok, errors.size, codes.size, errors.first().message)
+        }
+        return perSymbol(codes, map, partial) { corp ->
+            val (m, prev, prev2) = if (useTtm) {
+                Triple(ttmMetrics(corp, year, reprt), ttmMetrics(corp, year - 1, reprt), ttmMetrics(corp, year - 2, reprt))
+            } else {
+                Triple(annualMetrics(corp, year), annualMetrics(corp, year - 1), annualMetrics(corp, year - 2))
             }
-            ok++
             val result: MutableMap<String, Any?> = LinkedHashMap(m)
             result["op_growth"] = DartMetrics.yoyGrowth(m["op_income"], prev["op_income"])
             result["net_growth"] = DartMetrics.yoyGrowth(m["net_income"], prev["net_income"])
             result["turnaround"] = DartMetrics.turnaroundFlag(m["net_income"], prev["net_income"])
             result["f_score"] = DartMetrics.piotroskiFScore(m, prev)
             result["loss_years_3"] = DartMetrics.countLosses(listOf(m["net_income"], prev["net_income"], prev2["net_income"]))
-            if (result.values.any { it != null }) out[code] = result
+            result.takeIf { r -> r.values.any { it != null } }
+        }
+    }
+
+    /**
+     * 종목코드별 corp 계산. 쿨다운·체계적 스키마 실패면 단락, 전량 실패면 대표 예외, 일부 실패는 [onPartial] 로그 후 부분 결과.
+     * corp 매핑이 없거나 결과가 null 인 종목은 뺀다.
+     */
+    private fun <T : Any> perSymbol(
+        codes: List<String>, corpMap: Map<String, String>, onPartial: (Int, List<DataSourceError>) -> Unit, compute: (String) -> T?,
+    ): Map<String, T> {
+        val out = linkedMapOf<String, T>()
+        val errors = mutableListOf<DataSourceError>()
+        var ok = 0
+        for (raw in codes) {
+            if (cooldowns.stopAggregate(OpenDartClient.SOURCE, errors, ok)) break
+            val code = raw.trim().padStart(6, '0')
+            val corp = corpMap[code] ?: continue
+            val v = try {
+                compute(corp)
+            } catch (e: DataSourceError) {
+                errors += e
+                continue
+            }
+            ok++
+            if (v != null) out[code] = v
         }
         if (ok == 0 && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
-        if (errors.isNotEmpty()) log.error("OpenDART 부분 실패 — 성공 {} / 실패 {} / 전체 {}(대표: {})", ok, errors.size, codes.size, errors.first().message)
+        if (errors.isNotEmpty()) onPartial(ok, errors)
         return out
     }
 
@@ -155,25 +171,10 @@ class DartFinancials(
     fun peadSueBySymbol(codes: List<String>, asOf: LocalDate, lookbackQ: Int = 8, minObs: Int = 6): Map<String, Double> {
         if (!client.enabled() || codes.isEmpty()) return emptyMap()
         val map = corpCodeMap() ?: return emptyMap()
-        val out = linkedMapOf<String, Double>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = 0
-        for (raw in codes) {
-            if (cooldowns.stopAggregate(OpenDartClient.SOURCE, errors, ok)) break
-            val code = raw.trim().padStart(6, '0')
-            val corp = map[code] ?: continue
-            val sue = try {
-                peadSueOne(corp, asOf, lookbackQ, minObs)
-            } catch (e: DataSourceError) {
-                errors += e
-                continue
-            }
-            ok++
-            if (sue != null) out[code] = sue
+        val partial = { ok: Int, errors: List<DataSourceError> ->
+            log.error("OpenDART PEAD 부분 실패 — 성공 {} / 실패 {} / 전체 {}", ok, errors.size, codes.size)
         }
-        if (ok == 0 && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
-        if (errors.isNotEmpty()) log.error("OpenDART PEAD 부분 실패 — 성공 {} / 실패 {} / 전체 {}", ok, errors.size, codes.size)
-        return out
+        return perSymbol(codes, map, partial) { corp -> peadSueOne(corp, asOf, lookbackQ, minObs) }
     }
 
     private fun peadSueOne(corp: String, asOf: LocalDate, lookbackQ: Int, minObs: Int): Double? {
@@ -187,8 +188,7 @@ class DartFinancials(
         if (surprises.size < minObs) return null
         val window = surprises.takeLast(lookbackQ)
         if (window.size < 2) return null
-        val mean = window.average()
-        val sd = sqrt(window.sumOf { (it - mean) * (it - mean) } / (window.size - 1))
+        val sd = Stats.std(window, 1)
         if (!(sd > 0)) return null
         return surprises.last() / sd
     }

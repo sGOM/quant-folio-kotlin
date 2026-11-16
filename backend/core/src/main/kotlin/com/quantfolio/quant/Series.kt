@@ -1,8 +1,6 @@
 package com.quantfolio.quant
 
 import java.time.LocalDate
-import kotlin.math.floor
-import kotlin.math.sqrt
 
 enum class RankMethod { AVERAGE, MIN, MAX, FIRST, DENSE }
 
@@ -41,6 +39,19 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
     fun isNaN(i: Int): Boolean = values[i].isNaN()
 
     fun last(): Double = values.last()
+
+    /** 마지막 n 개(pandas `tail(n)`). n 이 길이보다 크면 전체. */
+    fun tail(n: Int): Series {
+        val from = maxOf(0, size - n)
+        return Series(index.subList(from, size), values.copyOfRange(from, size))
+    }
+
+    /** pandas `reindex(dates)` — dates 와 같은 날짜의 값(중복 날짜는 마지막 값), 없으면 NaN. */
+    fun reindex(dates: List<LocalDate>): Series {
+        val byDate = HashMap<LocalDate, Double>()
+        index.forEachIndexed { i, d -> byDate[d] = values[i] }
+        return Series(dates, DoubleArray(dates.size) { byDate[dates[it]] ?: Double.NaN })
+    }
 
     private fun with(newValues: DoubleArray) = Series(index, newValues)
 
@@ -171,11 +182,7 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
     /** 선형 보간 분위수(pandas 기본). 유효값이 없으면 NaN. */
     fun quantile(q: Double): Double {
         val v = values.filter { !it.isNaN() }.sorted()
-        if (v.isEmpty()) return Double.NaN
-        val pos = q * (v.size - 1)
-        val lo = floor(pos).toInt()
-        val hi = minOf(lo + 1, v.size - 1)
-        return v[lo] + (v[hi] - v[lo]) * (pos - lo)
+        return if (v.isEmpty()) Double.NaN else Stats.quantileSorted(v, q)
     }
 
     fun sum(): Double = values.filter { !it.isNaN() }.sum()
@@ -184,9 +191,7 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
 
     fun std(ddof: Int = 1): Double {
         val v = values.filter { !it.isNaN() }
-        if (v.size <= ddof) return Double.NaN
-        val m = v.sum() / v.size
-        return sqrt(v.sumOf { (it - m) * (it - m) } / (v.size - ddof))
+        return if (v.size <= ddof) Double.NaN else Stats.std(v, ddof)
     }
 
     fun dropNa(): Series {

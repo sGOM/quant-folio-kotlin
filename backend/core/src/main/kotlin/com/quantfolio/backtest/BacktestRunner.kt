@@ -1,6 +1,7 @@
 package com.quantfolio.backtest
 
 import com.quantfolio.common.MarketClock
+import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
@@ -204,7 +205,7 @@ class BacktestRunner(
             }
             val quality = runCatching { dart.metricsBySymbol(norm, asOf, useTtm) }.getOrDefault(emptyMap())
             if (quality.isNotEmpty()) {
-                for (k in listOf("roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround")) {
+                for (k in FactorScores.QUALITY_COLS) {
                     if (quality.values.none { k in it }) continue
                     for (c in norm) put(c, k, quality[c]?.get(k))
                 }

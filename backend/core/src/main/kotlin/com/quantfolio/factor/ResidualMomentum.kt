@@ -1,9 +1,9 @@
 package com.quantfolio.factor
 
 import com.quantfolio.quant.Series
+import com.quantfolio.quant.Stats
 import java.time.LocalDate
 import java.time.YearMonth
-import kotlin.math.sqrt
 
 /**
  * 잔차 모멘텀(원본 `factors.compute_residual_momentum_panel`, Blitz 류): 월간 수익률을 시장(KOSPI200)에 회귀하고,
@@ -49,7 +49,7 @@ object ResidualMomentum {
             val formation = if (skip > 0) tail.dropLast(skip) else tail
             if (formation.size < 2) continue
             val mu = formation.average()
-            val sd = sqrt(formation.sumOf { (it - mu) * (it - mu) } / (formation.size - 1))
+            val sd = Stats.std(formation, 1)
             out[code.trim().padStart(6, '0')] = if (sd > 0) mu / sd else mu
         }
         return out

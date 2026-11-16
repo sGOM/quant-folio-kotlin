@@ -1,12 +1,12 @@
 package com.quantfolio.market.ohlcv
 
+import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.market.source.DataSourceError
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.LocalDate
-import java.time.ZoneOffset
 
 /** 지수 구성종목 조회(테스트에서 교체할 수 있게 분리). [com.quantfolio.market.krx.KrxIndexService] 가 구현한다. */
 fun interface IndexMembers {
@@ -22,7 +22,7 @@ class UniverseBuilder(private val members: IndexMembers, private val strategies:
         val codes = sortedSetOf<String>()
         try {
             // 원본 date.today() — 컨테이너 UTC 날짜(보존)
-            codes += members.indexMembers(LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC), index)
+            codes += members.indexMembers(MarketClock.todayUtcLegacy(clock), index)
         } catch (e: DataSourceError) {
             log.error("{} 구성종목 조회 실패(그 부분만 제외): {}", index, e.message)
         }

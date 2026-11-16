@@ -97,7 +97,7 @@ class UniverseScores(
             emptyMap()
         }
         if (quality.isNotEmpty()) {
-            for (k in listOf("roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround")) {
+            for (k in FactorScores.QUALITY_COLS) {
                 if (quality.values.any { k in it }) put(k) { (quality[it]?.get(k) as? Number)?.toDouble() }
             }
         }

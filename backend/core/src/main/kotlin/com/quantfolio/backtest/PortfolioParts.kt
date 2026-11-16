@@ -2,12 +2,15 @@ package com.quantfolio.backtest
 
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Panel
-import com.quantfolio.quant.Series
+import com.quantfolio.quant.Stats
 import java.time.LocalDate
 import kotlin.math.pow
 import kotlin.math.sqrt
 
 // 리밸런싱 백테스트 부품: 리스크 캡(risk_caps.py), 변동성 슬리피지(slippage.py), 성과귀속·위험조정지표(attribution.py).
+
+/** 비중·금액 비교 허용오차이자 잔량 기준 — 이하이면 0 으로 본다(원본 `1e-12`). */
+internal const val EPS = 1e-12
 
 /** 목표비중 리스크 레이어. 초과분은 한도 미만 종목에 비례 재분배, 여력이 없으면 현금. */
 object RiskCaps {
@@ -15,12 +18,12 @@ object RiskCaps {
         if (cap >= 1.0 || targets.isEmpty()) return targets
         val w = LinkedHashMap(targets)
         repeat(w.size + 1) {
-            val excess = w.values.filter { it > cap + 1e-12 }.sumOf { it - cap }
-            if (excess <= 1e-12) return w
+            val excess = w.values.filter { it > cap + EPS }.sumOf { it - cap }
+            if (excess <= EPS) return w
             for (s in w.keys) if (w.getValue(s) > cap) w[s] = cap
-            val under = w.filterValues { it < cap - 1e-12 }
+            val under = w.filterValues { it < cap - EPS }
             val pool = under.values.sum()
-            if (pool <= 1e-12) return w
+            if (pool <= EPS) return w
             for ((s, v) in under) w[s] = w.getValue(s) + excess * v / pool
         }
         return w
@@ -34,15 +37,15 @@ object RiskCaps {
         repeat(w.size + 1) {
             val tot = LinkedHashMap<String, Double>()
             for ((c, v) in w) tot[sec(c)] = (tot[sec(c)] ?: 0.0) + v
-            val excess = tot.values.filter { it > cap + 1e-12 }.sumOf { it - cap }
-            if (excess <= 1e-12) return w
+            val excess = tot.values.filter { it > cap + EPS }.sumOf { it - cap }
+            if (excess <= EPS) return w
             for (c in w.keys) {
                 val t = tot.getValue(sec(c))
-                if (t > cap + 1e-12 && t > 0) w[c] = w.getValue(c) * (cap / t)
+                if (t > cap + EPS && t > 0) w[c] = w.getValue(c) * (cap / t)
             }
-            val under = w.filter { (c, v) -> tot.getValue(sec(c)) < cap - 1e-12 && v > 0 }
+            val under = w.filter { (c, v) -> tot.getValue(sec(c)) < cap - EPS && v > 0 }
             val pool = under.values.sum()
-            if (pool <= 1e-12) return w
+            if (pool <= EPS) return w
             for ((c, cw) in under) w[c] = w.getValue(c) + excess * cw / pool
         }
         return w
@@ -103,7 +106,7 @@ object Slippage {
         for (s in symbols) {
             if (!hist.hasSymbol(s)) continue
             val r = hist.column(s).dropNa().pctChange()
-            val tail = Series(r.index.takeLast(20), r.values.copyOfRange(maxOf(0, r.size - 20), r.size))
+            val tail = r.tail(20)
             if (tail.size >= 10) {
                 val sd = tail.std()
                 if (!sd.isNaN() && sd > 0) vols[s] = sd
@@ -171,7 +174,7 @@ object Attribution {
             val arr = ics.getValue(col)
             if (arr.size < 3) continue
             val mean = arr.average()
-            val sd = sqrt(arr.sumOf { (it - mean) * (it - mean) } / (arr.size - 1))
+            val sd = Stats.std(arr, 1)
             val ls = lss.getValue(col)
             out[col] = linkedMapOf(
                 "ic_mean" to Num.safe(mean),
@@ -184,7 +187,7 @@ object Attribution {
         return out
     }
 
-    private fun spearman(a: List<Double>, b: List<Double>): Double = pearson(avgRank(a), avgRank(b))
+    private fun spearman(a: List<Double>, b: List<Double>): Double = Stats.pearson(avgRank(a), avgRank(b))
 
     private fun avgRank(v: List<Double>): DoubleArray {
         val order = v.indices.sortedBy { v[it] }
@@ -200,20 +203,6 @@ object Attribution {
         return r
     }
 
-    private fun pearson(a: DoubleArray, b: DoubleArray): Double {
-        val ma = a.average()
-        val mb = b.average()
-        var sab = 0.0
-        var saa = 0.0
-        var sbb = 0.0
-        for (i in a.indices) {
-            sab += (a[i] - ma) * (b[i] - mb)
-            saa += (a[i] - ma) * (a[i] - ma)
-            sbb += (b[i] - mb) * (b[i] - mb)
-        }
-        return sab / sqrt(saa * sbb)
-    }
-
     /** 샤프·소르티노(rf 초과) + 벤치마크 상대 지표(베타·알파·IR·TE·벤치 누적수익). 연율 √252. */
     fun riskAdjusted(rets: DoubleArray, bench: DoubleArray?, rfAnnual: Double): Map<String, Double?> {
         val out = linkedMapOf<String, Double?>(
@@ -224,7 +213,7 @@ object Attribution {
         val ann = sqrt(252.0)
         if (rets.size > 1) {
             val mean = rets.average()
-            val std = std1(rets)
+            val std = Stats.std(rets, 1)
             if (std > 0) out["sharpe"] = Num.safe((mean - rfDaily) / std * ann)
             val dstd = sqrt(rets.sumOf { minOf(it - rfDaily, 0.0).let { d -> d * d } } / rets.size)
             if (dstd > 0) out["sortino"] = Num.safe((mean - rfDaily) / dstd * ann)
@@ -245,17 +234,12 @@ object Attribution {
                 out["alpha"] = Num.safe(((mp - rfDaily) - beta * (mb - rfDaily)) * 252.0)
             }
             val active = DoubleArray(p.size) { p[it] - b[it] }
-            val astd = std1(active)
+            val astd = Stats.std(active, 1)
             if (astd > 0) {
                 out["tracking_error"] = Num.safe(astd * ann)
                 out["information_ratio"] = Num.safe(active.average() / astd * ann)
             }
         }
         return out
-    }
-
-    private fun std1(x: DoubleArray): Double {
-        val m = x.average()
-        return sqrt(x.sumOf { (it - m) * (it - m) } / (x.size - 1))
     }
 }

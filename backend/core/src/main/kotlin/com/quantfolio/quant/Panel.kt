@@ -23,8 +23,6 @@ class Panel private constructor(
 
     val dates: List<LocalDate> get() = allDates.subList(start, start + visible)
 
-    val lastDate: LocalDate? get() = if (visible == 0) null else allDates[start + visible - 1]
-
     fun hasSymbol(symbol: String) = symbol in columns
 
     fun column(symbol: String): Series {
@@ -43,15 +41,6 @@ class Panel private constructor(
         var n = 0
         while (n < visible && !allDates[start + n].isAfter(d)) n++
         return Panel(allDates, symbols, columns, start, n)
-    }
-
-    /** [from, to] 포함 구간 뷰. */
-    fun between(from: LocalDate, to: LocalDate): Panel {
-        var s = 0
-        while (s < visible && allDates[start + s].isBefore(from)) s++
-        var e = s
-        while (e < visible && !allDates[start + e].isAfter(to)) e++
-        return Panel(allDates, symbols, columns, start + s, e - s)
     }
 
     private fun indexOf(date: LocalDate): Int? {

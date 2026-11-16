@@ -49,7 +49,7 @@ object Rebalance {
     private fun realizedVolAnn(close: Series, window: Int): Double? {
         val logRet = (close / close.shift(1)).map { ln(it) }.dropNa()
         if (logRet.size < window || window < 2) return null
-        return Series(logRet.index.takeLast(window), logRet.values.copyOfRange(logRet.size - window, logRet.size)).std() * sqrt(252.0)
+        return logRet.tail(window).std() * sqrt(252.0)
     }
 
     /** 변동성 적격 게이트. series 는 호출자가 as_of 까지로 자른 종가. 데이터 부족은 불통과. */
@@ -178,15 +178,10 @@ object Rebalance {
         if (selected.isEmpty()) return emptyMap()
         if (weighting == "score" && ranked != null) return rankWeighted(ranked!!)
         if (weighting == "inverse_vol") {
-            val v = vols ?: selected.associateWith { s -> priceHistory[s]?.let { MetricsCommon.computeVolAnn(tail(it.dropNa(), 253)) } }
+            val v = vols ?: selected.associateWith { s -> priceHistory[s]?.let { MetricsCommon.computeVolAnn(it.dropNa().tail(253)) } }
             return inverseVol(v, selected)
         }
         return selected.associateWith { 1.0 / selected.size }
-    }
-
-    private fun tail(s: Series, n: Int): Series {
-        val from = maxOf(0, s.size - n)
-        return Series(s.index.subList(from, s.size), s.values.copyOfRange(from, s.size))
     }
 
     /** 순위 선형 가중(1위=N … 꼴찌=1, 합 N(N+1)/2). 점수 부호·스케일에 무관. */

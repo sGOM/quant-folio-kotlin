@@ -1,11 +1,11 @@
 package com.quantfolio.market
 
+import com.quantfolio.common.MarketClock
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Series
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.LocalDate
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.ln
 import kotlin.math.sqrt
@@ -15,7 +15,7 @@ import kotlin.math.sqrt
 class MetricsCommon(private val calendar: MarketCalendar, private val clock: Clock) {
     /** 전 영업일(어제부터 최대 14일 거슬러). 원본 `date.today()` 기준 — 컨테이너 UTC(보존). */
     fun lastBusinessDay(): LocalDate {
-        val today = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)
+        val today = MarketClock.todayUtcLegacy(clock)
         var d = today.minusDays(1)
         repeat(14) {
             if (calendar.isBusinessDay(d)) return d

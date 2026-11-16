@@ -20,7 +20,6 @@ class PanelTest {
         assertEquals(d.take(3), past.dates)
         assertEquals(3, past.column("A").size)
         assertEquals(3.0, past.column("A").last())
-        assertEquals(d[2], past.lastDate)
         assertNull(past.row(d[3])) // 이후 날짜는 존재하지 않는다
         assertEquals(mapOf("A" to 3.0, "B" to 30.0), past.row(d[2]))
     }
@@ -42,11 +41,6 @@ class PanelTest {
     fun missingIsNaN() {
         assertTrue(panel.column("B")[1].isNaN())
         assertTrue(panel.row(d[1])!!.getValue("B").isNaN())
-    }
-
-    @Test
-    fun betweenInclusive() {
-        assertEquals(d.subList(1, 4), panel.between(d[1], d[3]).dates)
     }
 
     @Test

@@ -2,11 +2,6 @@ package com.quantfolio.market.source
 
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import org.springframework.http.HttpHeaders
-import org.springframework.http.HttpStatus
-import org.springframework.web.client.HttpClientErrorException
-import org.springframework.web.client.HttpServerErrorException
-import org.springframework.web.client.ResourceAccessException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
@@ -26,20 +21,6 @@ class DataSourceErrorTest {
         assertEquals(false to null, SourceRequestError("krx", "x").let { it.retryable to it.cooldownSeconds })
         assertEquals("[krx] 메시지", SourceAuthError("krx", "메시지").message)
         assertEquals("SourceUnavailableError", SourceUnavailableError("krx", "x").causeName)
-    }
-
-    @Test
-    fun classifyHttp() {
-        fun client(code: HttpStatus) = HttpClientErrorException.create(code, "", HttpHeaders(), ByteArray(0), null)
-        assertIs<SourceQuotaError>(DataSourceErrors.classifyHttp("s", client(HttpStatus.TOO_MANY_REQUESTS)))
-        assertIs<SourceAuthError>(DataSourceErrors.classifyHttp("s", client(HttpStatus.UNAUTHORIZED)))
-        assertIs<SourceAuthError>(DataSourceErrors.classifyHttp("s", client(HttpStatus.FORBIDDEN)))
-        assertIs<SourceRequestError>(DataSourceErrors.classifyHttp("s", client(HttpStatus.BAD_REQUEST)))
-        assertIs<SourceUnavailableError>(
-            DataSourceErrors.classifyHttp("s", HttpServerErrorException.create(HttpStatus.BAD_GATEWAY, "", HttpHeaders(), ByteArray(0), null)),
-        )
-        assertIs<SourceUnavailableError>(DataSourceErrors.classifyHttp("s", ResourceAccessException("timeout")))
-        assertIs<SourceUnavailableError>(DataSourceErrors.classifyHttp("s", IllegalStateException("?")))
     }
 
     @Test

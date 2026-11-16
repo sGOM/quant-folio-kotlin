@@ -6,6 +6,7 @@ import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Series
+import com.quantfolio.quant.Stats
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -32,8 +33,8 @@ data class TechIndicators(
                 if (hi > 0) high52 = Num.safe(last / hi)
             }
             val rsi = if (n >= 28) Num.safe(Signals.rsi(close, 14).last()) else null
-            val vol = MetricsCommon.computeVolAnn(tail(close, 253))
-            val mdd = MetricsCommon.computeMdd(tail(close, 252))
+            val vol = MetricsCommon.computeVolAnn(close.tail(253))
+            val mdd = MetricsCommon.computeMdd(close.tail(252))
             var aligned: Boolean? = null
             if (n >= 120) {
                 val s = listOf(5, 20, 60, 120).map { Signals.sma(close, it).last() }
@@ -47,11 +48,6 @@ data class TechIndicators(
             return TechIndicators(high52, rsi, vol, mdd, aligned, above, n)
         }
     }
-}
-
-internal fun tail(s: Series, n: Int): Series {
-    val from = maxOf(0, s.size - n)
-    return Series(s.index.subList(from, s.size), s.values.copyOfRange(from, s.size))
 }
 
 /** 업종지수 지표 한 건(원본 `SectorMetric`). */
@@ -77,7 +73,7 @@ data class SectorMetric(
             fun mom(n: Int) = if (c.size < n) null else Num.safe(c.last() / c[c.size - n] - 1)
             val mom6 = mom(126)
             val rs = if (mom6 != null && refReturn != null && kotlin.math.abs(refReturn) > 1e-9) Num.safe(mom6 / refReturn) else null
-            val vol = MetricsCommon.computeVolAnn(tail(c, 253))
+            val vol = MetricsCommon.computeVolAnn(c.tail(253))
             val riskAdj = if (mom6 != null && vol != null && vol != 0.0 && vol > 1e-9) Num.safe(mom6 / vol) else null
             var valueTrend: Double? = null
             if (bars.size >= 60) {
@@ -91,7 +87,7 @@ data class SectorMetric(
                 val hi = c.values.takeLast(252).filter { !it.isNaN() }.maxOrNull() ?: Double.NaN
                 if (hi > 0) high52 = Num.safe(c.last() / hi)
             }
-            val mdd = if (c.size >= 2) MetricsCommon.computeMdd(tail(c, 252)) else null
+            val mdd = if (c.size >= 2) MetricsCommon.computeMdd(c.tail(252)) else null
             return SectorMetric(name, market, mom(21), mom(63), mom6, rs, vol, riskAdj, valueTrend, high52, mdd)
         }
     }
@@ -231,7 +227,7 @@ object VulnerabilityScoring {
         val tail = series.takeLast(window).filterNotNull()
         if (tail.size < 120) return null
         val mean = tail.average()
-        val sd = kotlin.math.sqrt(tail.sumOf { (it - mean) * (it - mean) } / (tail.size - 1))
+        val sd = Stats.std(tail, 1)
         if (sd <= 0 || sd.isNaN()) return null
         return (tail.last() - mean) / sd
     }

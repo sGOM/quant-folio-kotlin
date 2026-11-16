@@ -9,6 +9,7 @@ import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
+import com.quantfolio.quant.Stats
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -68,7 +69,8 @@ data class RecommendMember(
 
 data class RecommendOut(val asOf: LocalDate, val index: String, val count: Int, val opendartEnabled: Boolean, val items: List<RecommendMember>)
 
-private fun krxNames(vararg frames: List<StockPeriod>): Map<String, String> {
+/** 종목 → KRX 종목명. 앞 프레임 우선, 공백 이름은 건너뛴다. */
+internal fun krxNames(vararg frames: Collection<StockPeriod>): Map<String, String> {
     val out = LinkedHashMap<String, String>()
     for (f in frames) for (p in f) {
         val n = p.name?.trim()
@@ -167,14 +169,7 @@ class ScreenerService(
     }
 
     /** pandas Series.quantile(linear). */
-    private fun quantile(v: List<Double>, q: Double): Double {
-        if (v.isEmpty()) return Double.NaN
-        val s = v.sorted()
-        val pos = q * (s.size - 1)
-        val lo = pos.toInt()
-        val hi = minOf(lo + 1, s.size - 1)
-        return s[lo] + (s[hi] - s[lo]) * (pos - lo)
-    }
+    private fun quantile(v: List<Double>, q: Double): Double = if (v.isEmpty()) Double.NaN else Stats.quantileSorted(v.sorted(), q)
 }
 
 /**
@@ -239,7 +234,7 @@ class RecommendService(
         put("vol_ann") { t.getValue(it).volAnn }
         put("mdd_252") { t.getValue(it).mdd252 }
         if (quality.isNotEmpty()) {
-            for (k in listOf("roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround")) {
+            for (k in FactorScores.QUALITY_COLS) {
                 if (quality.values.any { k in it }) put(k) { num(quality[it]?.get(k)) }
             }
         }

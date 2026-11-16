@@ -1,5 +1,6 @@
 package com.quantfolio.backtest
 
+import com.quantfolio.quant.Stats
 import org.apache.commons.math3.distribution.NormalDistribution
 import kotlin.math.E
 import kotlin.math.floor
@@ -107,18 +108,10 @@ object DeflatedSharpe {
             val b = arrs[j].copyOf(m)
             if (!a.all { it.isFinite() } || !b.all { it.isFinite() }) continue
             if (popStd(a) == 0.0 || popStd(b) == 0.0) continue
-            val c = pearson(a, b)
+            val c = Stats.pearson(a, b).coerceIn(-1.0, 1.0)
             if (c.isFinite()) corrs += c
         }
         return if (corrs.isEmpty()) 0.0 else corrs.average()
-    }
-
-    private fun pearson(a: DoubleArray, b: DoubleArray): Double {
-        val ma = a.average()
-        val mb = b.average()
-        var sab = 0.0; var saa = 0.0; var sbb = 0.0
-        for (k in a.indices) { val da = a[k] - ma; val db = b[k] - mb; sab += da * db; saa += da * da; sbb += db * db }
-        return (sab / sqrt(saa * sbb)).coerceIn(-1.0, 1.0)
     }
 
     private fun popStd(a: DoubleArray): Double { val m = a.average(); return sqrt(a.sumOf { (it - m).pow(2) } / a.size) }

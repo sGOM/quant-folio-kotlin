@@ -1,5 +1,6 @@
 package com.quantfolio.factor
 
+import com.quantfolio.quant.Stats
 import kotlin.math.ln
 import kotlin.math.sqrt
 
@@ -25,27 +26,26 @@ object FactorScores {
         "momentum" to 0.4, "value" to 0.3, "lowvol" to 0.3, "quality" to 0.0,
         "growth" to 0.0, "flow" to 0.0, "residual_momentum" to 0.0, "pead" to 0.0,
     )
+    /** DART 재무 품질 컬럼. 조회 측(백테스트·실매매·추천)이 이 순서로 프레임에 채운다 — 순서가 결과 dict 순서. */
+    val QUALITY_COLS = listOf("roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround")
+
+    /** 백테스트가 fundamentals 에서 옮겨 담는 전 컬럼(원본 dict 순서). 팩터를 추가하면 여기와 compute 를 함께 고친다. */
+    val FUNDAMENTAL_COLS = listOf("PER", "PBR", "DIV") + QUALITY_COLS + listOf("market_cap", "flow_norm", "resid_mom", "pead_sue")
+
     private val CATEGORIES = listOf("momentum", "value", "lowvol", "quality", "growth", "flow", "residual_momentum", "pead")
 
     /** 1%·99% 분위로 자른 뒤 모집단 표준편차(ddof=0) z-score. 유효값 3개 미만이면 전부 NaN, 표준편차 0 이면 전부 0. */
     fun winsorizeZ(s: DoubleArray, invert: Boolean = false): DoubleArray {
         val valid = s.filter { !it.isNaN() }.sorted()
         if (valid.size < 3) return DoubleArray(s.size) { Double.NaN }
-        val lo = quantile(valid, 0.01)
-        val hi = quantile(valid, 0.99)
+        val lo = Stats.quantileSorted(valid, 0.01)
+        val hi = Stats.quantileSorted(valid, 0.99)
         val clipped = DoubleArray(s.size) { if (s[it].isNaN()) Double.NaN else s[it].coerceIn(lo, hi) }
         val present = clipped.filter { !it.isNaN() }
         val mu = present.average()
-        val std = sqrt(present.sumOf { (it - mu) * (it - mu) } / present.size)
+        val std = Stats.std(present, 0)
         if (std == 0.0 || !std.isFinite()) return DoubleArray(s.size) { 0.0 }
         return DoubleArray(s.size) { val z = (clipped[it] - mu) / std; if (invert) -z else z }
-    }
-
-    private fun quantile(sorted: List<Double>, q: Double): Double {
-        val pos = q * (sorted.size - 1)
-        val lo = pos.toInt()
-        val hi = minOf(lo + 1, sorted.size - 1)
-        return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
     }
 
     private fun fill(a: DoubleArray, v: Double = 0.0) = DoubleArray(a.size) { if (a[it].isNaN()) v else a[it] }

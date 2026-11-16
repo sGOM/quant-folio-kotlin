@@ -1,5 +1,6 @@
 package com.quantfolio.market.krx
 
+import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.market.SectorMapSnapshot
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.MarketCalendar
@@ -17,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
@@ -79,26 +79,20 @@ class KrxIndexService(
             return emptyList()
         }
         var codes = emptyList<String>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = false
+        val att = Attempts()
         for (back in 0L until 7L) {
-            if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+            if (att.cooling()) break
             val dd = asOf.minusDays(back).format(YMD)
             val payload = mapOf(
                 "bld" to BLD_INDEX_CONSTITUENTS, "locale" to "ko_KR", "trdDd" to dd, "money" to "1", "csvxls_isNo" to "false",
             ) + params
-            val rows = try {
-                mdc.rows(payload, "output", "$index 구성종목", Duration.ofSeconds(15))
-            } catch (e: DataSourceError) {
+            val rows = att.rows(payload, "output", "$index 구성종목", Duration.ofSeconds(15)) { e ->
                 log.warn("KRX {} 구성종목 조회 실패({}): {}", index, dd, e.message)
-                errors += e
-                continue
-            }
-            ok = true
+            } ?: continue
             codes = rows.mapNotNull { r -> r["ISU_SRT_CD"]?.toString()?.takeIf { it.isNotEmpty() }?.padStart(6, '0') }
             if (codes.isNotEmpty()) break
         }
-        if (!ok && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
+        att.throwIfAllFailed()
         if (codes.isNotEmpty()) {
             constituents.write(index, asOf, codes)
             ledger.put("index_members", storeKey, codes.size, cache.isFinalDate(asOf))
@@ -108,9 +102,6 @@ class KrxIndexService(
     }
 
     fun indexMembers(asOf: LocalDate): List<String> = indexMembers(asOf, "KOSPI200")
-
-    fun membershipUnion(dates: List<LocalDate>, index: String = "KOSPI200"): Map<String, List<String>> =
-        dates.associate { it.format(YMD) to indexMembers(it, index) }
 
     override fun allListedStocks(): List<ListedStock> {
         stocksCache?.let { return it }
@@ -137,31 +128,25 @@ class KrxIndexService(
         capsCache[asOf]?.let { return it }
         if (session.current() == null) return emptyMap()
         val caps = linkedMapOf<String, Long>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = false
+        val att = Attempts()
         for (back in 0L until 7L) {
             val dd = asOf.minusDays(back).format(YMD)
             for (mkt in listOf("STK", "KSQ")) {
-                if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+                if (att.cooling()) break
                 val payload = mapOf("bld" to BLD_MARKET_CAP, "locale" to "ko_KR", "mktId" to mkt, "trdDd" to dd, "money" to "1", "csvxls_isNo" to "false")
-                val rows = try {
-                    mdc.rows(payload, "OutBlock_1", "시가총액($mkt)")
-                } catch (e: DataSourceError) {
+                val rows = att.rows(payload, "OutBlock_1", "시가총액($mkt)") { e ->
                     log.warn("KRX 시가총액 조회 실패({} {}): {}", mkt, dd, e.message)
-                    errors += e
-                    continue
-                }
-                ok = true
+                } ?: continue
                 for (r in rows) {
                     val code = r["ISU_SRT_CD"]?.toString()?.trim().orEmpty().padStart(6, '0')
                     val raw = r["MKTCAP"]?.toString().orEmpty().replace(",", "").trim()
                     if (code.isNotEmpty() && raw.isNotEmpty() && raw.all { it.isDigit() }) caps[code] = raw.toLong()
                 }
             }
-            if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+            if (att.cooling()) break
             if (caps.isNotEmpty()) break
         }
-        if (!ok && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
+        att.throwIfAllFailed()
         if (caps.isNotEmpty()) capsCache[asOf] = caps
         return caps
     }
@@ -178,33 +163,27 @@ class KrxIndexService(
         }
         sectorCache?.let { return it }
         if (session.current() == null) return emptyMap()
-        val base = asOf ?: todayUtc()
+        val base = asOf ?: MarketClock.todayUtcLegacy(clock)
         val mapping = linkedMapOf<String, String>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = false
+        val att = Attempts()
         for (back in 0L until 10L) {
             val dd = base.minusDays(back).format(YMD)
             for (mkt in listOf("STK", "KSQ")) {
-                if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+                if (att.cooling()) break
                 val payload = mapOf("bld" to BLD_SECTOR, "locale" to "ko_KR", "mktId" to mkt, "trdDd" to dd, "money" to "1", "csvxls_isNo" to "false")
-                val rows = try {
-                    mdc.rows(payload, "block1", "업종분류($mkt)")
-                } catch (e: DataSourceError) {
+                val rows = att.rows(payload, "block1", "업종분류($mkt)") { e ->
                     log.warn("KRX 업종분류 조회 실패({} {}): {}", mkt, dd, e.message)
-                    errors += e
-                    continue
-                }
-                ok = true
+                } ?: continue
                 for (r in rows) {
                     val code = r["ISU_SRT_CD"]?.toString()?.trim().orEmpty().padStart(6, '0')
                     val industry = r["IDX_IND_NM"]?.toString()?.trim().orEmpty()
                     if (code != "000000" && industry.isNotEmpty()) mapping[code] = industry
                 }
             }
-            if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+            if (att.cooling()) break
             if (mapping.isNotEmpty()) break
         }
-        if (!ok && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
+        att.throwIfAllFailed()
         if (mapping.isNotEmpty()) {
             sectorCache = mapping
             log.info("KRX 업종분류 로드: {}종목", mapping.size)
@@ -215,7 +194,7 @@ class KrxIndexService(
     /** 현재 업종분류를 snapshotDate 로 적재(분기 배치). 이미 있으면 스킵, force 면 교체. 적재 건수 반환. */
     @Transactional
     fun snapshotSectorMap(asOf: LocalDate? = null, force: Boolean = false): Int {
-        val day = asOf ?: todayUtc()
+        val day = asOf ?: MarketClock.todayUtcLegacy(clock)
         val existing = sectors.countBySnapshotDate(day)
         if (existing > 0 && !force) {
             log.info("업종분류 스냅샷({}) 이미 존재({}건) — 스킵", day, existing)
@@ -238,24 +217,18 @@ class KrxIndexService(
         var snapped = asOf
         repeat(10) { if (!calendar.isBusinessDay(snapped)) snapped = snapped.minusDays(1) }
         var rows = emptyList<Map<String, Any?>>()
-        val errors = mutableListOf<DataSourceError>()
-        var ok = false
+        val att = Attempts()
         var used = snapped
         for (back in 0L until 7L) {
-            if (errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0) break
+            if (att.cooling()) break
             used = snapped.minusDays(back)
             val payload = mapOf("bld" to BLD_ETF_ALL, "locale" to "ko_KR", "trdDd" to used.format(YMD), "share" to "1", "money" to "1", "csvxls_isNo" to "false")
-            rows = try {
-                mdc.rows(payload, "output", "ETF 잔고")
-            } catch (e: DataSourceError) {
+            rows = att.rows(payload, "output", "ETF 잔고") { e ->
                 log.warn("KRX ETF 조회 실패({}): {}", used, e.message)
-                errors += e
-                continue
-            }
-            ok = true
+            } ?: continue
             if (rows.isNotEmpty()) break
         }
-        if (!ok && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
+        att.throwIfAllFailed()
         if (rows.isEmpty()) return null
         var total = 0.0
         var lev = 0.0
@@ -282,6 +255,32 @@ class KrxIndexService(
         )
     }
 
+    /**
+     * 날짜(·시장)를 거슬러 가며 여러 번 조회할 때의 실패 누적. 실패가 쌓인 채 쿨다운이 걸리면 단락([cooling]),
+     * 한 번도 성공 못 했으면 대표 예외([throwIfAllFailed]). 빈 응답도 성공으로 센다.
+     */
+    private inner class Attempts {
+        private val errors = mutableListOf<DataSourceError>()
+        private var ok = false
+
+        fun cooling() = errors.isNotEmpty() && cooldowns.remaining(KrxSession.SOURCE) > 0
+
+        /** 성공하면 행, 실패하면 [onFail] 로그 후 누적하고 null. */
+        fun rows(
+            payload: Map<String, String>, key: String, label: String, timeout: Duration = Duration.ofSeconds(20), onFail: (DataSourceError) -> Unit,
+        ): List<Map<String, Any?>>? = try {
+            mdc.rows(payload, key, label, timeout).also { ok = true }
+        } catch (e: DataSourceError) {
+            onFail(e)
+            errors += e
+            null
+        }
+
+        fun throwIfAllFailed() {
+            if (!ok && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
+        }
+    }
+
     private fun pitSnapshot(asOf: LocalDate): Map<String, String> = try {
         val latest = sectors.latestDateOnOrBefore(asOf)
         if (latest == null) emptyMap() else sectors.findBySnapshotDate(latest).associate { it.symbol to it.sector }
@@ -289,9 +288,6 @@ class KrxIndexService(
         log.warn("업종분류 PIT 스냅샷 조회 실패({}): {}", asOf, e.message)
         emptyMap()
     }
-
-    /** 원본 `date.today()` — 컨테이너 UTC 날짜(보존, docs/migration-notes.md #8). */
-    private fun todayUtc(): LocalDate = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)
 
     companion object {
         val INDEX_PARAMS = mapOf(

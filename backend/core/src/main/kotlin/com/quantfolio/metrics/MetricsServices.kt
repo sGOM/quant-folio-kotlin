@@ -89,8 +89,7 @@ class StockMetricsService(
         )
         val scores = FactorScores.compute(frame, null, "none")
         val seedNames = runCatching { catalog.nameMap() }.getOrDefault(emptyMap())
-        val krxNames = listOf(pc1, pc21, pc63, pc126).flatMap { it.values }.filter { !it.name.isNullOrBlank() }
-            .groupBy { it.symbol }.mapValues { it.value.first().name!!.trim() }
+        val krxNames = krxNames(pc1.values, pc21.values, pc63.values, pc126.values)
         val items = kept.mapIndexed { i, c ->
             val t = techByCode.getValue(c.symbol)
             val p1 = pc1[c.symbol]

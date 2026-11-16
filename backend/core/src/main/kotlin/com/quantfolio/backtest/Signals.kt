@@ -80,6 +80,33 @@ object Signals {
 
     private fun Map<String, Any?>.type(): String = (this["type"] ?: "sma_crossover").toString()
 
+    /** 유형별 파라미터 기본값(원본 `cfg.get(k, d)` 의 d). 신호·설명 문구가 같은 값을 읽는다. 스키마 기본값과는 별개(strategy-config.md). */
+    private val DEFAULTS: Map<String, Map<String, Number>> = mapOf(
+        "sma_crossover" to mapOf("fast" to 5, "slow" to 20),
+        "ema_crossover" to mapOf("fast" to 12, "slow" to 26),
+        "rsi" to mapOf("period" to 14, "lower" to 30.0, "upper" to 70.0),
+        "macd" to mapOf("fast" to 12, "slow" to 26, "signal" to 9),
+        "bollinger" to mapOf("period" to 20, "num_std" to 2.0),
+        "breakout" to mapOf("period" to 20),
+        "momentum" to mapOf("lookback" to 120),
+        "zscore" to mapOf("period" to 20, "entry" to 2.0),
+        "disparity" to mapOf("period" to 20, "lower" to 95.0, "upper" to 105.0),
+        "donchian_squeeze" to mapOf("period" to 20, "bb_mult" to 1.0, "kc_mult" to 1.3),
+        "trix" to mapOf("period" to 15, "signal_period" to 9),
+        "atr_trailing" to mapOf("period" to 22, "atr_period" to 22, "k" to 3.0),
+        "volatility_breakout" to mapOf("k" to 0.5),
+        "keltner" to mapOf("ema_period" to 20, "atr_period" to 10, "mult" to 2.0),
+        "stochastic" to mapOf("k_period" to 14, "d_period" to 3, "lower" to 20.0, "upper" to 80.0),
+        "obv_trend" to mapOf("period" to 20),
+    )
+
+    private fun Map<String, Any?>.default(key: String): Number =
+        DEFAULTS[type()]?.get(key) ?: error("기본값 표에 없음: ${type()}.$key")
+
+    private fun Map<String, Any?>.i(key: String): Int = i(key, default(key).toInt())
+
+    private fun Map<String, Any?>.d(key: String): Double = d(key, default(key).toDouble())
+
     fun requiresOhlc(config: Map<String, Any?>): Boolean {
         val type = config.type()
         return if (type == "custom") customOperands(config).any { it["kind"] == "price" && it["source"] in OHLC_SOURCES } else type in OHLC_TYPES
@@ -90,62 +117,62 @@ object Signals {
         val close = data.close
         return when (val type = config.type()) {
             "custom" -> customSignals(data, c)
-            "sma_crossover" -> maCross(close, c.i("fast", 5), c.i("slow", 20), ::sma)
-            "ema_crossover" -> maCross(close, c.i("fast", 12), c.i("slow", 26), ::ema)
+            "sma_crossover" -> maCross(close, c.i("fast"), c.i("slow"), ::sma)
+            "ema_crossover" -> maCross(close, c.i("fast"), c.i("slow"), ::ema)
             "rsi" -> {
-                val lower = c.d("lower", 30.0)
-                val upper = c.d("upper", 70.0)
+                val lower = c.d("lower")
+                val upper = c.d("upper")
                 if (lower >= upper) throw SignalConfigError("RSI lower 는 upper 보다 작아야 합니다.")
-                val r = rsi(close, c.i("period", 14))
+                val r = rsi(close, c.i("period"))
                 crossUp(r, constant(close.index, lower)) to crossDown(r, constant(close.index, upper))
             }
             "macd" -> {
-                val fast = c.i("fast", 12)
-                val slow = c.i("slow", 26)
+                val fast = c.i("fast")
+                val slow = c.i("slow")
                 if (fast >= slow) throw SignalConfigError("MACD fast 는 slow 보다 작아야 합니다.")
-                val (line, sig) = macd(close, fast, slow, c.i("signal", 9))
+                val (line, sig) = macd(close, fast, slow, c.i("signal"))
                 crossUp(line, sig) to crossDown(line, sig)
             }
             "bollinger" -> {
-                val period = c.i("period", 20)
-                val k = c.d("num_std", 2.0)
+                val period = c.i("period")
+                val k = c.d("num_std")
                 val mid = sma(close, period)
                 val std = close.rolling(period, period).std(ddof = 0)
                 crossUp(close, mid - std * k) to crossDown(close, mid + std * k)
             }
             "breakout" -> {
-                val period = c.i("period", 20)
+                val period = c.i("period")
                 val upper = close.rolling(period, period).max().shift(1)
                 val lower = close.rolling(period, period).min().shift(1)
                 val prev = close.shift(1)
                 ((close gt upper) and (prev le upper)) to ((close lt lower) and (prev ge lower))
             }
             "momentum" -> {
-                val lookback = c.i("lookback", 120)
+                val lookback = c.i("lookback")
                 if (lookback < 1) throw SignalConfigError("모멘텀 lookback 은 1 이상이어야 합니다.")
                 val mom = close / close.shift(lookback) - 1.0
                 val zero = constant(close.index, 0.0)
                 crossUp(mom, zero) to crossDown(mom, zero)
             }
             "zscore" -> {
-                val period = c.i("period", 20)
-                val entry = c.d("entry", 2.0)
+                val period = c.i("period")
+                val entry = c.d("entry")
                 if (entry <= 0) throw SignalConfigError("z-score entry 임계는 0 보다 커야 합니다.")
                 val z = (close - sma(close, period)) / close.rolling(period, period).std()
                 crossUp(z, constant(close.index, -entry)) to crossUp(z, constant(close.index, 0.0))
             }
             "disparity" -> {
-                val period = c.i("period", 20)
-                val lower = c.d("lower", 95.0)
-                val upper = c.d("upper", 105.0)
+                val period = c.i("period")
+                val lower = c.d("lower")
+                val upper = c.d("upper")
                 if (lower >= upper) throw SignalConfigError("이격도 lower 는 upper 보다 작아야 합니다.")
                 val disp = close * 100.0 / sma(close, period)
                 crossUp(disp, constant(close.index, lower)) to crossDown(disp, constant(close.index, upper))
             }
             "donchian_squeeze" -> donchianSqueeze(close, c)
             "trix" -> {
-                val period = c.i("period", 15)
-                val sp = c.i("signal_period", 9)
+                val period = c.i("period")
+                val sp = c.i("signal_period")
                 if (period < 1 || sp < 1) throw SignalConfigError("TRIX period/signal_period 는 1 이상이어야 합니다.")
                 val (trix, sig) = trix(close, period, sp)
                 crossUp(trix, sig) to crossDown(trix, sig)
@@ -175,9 +202,9 @@ object Signals {
 
     /** 변동성 수축(볼린저 < 켈트너) 해제 + 종가가 중심선 위면 진입. 같은 날 진입이 있으면 청산은 지운다. */
     private fun donchianSqueeze(close: Series, c: Map<String, Any?>): Pair<BoolSeries, BoolSeries> {
-        val period = c.i("period", 20)
-        val bb = c.d("bb_mult", 1.0)
-        val kc = c.d("kc_mult", 1.3)
+        val period = c.i("period")
+        val bb = c.d("bb_mult")
+        val kc = c.d("kc_mult")
         if (period < 3) throw SignalConfigError("Donchian 스퀴즈 period 는 3 이상이어야 합니다.")
         if (bb <= 0 || kc <= 0) throw SignalConfigError("Donchian 스퀴즈 bb_mult/kc_mult 는 0 보다 커야 합니다.")
         val r = close.diff()
@@ -193,9 +220,9 @@ object Signals {
         data.require("high", "low", "close")
         val high = data.high!!
         val close = data.close
-        val period = c.i("period", 22)
-        val atrPeriod = c.i("atr_period", 22)
-        val k = c.d("k", 3.0)
+        val period = c.i("period")
+        val atrPeriod = c.i("atr_period")
+        val k = c.d("k")
         if (period < 1 || atrPeriod < 1) throw SignalConfigError("ATR 트레일링 period/atr_period 는 1 이상이어야 합니다.")
         if (k <= 0) throw SignalConfigError("ATR 트레일링 k 는 0 보다 커야 합니다.")
         val upper = high.rolling(period, period).max().shift(1)
@@ -208,7 +235,7 @@ object Signals {
     private fun volatilityBreakout(data: PriceData, c: Map<String, Any?>): Pair<BoolSeries, BoolSeries> {
         data.require("open", "high", "low", "close")
         val high = data.high!!
-        val k = c.d("k", 0.5)
+        val k = c.d("k")
         if (k <= 0) throw SignalConfigError("변동성 돌파 k 는 0 보다 커야 합니다.")
         val prevRange = high.shift(1) - data.low!!.shift(1)
         val entries = (high ge (data.open!! + prevRange * k)).where(prevRange.notNa(), false)
@@ -219,9 +246,9 @@ object Signals {
     private fun keltner(data: PriceData, c: Map<String, Any?>): Pair<BoolSeries, BoolSeries> {
         data.require("high", "low", "close")
         val close = data.close
-        val emaPeriod = c.i("ema_period", 20)
-        val atrPeriod = c.i("atr_period", 10)
-        val mult = c.d("mult", 2.0)
+        val emaPeriod = c.i("ema_period")
+        val atrPeriod = c.i("atr_period")
+        val mult = c.d("mult")
         if (emaPeriod < 1 || atrPeriod < 1) throw SignalConfigError("켈트너 ema_period/atr_period 는 1 이상이어야 합니다.")
         if (mult <= 0) throw SignalConfigError("켈트너 mult 는 0 보다 커야 합니다.")
         val mid = ema(close, emaPeriod)
@@ -239,10 +266,10 @@ object Signals {
 
     private fun stochastic(data: PriceData, c: Map<String, Any?>): Pair<BoolSeries, BoolSeries> {
         data.require("high", "low", "close")
-        val kPeriod = c.i("k_period", 14)
-        val dPeriod = c.i("d_period", 3)
-        val lower = c.d("lower", 20.0)
-        val upper = c.d("upper", 80.0)
+        val kPeriod = c.i("k_period")
+        val dPeriod = c.i("d_period")
+        val lower = c.d("lower")
+        val upper = c.d("upper")
         if (kPeriod < 1 || dPeriod < 1) throw SignalConfigError("스토캐스틱 k_period/d_period 는 1 이상이어야 합니다.")
         if (lower >= upper) throw SignalConfigError("스토캐스틱 lower 는 upper 보다 작아야 합니다.")
         val (k, d) = stochasticKd(data, kPeriod, dPeriod)
@@ -253,7 +280,7 @@ object Signals {
 
     private fun obvTrend(data: PriceData, c: Map<String, Any?>): Pair<BoolSeries, BoolSeries> {
         data.require("close", "volume")
-        val period = c.i("period", 20)
+        val period = c.i("period")
         if (period < 2) throw SignalConfigError("OBV 추세 period 는 2 이상이어야 합니다.")
         val o = obv(data)
         val ma = sma(o, period)
@@ -365,21 +392,21 @@ object Signals {
                 }
                 maxOf(2, longest + 1)
             }
-            "sma_crossover", "ema_crossover" -> c.i("slow", 20)
-            "rsi" -> c.i("period", 14) + 1
-            "macd" -> c.i("slow", 26) + c.i("signal", 9)
-            "bollinger" -> c.i("period", 20)
-            "breakout" -> c.i("period", 20) + 1
-            "momentum" -> c.i("lookback", 120) + 1
-            "zscore" -> c.i("period", 20)
-            "disparity" -> c.i("period", 20)
-            "donchian_squeeze" -> c.i("period", 20) + 2
-            "trix" -> 3 * c.i("period", 15) + c.i("signal_period", 9)
-            "atr_trailing" -> maxOf(c.i("period", 22), c.i("atr_period", 22)) + 1
+            "sma_crossover", "ema_crossover" -> c.i("slow", 20) // 원본도 ema 기본값(26)이 아닌 20 — 보존(migration-notes)
+            "rsi" -> c.i("period") + 1
+            "macd" -> c.i("slow") + c.i("signal")
+            "bollinger" -> c.i("period")
+            "breakout" -> c.i("period") + 1
+            "momentum" -> c.i("lookback") + 1
+            "zscore" -> c.i("period")
+            "disparity" -> c.i("period")
+            "donchian_squeeze" -> c.i("period") + 2
+            "trix" -> 3 * c.i("period") + c.i("signal_period")
+            "atr_trailing" -> maxOf(c.i("period"), c.i("atr_period")) + 1
             "volatility_breakout" -> 2
-            "keltner" -> maxOf(c.i("ema_period", 20), c.i("atr_period", 10))
-            "stochastic" -> c.i("k_period", 14) + c.i("d_period", 3)
-            "obv_trend" -> c.i("period", 20) + 1
+            "keltner" -> maxOf(c.i("ema_period"), c.i("atr_period"))
+            "stochastic" -> c.i("k_period") + c.i("d_period")
+            "obv_trend" -> c.i("period") + 1
             else -> throw SignalConfigError("알 수 없는 전략 유형: $type")
         }
     }
@@ -418,8 +445,8 @@ object Signals {
             "sma_crossover", "ema_crossover" -> {
                 val isSma = type == "sma_crossover"
                 val label = if (isSma) "SMA" else "EMA"
-                val fast = c.i("fast", if (isSma) 5 else 12)
-                val slow = c.i("slow", if (isSma) 20 else 26)
+                val fast = c.i("fast")
+                val slow = c.i("slow")
                 val ma: (Series, Int) -> Series = if (isSma) ::sma else ::ema
                 val f = ma(close, fast).last()
                 val s = ma(close, slow).last()
@@ -427,93 +454,93 @@ object Signals {
                 else "데드크로스: 단기 $label$fast(${fmt(f)})가 장기 $label$slow(${fmt(s)})를 하향 이탈"
             }
             "rsi" -> {
-                val period = c.i("period", 14)
+                val period = c.i("period")
                 val r = rsi(close, period).last()
-                if (buy) "RSI($period) ${fmt(r)}가 과매도선 ${fmt(c.d("lower", 30.0))}를 상향 복귀(매수)"
-                else "RSI($period) ${fmt(r)}가 과매수선 ${fmt(c.d("upper", 70.0))}를 하향 이탈(매도)"
+                if (buy) "RSI($period) ${fmt(r)}가 과매도선 ${fmt(c.d("lower"))}를 상향 복귀(매수)"
+                else "RSI($period) ${fmt(r)}가 과매수선 ${fmt(c.d("upper"))}를 하향 이탈(매도)"
             }
             "macd" -> {
-                val fast = c.i("fast", 12)
-                val slow = c.i("slow", 26)
-                val signal = c.i("signal", 9)
+                val fast = c.i("fast")
+                val slow = c.i("slow")
+                val signal = c.i("signal")
                 val (ml, sl) = macd(close, fast, slow, signal)
                 "MACD($fast,$slow,$signal) 선 ${fmt(ml.last())}가 시그널선 ${fmt(sl.last())}를 ${dir()}(${bs()})"
             }
             "bollinger" -> {
-                val period = c.i("period", 20)
-                val k = c.d("num_std", 2.0)
+                val period = c.i("period")
+                val k = c.d("num_std")
                 val band = sma(close, period).last() + (if (!buy) k else -k) * close.rolling(period, period).std(ddof = 0).last()
                 if (buy) "종가 ${fmt(px)}가 볼린저 하단밴드 ${fmt(band)}(−${pyFloat(k)}σ)를 상향 복귀(매수)"
                 else "종가 ${fmt(px)}가 볼린저 상단밴드 ${fmt(band)}(+${pyFloat(k)}σ)를 하향 이탈(매도)"
             }
             "breakout" -> {
-                val period = c.i("period", 20)
+                val period = c.i("period")
                 if (buy) "종가 ${fmt(px)}가 직전 ${period}봉 최고가 ${fmt(close.rolling(period, period).max().shift(1).last())}를 상향 돌파(매수)"
                 else "종가 ${fmt(px)}가 직전 ${period}봉 최저가 ${fmt(close.rolling(period, period).min().shift(1).last())}를 하향 돌파(매도)"
             }
             "momentum" -> {
-                val lookback = c.i("lookback", 120)
+                val lookback = c.i("lookback")
                 val mom = (close / close.shift(lookback) - 1.0).last() * 100
                 if (buy) "${lookback}봉 모멘텀 ${fmt(mom)}%가 0%를 상향 돌파(추세 양전, 매수)"
                 else "${lookback}봉 모멘텀 ${fmt(mom)}%가 0%를 하향 돌파(추세 음전, 매도)"
             }
             "zscore" -> {
-                val period = c.i("period", 20)
+                val period = c.i("period")
                 val z = ((close - sma(close, period)) / close.rolling(period, period).std()).last()
-                if (buy) "z-score ${fmt(z)}가 저평가 임계 −${fmt(c.d("entry", 2.0))}를 상향 복귀(평균회귀 매수)"
+                if (buy) "z-score ${fmt(z)}가 저평가 임계 −${fmt(c.d("entry"))}를 상향 복귀(평균회귀 매수)"
                 else "z-score ${fmt(z)}가 평균선 0을 상향 돌파(회귀 완료, 매도)"
             }
             "disparity" -> {
-                val period = c.i("period", 20)
+                val period = c.i("period")
                 val disp = (close * 100.0 / sma(close, period)).last()
-                if (buy) "이격도(종가/SMA$period) ${fmt(disp)}%가 하한 ${fmt(c.d("lower", 95.0))}%를 상향 복귀(매수)"
-                else "이격도(종가/SMA$period) ${fmt(disp)}%가 상한 ${fmt(c.d("upper", 105.0))}%를 하향 이탈(매도)"
+                if (buy) "이격도(종가/SMA$period) ${fmt(disp)}%가 하한 ${fmt(c.d("lower"))}%를 상향 복귀(매수)"
+                else "이격도(종가/SMA$period) ${fmt(disp)}%가 상한 ${fmt(c.d("upper"))}%를 하향 이탈(매도)"
             }
             "donchian_squeeze" -> {
-                val period = c.i("period", 20)
+                val period = c.i("period")
                 val mid = sma(close, period).last()
                 if (buy) "변동성 스퀴즈 해제 & 종가 ${fmt(px)}가 중심선 SMA$period ${fmt(mid)} 위(추세 진입 매수)"
                 else "종가 ${fmt(px)}가 중심선 SMA$period ${fmt(mid)}를 하향 돌파(매도)"
             }
             "trix" -> {
-                val (t, s) = trix(close, c.i("period", 15), c.i("signal_period", 9))
+                val (t, s) = trix(close, c.i("period"), c.i("signal_period"))
                 "TRIX ${fmt(t.last(), 4)}가 시그널선 ${fmt(s.last(), 4)}를 ${dir()}(${bs()})"
             }
             "atr_trailing" -> {
                 val high = data.high!!
-                val period = c.i("period", 22)
-                val k = c.d("k", 3.0)
+                val period = c.i("period")
+                val k = c.d("k")
                 if (buy) {
                     "종가 ${fmt(px)}가 ${period}봉 채널 상단 ${fmt(high.rolling(period, period).max().shift(1).last())}를 상향 돌파(추세 매수)"
                 } else {
-                    val chand = high.rolling(period, period).max().last() - k * atr(high, data.low!!, close, c.i("atr_period", 22)).last()
+                    val chand = high.rolling(period, period).max().last() - k * atr(high, data.low!!, close, c.i("atr_period")).last()
                     "종가 ${fmt(px)}가 샹들리에 청산선 ${fmt(chand)}(고점−${pyFloat(k)}×ATR)을 하향 돌파(매도)"
                 }
             }
             "volatility_breakout" -> {
-                val k = c.d("k", 0.5)
+                val k = c.d("k")
                 val prevRange = (data.high!!.shift(1) - data.low!!.shift(1)).last()
                 val target = data.open!!.last() + k * prevRange
                 if (buy) "당일 고가가 변동성 돌파 목표가 ${fmt(target)}(시가+${pyFloat(k)}×전일변동폭 ${fmt(prevRange)})를 상향 돌파(매수)"
                 else "변동성 돌파 진입 다음 봉 — 당일 종가 청산 규약(매도)"
             }
             "keltner" -> {
-                val emaPeriod = c.i("ema_period", 20)
-                val mult = c.d("mult", 2.0)
+                val emaPeriod = c.i("ema_period")
+                val mult = c.d("mult")
                 val mid = ema(close, emaPeriod)
                 if (buy) {
-                    val upper = mid.last() + mult * atr(data.high!!, data.low!!, close, c.i("atr_period", 10)).last()
+                    val upper = mid.last() + mult * atr(data.high!!, data.low!!, close, c.i("atr_period")).last()
                     "종가 ${fmt(px)}가 켈트너 채널 상단 ${fmt(upper)}(EMA+${pyFloat(mult)}×ATR)를 상향 돌파(매수)"
                 } else {
                     "종가 ${fmt(px)}가 켈트너 중심선 EMA$emaPeriod ${fmt(mid.last())}를 하향 돌파(매도)"
                 }
             }
             "stochastic" -> {
-                val (k, d) = stochasticKd(data, c.i("k_period", 14), c.i("d_period", 3))
-                if (buy) "스토캐스틱 과매도(%K ${fmt(k.last())} < ${fmt(c.d("lower", 20.0))})에서 %K가 %D ${fmt(d.last())}를 상향 교차(매수)"
-                else "스토캐스틱 과매수(%K ${fmt(k.last())} > ${fmt(c.d("upper", 80.0))})에서 %K가 %D ${fmt(d.last())}를 하향 교차(매도)"
+                val (k, d) = stochasticKd(data, c.i("k_period"), c.i("d_period"))
+                if (buy) "스토캐스틱 과매도(%K ${fmt(k.last())} < ${fmt(c.d("lower"))})에서 %K가 %D ${fmt(d.last())}를 상향 교차(매수)"
+                else "스토캐스틱 과매수(%K ${fmt(k.last())} > ${fmt(c.d("upper"))})에서 %K가 %D ${fmt(d.last())}를 하향 교차(매도)"
             }
-            "obv_trend" -> "OBV(거래량 누적)가 ${c.i("period", 20)}봉 이동평균을 ${dir()}(${bs()})"
+            "obv_trend" -> "OBV(거래량 누적)가 ${c.i("period")}봉 이동평균을 ${dir()}(${bs()})"
             "custom" -> {
                 val conds = conditions(if (buy) c["entry"] else c["exit"]).map { "${operandDesc(asMap(it["left"]))} ${it["op"]} ${operandDesc(asMap(it["right"]))}" }.toList()
                 val joined = conds.take(4).joinToString(", ") + if (conds.size > 4) "…" else ""

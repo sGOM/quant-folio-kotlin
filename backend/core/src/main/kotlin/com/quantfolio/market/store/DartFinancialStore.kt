@@ -1,18 +1,19 @@
 package com.quantfolio.market.store
 
+import com.quantfolio.common.MarketClock
+import java.time.Clock
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.readValue
 import java.time.LocalDate
-import java.time.ZoneOffset
 
 /**
  * OpenDART 재무제표 원본(계정 목록) 저장. 정정공시가 접수일 이후에도 바뀔 수 있어
  * "접수일 + 90일"이 지나야 확정으로 본다.
  */
 @Component
-class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate) {
+class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate, private val clock: Clock) {
     private val json = JsonMapper.builder().build()
 
     fun write(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String, accounts: List<Map<String, Any?>>) {
@@ -47,7 +48,7 @@ class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate) {
     ) { rs, _ ->
         val confirmed = rs.getObject(2, LocalDate::class.java)
         // 원본 동작 보존: date.today() = 컨테이너(UTC) 날짜 기준(docs/migration-notes.md).
-        val final = confirmed != null && !LocalDate.now(ZoneOffset.UTC).isBefore(confirmed)
+        val final = confirmed != null && !MarketClock.todayUtcLegacy(clock).isBefore(confirmed)
         json.readValue<List<Map<String, Any?>>>(rs.getString(1)) to final
     }.firstOrNull()
 

@@ -36,6 +36,9 @@ typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<St
  */
 object PortfolioBacktest {
     private val log = LoggerFactory.getLogger(javaClass)
+    // KRX 가격제한폭 ±30%(전일 종가 대비)
+    private const val LIMIT_DOWN = 0.7
+    private const val LIMIT_UP = 1.3
     private val PANIC_RANK = mapOf("normal" to 0, "caution" to 1, "warning" to 2, "panic" to 3)
 
     // KRX 호가단위(2023-01-25 개정): (가격 미만 상한, 호가단위)
@@ -66,6 +69,119 @@ object PortfolioBacktest {
         )
     }
 
+    /**
+     * 패닉 오버레이 상태기계: IDLE →(패닉 수준 도달) ARMED →(반등 확인) 진입 →(칼날·익절·보유기한) IDLE.
+     * 진입은 event_only 면 CONFIRMED 한 단계, 아니면 CONFIRMED_HALF →(MA 회복) CONFIRMED_FULL 로 증액.
+     * `i` 는 시뮬레이션 일 순번(기한 계산), `di` 는 패널 행 번호(시계열 조회).
+     */
+    private class PanicOverlay(
+        val params: PanicParams,
+        private val level: Array<String?>,
+        private val hard: BooleanArray,
+        private val close: Series,
+        private val low: Series,
+    ) {
+        private enum class State { IDLE, ARMED, CONFIRMED_HALF, CONFIRMED_FULL, CONFIRMED }
+
+        private val prevClose = close.shift(1)
+        private val ma = close.rolling(params.maRecovery, maxOf(5, params.maRecovery / 2)).mean()
+        private var state = State.IDLE
+        private var armDeadline = -1
+        private var capitClose: Double? = null
+        private var capitLow: Double? = null
+        private var capitDrop: Double? = null
+        private var confirmIdx = -1
+        var numEvents = 0
+            private set
+
+        /** 진입해 있는 동안 — 레짐 청산·정기 리밸런싱을 억제한다. */
+        val holding get() = state == State.CONFIRMED_HALF || state == State.CONFIRMED_FULL || state == State.CONFIRMED
+
+        fun reset() {
+            state = State.IDLE
+            capitClose = null
+            capitLow = null
+            capitDrop = null
+            confirmIdx = -1
+        }
+
+        /** 하루치 전이. 매매가 필요하면 결정을, 아니면 null. `targets` 는 노출도 → 목표비중(필요할 때만 호출). */
+        fun step(i: Int, di: Int, d: LocalDate, riskOff: Boolean, journal: Journal, targets: (Double) -> Map<String, Double>): Decision? {
+            val p = params
+            val lv = level[di] ?: "nan"
+            val c = close[di]
+            val prev = prevClose[di]
+            val hasClose = !c.isNaN()
+            val hasPrev = !prev.isNaN()
+            val cc = capitClose
+            val cl = capitLow
+            val cd = capitDrop
+            when (state) {
+                State.IDLE -> if (hasClose && ((PANIC_RANK[lv] ?: 0) >= p.armRank || hard[di])) {
+                    state = State.ARMED
+                    armDeadline = i + p.armWindow
+                    capitClose = c
+                    capitLow = low[di].takeIf { !it.isNaN() } ?: c
+                    capitDrop = if (hasPrev) prev - c else null
+                    journal.marker(d, "panic_arm", "level" to lv)
+                }
+                State.ARMED -> if (i > armDeadline) {
+                    reset()
+                    journal.marker(d, "panic_arm_timeout")
+                } else if (hasClose && hasPrev && cc != null && c > cc && c > prev) {
+                    val exposure = if (p.eventOnly) p.panicExposure else p.baseExposure + p.scaleInConfirm * (p.panicExposure - p.baseExposure)
+                    val decision = Decision.rebalance("panic_confirm", targets(exposure))
+                    state = if (p.eventOnly) State.CONFIRMED else State.CONFIRMED_HALF
+                    confirmIdx = i
+                    numEvents++
+                    journal.marker(d, "panic_confirm")
+                    return decision
+                }
+                State.CONFIRMED_HALF, State.CONFIRMED_FULL, State.CONFIRMED -> {
+                    val exitReason = when {
+                        hasClose && cl != null && c <= cl * (1.0 - p.knifeStop) -> "panic_exit_knife"
+                        hasClose && cc != null && cd != null && cd > 0 && c >= cc + p.profitReclaim * cd -> "panic_exit_profit"
+                        confirmIdx >= 0 && i - confirmIdx >= p.holdDays -> "panic_exit_hold"
+                        else -> null
+                    }
+                    if (exitReason != null) {
+                        val decision = if (p.eventOnly || riskOff) Decision.liquidate(exitReason) else Decision.rebalance(exitReason, targets(p.baseExposure))
+                        reset()
+                        return decision
+                    }
+                    if (!p.eventOnly && state == State.CONFIRMED_HALF && hasClose && !ma[di].isNaN() && c > ma[di]) {
+                        val decision = Decision.rebalance("panic_scale_full", targets(p.panicExposure))
+                        state = State.CONFIRMED_FULL
+                        journal.marker(d, "panic_scale_full")
+                        return decision
+                    }
+                }
+            }
+            return null
+        }
+
+        companion object {
+            /** 패닉 일지 → 날짜별 시계열(수준·하드트리거는 마지막 관측 유지, 종가·저가는 ffill). 유효 종가가 없으면 null. */
+            fun build(dates: List<LocalDate>, panic: List<PanicDay>?, params: PanicParams): PanicOverlay? {
+                if (panic.isNullOrEmpty()) return null
+                val byDate = panic.associateBy { it.date }
+                val lv = arrayOfNulls<String>(dates.size)
+                val hd = BooleanArray(dates.size)
+                var lastLv: String? = null
+                var lastHd = false
+                dates.forEachIndexed { i, d ->
+                    byDate[d]?.let { lastLv = it.level; lastHd = it.hardTrigger }
+                    lv[i] = lastLv
+                    hd[i] = lastHd
+                }
+                val close = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.close ?: Double.NaN }).ffill()
+                if (close.values.all { it.isNaN() }) return null
+                val low = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.low ?: Double.NaN }).ffill()
+                return PanicOverlay(params, lv, hd, close, low)
+            }
+        }
+    }
+
     /** 각 주기(일/주/월/분기)에서 지정 임계(weekday·dom, 달 길이로 클램프) 이상인 첫 거래일. */
     fun rebalanceDates(dates: List<LocalDate>, cfg: Map<String, Any?>): Set<LocalDate> {
         val cadence = Cfg.get(cfg, "cadence", "monthly").toString()
@@ -87,7 +203,7 @@ object PortfolioBacktest {
     /** 기준지수 vs 이동평균 히스테리시스 레짐(on=참여). MA 미확정 구간은 참여. 지수가 없으면 null. */
     fun regimeOnFlags(dates: List<LocalDate>, regime: Series?, maPeriod: Int, exitBuffer: Double = 0.0, reentryBuffer: Double = 0.0): BooleanArray? {
         if (regime == null || regime.size == 0) return null
-        val rs = align(regime, dates)
+        val rs = regime.reindex(dates).ffill()
         val ma = rs.rolling(maPeriod, maxOf(5, maPeriod / 2)).mean()
         val exitB = maxOf(0.0, exitBuffer)
         val reB = maxOf(0.0, reentryBuffer)
@@ -109,13 +225,6 @@ object PortfolioBacktest {
         }
     }
 
-    /** pandas `s.reindex(dates).ffill()` — 같은 날짜 값만 가져온 뒤 앞값 채움. */
-    private fun align(s: Series, dates: List<LocalDate>): Series {
-        val byDate = HashMap<LocalDate, Double>()
-        s.index.forEachIndexed { i, d -> byDate[d] = s.values[i] }
-        return Series(dates, DoubleArray(dates.size) { byDate[dates[it]] ?: Double.NaN }).ffill()
-    }
-
     private fun factorFrameOf(hist: Panel, codes: List<String>): MutableMap<String, DoubleArray> {
         val cols = linkedMapOf<String, DoubleArray>()
         fun put(k: String, i: Int, v: Double?) {
@@ -133,15 +242,10 @@ object PortfolioBacktest {
                 val hi = c.values.takeLast(252).max()
                 if (hi > 0) put("high_52w_ratio", i, last / hi)
             }
-            put("vol_ann", i, MetricsCommon.computeVolAnn(tail(c, 253)))
-            put("mdd_252", i, MetricsCommon.computeMdd(tail(c, 252)))
+            put("vol_ann", i, MetricsCommon.computeVolAnn(c.tail(253)))
+            put("mdd_252", i, MetricsCommon.computeMdd(c.tail(252)))
         }
         return cols
-    }
-
-    private fun tail(s: Series, n: Int): Series {
-        val from = maxOf(0, s.size - n)
-        return Series(s.index.subList(from, s.size), s.values.copyOfRange(from, s.size))
     }
 
     /** 후보풀에서 d 시점 상대강도 상위 pick(이력이 lookback 미만인 종목은 자연 제외). 실거래 러너와 공유. */
@@ -186,7 +290,7 @@ object PortfolioBacktest {
             var sector: List<String?>? = null
             val fdf = ctx.fundamentals?.let { runCatching { it(d, universe) }.getOrNull() }
             if (!fdf.isNullOrEmpty()) {
-                for (col in listOf("PER", "PBR", "DIV", "roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround", "market_cap", "flow_norm", "resid_mom", "pead_sue")) {
+                for (col in FactorScores.FUNDAMENTAL_COLS) {
                     if (fdf.values.none { col in it }) continue
                     cols[col] = DoubleArray(universe.size) { (fdf[universe[it]]?.get(col) as? Number)?.toDouble() ?: Double.NaN }
                 }
@@ -212,7 +316,20 @@ object PortfolioBacktest {
     private class Exec(
         val capital: Double, val driftBand: Double, val fees: Double, val tax: Double, val slipBase: Double,
         val integerShares: Boolean, val advCapFrac: Double, val priceLimitModel: Boolean,
-    )
+    ) {
+        companion object {
+            fun from(config: Map<String, Any?>) = Exec(
+                capital = Cfg.num(Cfg.get(config, "capital", 10_000_000)),
+                driftBand = Cfg.num(Cfg.get(config, "drift_band_pct", 0.05)),
+                fees = Cfg.num(Cfg.get(config, "fees", 0.00015)),
+                tax = Cfg.num(Cfg.get(config, "tax", 0.0020)),
+                slipBase = maxOf(0.0, Cfg.num(Cfg.get(config, "slippage_bps", 5.0).takeIf { Cfg.truthy(it) } ?: 0.0) / 10_000.0),
+                integerShares = Cfg.truthy(Cfg.get(config, "integer_shares", true)),
+                advCapFrac = Cfg.num(Cfg.or(config, "adv_participation_cap", 0.0)),
+                priceLimitModel = Cfg.truthy(Cfg.get(config, "price_limit_model", false)),
+            )
+        }
+    }
 
     private class Book(var cash: Double) {
         val value = LinkedHashMap<String, Double>()
@@ -254,8 +371,8 @@ object PortfolioBacktest {
             val cur = prices[sym]
             val prev = prevPrices[sym]
             if (cur == null || cur.isNaN() || prev == null || prev.isNaN() || prev <= 0) return false
-            val lower = roundToTick(prev * 0.7).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
-            val upper = roundToTick(prev * 1.3).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
+            val lower = roundToTick(prev * LIMIT_DOWN).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
+            val upper = roundToTick(prev * LIMIT_UP).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
             return if (side == "buy") cur >= upper - 1e-6 else cur <= lower + 1e-6
         }
         var executed = 0.0
@@ -264,7 +381,7 @@ object PortfolioBacktest {
         var buys = mutableListOf<Pair<String, Double>>()
         var turnover = 0.0
         if (liquidate) {
-            for ((sym, v) in book.value) if (v > 1e-12) {
+            for ((sym, v) in book.value) if (v > EPS) {
                 sells += sym to v
                 turnover += v / equity
             }
@@ -273,8 +390,8 @@ object PortfolioBacktest {
                 val curVal = book.value[sym] ?: 0.0
                 val tw = targets[sym] ?: 0.0
                 val dev = tw - curVal / equity
-                val isNew = curVal <= 1e-12 && tw > 0.0
-                val isExit = tw <= 0.0 && curVal > 1e-12
+                val isNew = curVal <= EPS && tw > 0.0
+                val isExit = tw <= 0.0 && curVal > EPS
                 if (!(isNew || isExit) && kotlin.math.abs(dev) <= ex.driftBand) continue
                 turnover += kotlin.math.abs(dev)
                 if (dev < 0) sells += sym to -dev * equity else buys += sym to dev * equity
@@ -298,14 +415,14 @@ object PortfolioBacktest {
             val fullExit = amt >= curVal - 1e-9
             if (ex.integerShares && !fullExit) amt = floorToShares(amt, sym, fill, ex.capital)
             amt = minOf(amt, curVal)
-            if (amt <= 1e-12) continue
+            if (amt <= EPS) continue
             cash += amt * (1.0 - ex.fees - ex.tax - slip(sym))
             val frac = if (curVal > 0) amt / curVal else 0.0
             val costPortion = (book.cost[sym] ?: 0.0) * frac
-            val posRet = if (costPortion > 1e-12) amt / costPortion - 1.0 else null
+            val posRet = if (costPortion > EPS) amt / costPortion - 1.0 else null
             book.value[sym] = curVal - amt
             book.cost[sym] = (book.cost[sym] ?: 0.0) - costPortion
-            if (book.value.getValue(sym) <= 1e-12) {
+            if (book.value.getValue(sym) <= EPS) {
                 book.value.remove(sym)
                 book.cost.remove(sym)
             }
@@ -318,7 +435,7 @@ object PortfolioBacktest {
         val k = if (totalBuyCost > cash && totalBuyCost > 0) cash / totalBuyCost else 1.0
         for ((sym, a0) in bs) {
             val amt = a0 * k
-            if (amt <= 1e-12) continue
+            if (amt <= EPS) continue
             cash -= amt * (1.0 + ex.fees + slip(sym))
             book.value[sym] = (book.value[sym] ?: 0.0) + amt
             book.cost[sym] = (book.cost[sym] ?: 0.0) + amt
@@ -329,7 +446,52 @@ object PortfolioBacktest {
         return turnover to executed
     }
 
-    private data class Decision(val kind: String, val reason: String, val targets: Map<String, Double> = emptyMap())
+    /**
+     * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없고 그 종목의 마지막 유효 관측 이후면(terminal gap)
+     * 상장폐지로 보고 회수율만 현금화한다 — 중간 결측(interior gap)은 평가액을 동결.
+     */
+    private fun markToMarket(
+        book: Book, prevPrices: Map<String, Double>, prices: Map<String, Double>, d: LocalDate,
+        lastValid: Map<String, LocalDate>, delistRecovery: Double, journal: Journal,
+    ) {
+        for (sym in book.value.keys.toList()) {
+            val p0 = prevPrices[sym]
+            val p1 = prices[sym]
+            if (p1 != null && !p1.isNaN() && p0 != null && !p0.isNaN() && p0 > 0) {
+                book.value[sym] = book.value.getValue(sym) * (p1 / p0)
+            } else if (p1 == null || p1.isNaN()) {
+                val lv = lastValid[sym]
+                if (lv != null && d.isAfter(lv)) {
+                    book.cash += book.value.remove(sym)!! * delistRecovery
+                    book.cost.remove(sym)
+                    journal.marker(d, "delist", "symbol" to sym)
+                }
+            }
+        }
+    }
+
+    private enum class Action { REBALANCE, LIQUIDATE }
+
+    /** 하루치 매매 결정. 청산은 목표비중 없이 보유 전량 매도. */
+    private data class Decision(val action: Action, val reason: String, val targets: Map<String, Double> = emptyMap()) {
+        companion object {
+            fun rebalance(reason: String, targets: Map<String, Double>) = Decision(Action.REBALANCE, reason, targets)
+            fun liquidate(reason: String) = Decision(Action.LIQUIDATE, reason)
+        }
+    }
+
+    /** 일별 루프가 쌓는 기록 — 성과지표의 입력이자 결과 그대로의 일부. */
+    private class Journal {
+        val equities = mutableListOf<Double>()
+        val equityCurve = mutableListOf<Map<String, Any?>>()
+        val markers = mutableListOf<Map<String, Any?>>()
+        val turnovers = mutableListOf<Double>()
+        val turnoversActual = mutableListOf<Double>()
+
+        fun marker(d: LocalDate, type: String, vararg extra: Pair<String, Any?>) {
+            markers += linkedMapOf<String, Any?>("t" to iso(d), "type" to type).apply { putAll(extra) }
+        }
+    }
 
     fun run(
         closePanel: Panel,
@@ -346,7 +508,8 @@ object PortfolioBacktest {
         val symbols = closePanel.symbols
         val raw = symbols.associateWith { closePanel.column(it) }
         val lastValid = raw.mapNotNull { (s, c) -> c.values.indexOfLast { !it.isNaN() }.takeIf { it >= 0 }?.let { s to c.index[it] } }.toMap()
-        val gap = Cfg.int(Cfg.or(config, "delisting_gap_days", 0).let { if (config.containsKey("delisting_gap_days")) it else 10 })
+        // 원본 `int(config.get("delisting_gap_days", 10) or 0)` — 키가 없으면 10, 있는데 None·0·"" 이면 0(ffill 무제한)
+        val gap = Cfg.int(if (config.containsKey("delisting_gap_days")) Cfg.or(config, "delisting_gap_days", 0) else 10)
         val delistRecovery = Cfg.num(Cfg.get(config, "delisting_recovery", 0.9)).coerceIn(0.0, 1.0)
         val dates = closePanel.dates
         val panel = Panel(dates, symbols, raw.mapValues { it.value.ffill(if (gap > 0) gap else null).values })
@@ -355,16 +518,7 @@ object PortfolioBacktest {
         if (simDates.size < 2) throw IllegalArgumentException("시뮬레이션 구간의 거래일이 부족합니다(최소 2일).")
         val dateIdx = dates.withIndex().associate { (i, d) -> d to i }
 
-        val ex = Exec(
-            capital = Cfg.num(Cfg.get(config, "capital", 10_000_000)),
-            driftBand = Cfg.num(Cfg.get(config, "drift_band_pct", 0.05)),
-            fees = Cfg.num(Cfg.get(config, "fees", 0.00015)),
-            tax = Cfg.num(Cfg.get(config, "tax", 0.0020)),
-            slipBase = maxOf(0.0, Cfg.num(Cfg.get(config, "slippage_bps", 5.0).takeIf { Cfg.truthy(it) } ?: 0.0) / 10_000.0),
-            integerShares = Cfg.truthy(Cfg.get(config, "integer_shares", true)),
-            advCapFrac = Cfg.num(Cfg.or(config, "adv_participation_cap", 0.0)),
-            priceLimitModel = Cfg.truthy(Cfg.get(config, "price_limit_model", false)),
-        )
+        val ex = Exec.from(config)
         val rebalDates = rebalanceDates(simDates, config)
         val attribution = Cfg.map(config, "selection")["method"]?.toString() == "score"
         val snapshots = if (attribution) mutableListOf<ScoreSnapshot>() else null
@@ -379,7 +533,7 @@ object PortfolioBacktest {
                 null
             }
             else -> symbols.associateWith { s ->
-                val vol = if (volume.hasSymbol(s)) align0(volume.column(s), dates) else DoubleArray(dates.size)
+                val vol = if (volume.hasSymbol(s)) volume.column(s).reindex(dates).fillNa(0.0).values else DoubleArray(dates.size)
                 val c = panel.column(s)
                 Series(dates, DoubleArray(dates.size) { vol[it] * c[it] }).rolling(20, 10).mean()
             }
@@ -403,44 +557,10 @@ object PortfolioBacktest {
         }
 
         val po = Cfg.map(config, "panic_overlay")
-        var pLevel: Array<String?>? = null
-        var pHard: BooleanArray? = null
-        var pClose: Series? = null
-        var pLow: Series? = null
-        if (Cfg.truthy(po["enabled"])) {
-            if (!panic.isNullOrEmpty()) {
-                val byDate = panic.associateBy { it.date }
-                val lv = arrayOfNulls<String>(dates.size)
-                val hd = BooleanArray(dates.size)
-                var lastLv: String? = null
-                var lastHd = false
-                dates.forEachIndexed { i, d ->
-                    byDate[d]?.let { lastLv = it.level; lastHd = it.hardTrigger }
-                    lv[i] = lastLv
-                    hd[i] = lastHd
-                }
-                val close = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.close ?: Double.NaN }).ffill()
-                if (close.values.any { !it.isNaN() }) {
-                    pLevel = lv
-                    pHard = hd
-                    pClose = close
-                    pLow = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.low ?: Double.NaN }).ffill()
-                }
-            }
-            if (pClose == null) log.warn("패닉 오버레이가 켜져 있으나 유효한 패닉 시계열을 확보하지 못해 오버레이를 적용하지 않는다.")
-        }
-        val panicOn = pClose != null
         val pov = panicParams(po)
-        val panicMa = pClose?.rolling(pov.maRecovery, maxOf(5, pov.maRecovery / 2))?.mean()
-        val panicPrev = pClose?.shift(1)
-
-        var panicState = "idle"
-        var armDeadline = -1
-        var capitClose: Double? = null
-        var capitLow: Double? = null
-        var capitDrop: Double? = null
-        var confirmIdx = -1
-        var numPanicEvents = 0
+        val panicEnabled = Cfg.truthy(po["enabled"])
+        val overlay = if (panicEnabled) PanicOverlay.build(dates, panic, pov) else null
+        if (panicEnabled && overlay == null) log.warn("패닉 오버레이가 켜져 있으나 유효한 패닉 시계열을 확보하지 못해 오버레이를 적용하지 않는다.")
 
         val book = Book(1.0)
         var prevPrices: Map<String, Double>? = null
@@ -449,37 +569,28 @@ object PortfolioBacktest {
         var killed = false
         var killIdx = -1
         var numKills = 0
-        val equities = mutableListOf<Double>()
-        val equityCurve = mutableListOf<Map<String, Any?>>()
-        val markers = mutableListOf<Map<String, Any?>>()
-        val turnovers = mutableListOf<Double>()
-        val turnoversActual = mutableListOf<Double>()
+        val journal = Journal()
         var pending: Decision? = null
 
+        /** 결정을 d 의 가격으로 체결. 청산은 보유 전량, 리밸런싱은 가격이 있는 목표 종목만. */
         fun runDecision(dec: Decision, prices: Map<String, Double>, d: LocalDate, limitRef: Map<String, Double>?) {
+            val liquidate = dec.action == Action.LIQUIDATE
+            val targets = if (liquidate) emptyMap() else dec.targets.filter { (s, _) -> prices[s]?.let { !it.isNaN() && it > 0 } == true }
+            if (if (liquidate) book.value.isEmpty() else targets.isEmpty()) return
             val equity = book.equity()
             val advToday = adv?.let { a -> val i = dateIdx.getValue(d); a.mapValues { it.value[i] } }
-            val hist = panel.upTo(d)
-            if (dec.kind == "liquidate") {
-                if (book.value.isEmpty()) return
-                val slipMap = Slippage.volMap(hist, book.value.keys.toList(), ex.slipBase, slipVolScale)
-                val (turnover, executed) = applyRebalance(book, emptyMap(), equity, prices, d, ex, true, dec.reason, slipMap, advToday, limitRef)
-                if (turnover > 0) {
-                    turnovers += turnover
-                    markers += linkedMapOf("t" to iso(d), "type" to if (dec.reason == "mdd_kill") "mdd_exit" else "regime_exit")
+            val slipSymbols: Collection<String> = if (liquidate) book.value.keys.toList() else targets.keys + book.value.keys
+            val slipMap = Slippage.volMap(panel.upTo(d), slipSymbols, ex.slipBase, slipVolScale)
+            val (turnover, executed) = applyRebalance(book, targets, equity, prices, d, ex, liquidate, dec.reason, slipMap, advToday, limitRef)
+            if (turnover > 0) {
+                journal.turnovers += turnover
+                when {
+                    !liquidate -> journal.marker(d, "rebalance", "holdings" to book.value.size)
+                    dec.reason == "mdd_kill" -> journal.marker(d, "mdd_exit")
+                    else -> journal.marker(d, "regime_exit") // 원본도 패닉 오버레이 청산(panic_exit_*)을 regime_exit 로 표기
                 }
-                if (executed > 0) turnoversActual += executed
-            } else {
-                val targets = dec.targets.filter { (s, _) -> prices[s]?.let { !it.isNaN() && it > 0 } == true }
-                if (targets.isEmpty()) return
-                val slipMap = Slippage.volMap(hist, targets.keys + book.value.keys, ex.slipBase, slipVolScale)
-                val (turnover, executed) = applyRebalance(book, targets, equity, prices, d, ex, false, dec.reason, slipMap, advToday, limitRef)
-                if (turnover > 0) {
-                    turnovers += turnover
-                    markers += linkedMapOf("t" to iso(d), "type" to "rebalance", "holdings" to book.value.size)
-                }
-                if (executed > 0) turnoversActual += executed
             }
+            if (executed > 0) journal.turnoversActual += executed
         }
 
         for ((i, d) in simDates.withIndex()) {
@@ -487,22 +598,7 @@ object PortfolioBacktest {
             val prices = panel.row(d)!!
             val limitRef = prevPrices
             // 1) 마크투마켓 + 상장폐지(terminal gap) 확정
-            if (prevPrices != null && book.value.isNotEmpty()) {
-                for (sym in book.value.keys.toList()) {
-                    val p0 = prevPrices[sym]
-                    val p1 = prices[sym]
-                    if (p1 != null && !p1.isNaN() && p0 != null && !p0.isNaN() && p0 > 0) {
-                        book.value[sym] = book.value.getValue(sym) * (p1 / p0)
-                    } else if (p1 == null || p1.isNaN()) {
-                        val lv = lastValid[sym]
-                        if (lv != null && d.isAfter(lv)) {
-                            book.cash += book.value.remove(sym)!! * delistRecovery
-                            book.cost.remove(sym)
-                            markers += linkedMapOf("t" to iso(d), "type" to "delist", "symbol" to sym)
-                        }
-                    }
-                }
-            }
+            prevPrices?.let { markToMarket(book, it, prices, d, lastValid, delistRecovery, journal) }
             prevPrices = prices
             // 2) 전일 결정의 지연 체결
             pending?.let {
@@ -525,94 +621,46 @@ object PortfolioBacktest {
             var decision: Decision? = null
             val mddTrigger = mddKill != null && !killed && hwm > 0 && curEquity / hwm - 1.0 <= -mddKill
 
-            if (panicOn && !killed && !mddTrigger) {
-                val level = pLevel!![di] ?: "nan"
-                val hard = pHard!![di]
-                val close = pClose!![di]
-                val low = pLow!![di]
-                val prevClose = panicPrev!![di]
-                val ma = panicMa!![di]
-                val hasClose = !close.isNaN()
-                val hasPrev = !prevClose.isNaN()
-                when (panicState) {
-                    "idle" -> if (hasClose && ((PANIC_RANK[level] ?: 0) >= pov.armRank || hard)) {
-                        panicState = "armed"
-                        armDeadline = i + pov.armWindow
-                        capitClose = close
-                        capitLow = if (!low.isNaN()) low else close
-                        capitDrop = if (hasPrev) prevClose - close else null
-                        markers += linkedMapOf("t" to iso(d), "type" to "panic_arm", "level" to level)
-                    }
-                    "armed" -> if (i > armDeadline) {
-                        panicState = "idle"
-                        capitClose = null
-                        capitLow = null
-                        capitDrop = null
-                        markers += linkedMapOf("t" to iso(d), "type" to "panic_arm_timeout")
-                    } else if (hasClose && hasPrev && capitClose != null && close > capitClose!! && close > prevClose) {
-                        val fillExposure = if (pov.eventOnly) pov.panicExposure else pov.baseExposure + pov.scaleInConfirm * (pov.panicExposure - pov.baseExposure)
-                        decision = Decision("rebalance", "panic_confirm", targetsAt(d, ctx, fillExposure))
-                        panicState = if (pov.eventOnly) "confirmed" else "confirmed_half"
-                        confirmIdx = i
-                        numPanicEvents++
-                        markers += linkedMapOf("t" to iso(d), "type" to "panic_confirm")
-                    }
-                    "confirmed_half", "confirmed_full", "confirmed" -> {
-                        val exitReason = when {
-                            hasClose && capitLow != null && close <= capitLow!! * (1.0 - pov.knifeStop) -> "panic_exit_knife"
-                            hasClose && capitClose != null && capitDrop != null && capitDrop!! > 0 && close >= capitClose!! + pov.profitReclaim * capitDrop!! -> "panic_exit_profit"
-                            confirmIdx >= 0 && i - confirmIdx >= pov.holdDays -> "panic_exit_hold"
-                            else -> null
-                        }
-                        if (exitReason != null) {
-                            decision = if (pov.eventOnly || riskOff) Decision("liquidate", exitReason) else Decision("rebalance", exitReason, targetsAt(d, ctx, pov.baseExposure))
-                            panicState = "idle"
-                            capitClose = null
-                            capitLow = null
-                            capitDrop = null
-                            confirmIdx = -1
-                        } else if (!pov.eventOnly && panicState == "confirmed_half" && hasClose && !ma.isNaN() && close > ma) {
-                            decision = Decision("rebalance", "panic_scale_full", targetsAt(d, ctx, pov.panicExposure))
-                            panicState = "confirmed_full"
-                            markers += linkedMapOf("t" to iso(d), "type" to "panic_scale_full")
-                        }
-                    }
-                }
+            if (overlay != null && !killed && !mddTrigger) {
+                decision = overlay.step(i, di, d, riskOff, journal) { exposure -> targetsAt(d, ctx, exposure) }
             }
 
             if (mddTrigger) {
                 killed = true
                 killIdx = i
                 numKills++
-                if (panicOn && panicState != "idle") {
-                    panicState = "idle"
-                    capitClose = null
-                    capitLow = null
-                    capitDrop = null
-                    confirmIdx = -1
-                }
-                if (book.value.isNotEmpty()) decision = Decision("liquidate", "mdd_kill")
-            } else if (decision != null || killed || panicState in setOf("confirmed_half", "confirmed_full", "confirmed")) {
+                overlay?.reset()
+                if (book.value.isNotEmpty()) decision = Decision.liquidate("mdd_kill")
+            } else if (decision != null || killed || overlay?.holding == true) {
                 // 패닉 오버레이 결정 확정 / 쿨다운 대기 / 오버레이 유지(레짐 청산·정기 리밸런싱 억제)
             } else if (riskOff && book.value.isNotEmpty()) {
-                decision = Decision("liquidate", "regime_exit")
+                decision = Decision.liquidate("regime_exit")
             } else if (!riskOff) {
                 val regimeReentry = regimeOn != null && prevRiskOff && book.value.isEmpty()
                 val due = d in rebalDates || regimeReentry || (justRearmed && book.value.isEmpty())
-                if (due && !(panicOn && pov.eventOnly)) {
-                    decision = Decision("rebalance", "rebalance", targetsAt(d, ctx, if (panicOn) pov.baseExposure else 1.0))
+                if (due && overlay?.params?.eventOnly != true) {
+                    decision = Decision.rebalance("rebalance", targetsAt(d, ctx, overlay?.params?.baseExposure ?: 1.0))
                 }
             }
 
             decision?.let { if (defer) pending = it else runDecision(it, prices, d, limitRef) }
             val equityNow = book.equity()
-            equities += equityNow
-            equityCurve += linkedMapOf("t" to iso(d), "v" to Num.safe(equityNow * ex.capital))
+            journal.equities += equityNow
+            journal.equityCurve += linkedMapOf("t" to iso(d), "v" to Num.safe(equityNow * ex.capital))
             prevRiskOff = riskOff
         }
 
-        // ── 성과지표 ──
-        val series = DoubleArray(equities.size + 1) { if (it == 0) 1.0 else equities[it - 1] }
+        return summarize(
+            journal, book, simDates, dates, dateIdx, benchmark, rfAnnual, snapshots, panel, numKills, overlay?.numEvents ?: 0,
+        )
+    }
+
+    /** 일별 기록 → 결과(성과지표·곡선·마커·보유·거래). 키 순서가 응답 계약. */
+    private fun summarize(
+        journal: Journal, book: Book, simDates: List<LocalDate>, dates: List<LocalDate>, dateIdx: Map<LocalDate, Int>,
+        benchmark: Series?, rfAnnual: Double, snapshots: List<ScoreSnapshot>?, panel: Panel, numKills: Int, numPanicEvents: Int,
+    ): Map<String, Any?> {
+        val series = DoubleArray(journal.equities.size + 1) { if (it == 0) 1.0 else journal.equities[it - 1] }
         val rets = DoubleArray(series.size - 1) { series[it + 1] / series[it] - 1.0 }
         val totalReturn = Num.safe(series.last() - 1.0)
         var peak = Double.NEGATIVE_INFINITY
@@ -622,16 +670,16 @@ object PortfolioBacktest {
             mddMin = minOf(mddMin, v / peak - 1.0)
         }
         val benchRets = benchmark?.takeIf { it.size > 0 }?.let { b ->
-            val pct = align(b, dates).pctChange()
+            val pct = b.reindex(dates).ffill().pctChange()
             DoubleArray(simDates.size) { pct[dateIdx.getValue(simDates[it])] }
         }
         val radj = Attribution.riskAdjusted(rets, benchRets, rfAnnual)
         val cagr = if (rets.isNotEmpty() && series.last() > 0) Num.safe(series.last().pow(252.0 / rets.size) - 1.0) else null
-        val denom = maxOf(series.last(), 1e-12)
+        val denom = maxOf(series.last(), EPS)
         val holdings = book.value.entries.sortedByDescending { it.value }
             .associate { (s, v) -> s to BigDecimal(v / denom).setScale(4, RoundingMode.HALF_EVEN).toDouble() }
         val factorIc = if (!snapshots.isNullOrEmpty()) Attribution.factorAttribution(snapshots, panel) else emptyMap()
-        log.info("리밸런싱 백테스트 완료 — 리밸런싱 {}회, 거래 {}건, 총수익률 {}, MDD {}", turnovers.size, book.trades.size, totalReturn, mddMin)
+        log.info("리밸런싱 백테스트 완료 — 리밸런싱 {}회, 거래 {}건, 총수익률 {}, MDD {}", journal.turnovers.size, book.trades.size, totalReturn, mddMin)
         val bret = radj["benchmark_return"]
         return linkedMapOf(
             "total_return" to totalReturn,
@@ -647,23 +695,16 @@ object PortfolioBacktest {
             "cagr" to cagr,
             "win_rate" to null,
             "num_trades" to book.trades.size,
-            "num_rebalances" to turnovers.size,
+            "num_rebalances" to journal.turnovers.size,
             "num_kills" to numKills,
             "num_panic_events" to numPanicEvents,
             "factor_ic" to factorIc,
-            "avg_turnover" to if (turnovers.isEmpty()) 0.0 else Num.safe(turnovers.average()),
-            "avg_turnover_actual" to if (turnoversActual.isEmpty()) 0.0 else Num.safe(turnoversActual.average()),
-            "equity_curve" to equityCurve,
-            "markers" to markers,
+            "avg_turnover" to if (journal.turnovers.isEmpty()) 0.0 else Num.safe(journal.turnovers.average()),
+            "avg_turnover_actual" to if (journal.turnoversActual.isEmpty()) 0.0 else Num.safe(journal.turnoversActual.average()),
+            "equity_curve" to journal.equityCurve,
+            "markers" to journal.markers,
             "holdings" to holdings,
             "trades" to book.trades,
         )
-    }
-
-    /** 거래량 `reindex(dates).fillna(0)`. */
-    private fun align0(s: Series, dates: List<LocalDate>): DoubleArray {
-        val byDate = HashMap<LocalDate, Double>()
-        s.index.forEachIndexed { i, d -> byDate[d] = s.values[i] }
-        return DoubleArray(dates.size) { (byDate[dates[it]] ?: 0.0).let { v -> if (v.isNaN()) 0.0 else v } }
     }
 }
