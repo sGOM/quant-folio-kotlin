@@ -12,14 +12,10 @@ import com.quantfolio.domain.strategy.StrategyLikeRepository
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
-import com.quantfolio.domain.user.UserRepository
-import com.quantfolio.security.CredentialCipher
 import com.quantfolio.strategy.StrategyConfigParser
 import com.quantfolio.web.api.ApiException
 import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
-import com.quantfolio.web.auth.UserOut
-import com.quantfolio.web.auth.toOut
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotEmpty
 import jakarta.validation.constraints.NotNull
@@ -264,13 +260,6 @@ class StrategiesController(
     }
 }
 
-data class KisCredentialsIn(
-    @field:Pattern(regexp = "kis|toss") val broker: String = "kis",
-    @field:Size(min = 1) val kisAppKey: String,
-    @field:Size(min = 1) val kisAppSecret: String,
-    @field:Size(min = 1, max = 32) val kisAccountNo: String,
-)
-
 data class KisHealth(val broker: String, val env: String, val isPaperTrading: Boolean, val tokenIssued: Boolean, val message: String)
 
 data class QuoteOut(
@@ -278,12 +267,10 @@ data class QuoteOut(
     val high: Double, val low: Double, val open: Double, val currency: String,
 )
 
-/** 증권사 자격증명 등록·연동 검증·현재가(원본 `routes/kis.py`). 키·시크릿은 암호화 저장. */
+/** 소유자의 증권사 연결 확인·현재가 조회(원본 `routes/kis.py`). */
 @RestController
 @RequestMapping("/api/kis")
 class KisController(
-    private val users: UserRepository,
-    private val cipher: CredentialCipher,
     private val props: QuantfolioProperties,
     private val brokers: BrokerCredentials,
 ) {
@@ -295,17 +282,18 @@ class KisController(
         throw ApiException(HttpStatus.BAD_REQUEST, e.message ?: "")
     }
 
-    /** 등록된 자격증명으로 토큰을 발급해 연동을 검증. 토스는 모의투자가 없어 항상 prod. */
+    /** 서버 자격증명으로 토큰을 발급해 연동을 검증. 토스는 모의투자가 없어 항상 prod. */
     @GetMapping("/health")
     fun health(@CurrentUser user: User): KisHealth {
         val c = client(user)
-        val (env, paper) = if (user.broker == "toss") "prod" to false else props.kis.env to props.kis.isPaperTrading
+        val broker = user.broker.ifEmpty { "kis" }
+        val (env, paper) = if (broker == "toss") "prod" to false else props.kis.env to props.kis.isPaperTrading
         return try {
             c.verifyConnection()
-            KisHealth(user.broker, env, paper, true, "토큰 발급 성공 — 연동 정상")
+            KisHealth(broker, env, paper, true, "토큰 발급 성공 — 연동 정상")
         } catch (e: BrokerError) {
-            log.warn("증권사 연동 검증 실패(broker={}): {}", user.broker, e.message)
-            KisHealth(user.broker, env, paper, false, "연동 실패: ${e.message}")
+            log.warn("증권사 연동 검증 실패(broker={}): {}", broker, e.message)
+            KisHealth(broker, env, paper, false, "연동 실패: ${e.message}")
         }
     }
 
@@ -321,23 +309,7 @@ class KisController(
         return QuoteOut(q.symbol, q.price.toDouble(), q.change.toDouble(), q.changeRate.toDouble(), q.volume, q.high.toDouble(), q.low.toDouble(), q.open.toDouble(), q.currency)
     }
 
-    @PutMapping("/credentials")
-    @Transactional
-    fun credentials(@CurrentUser user: User, @Valid @RequestBody payload: KisCredentialsIn): UserOut {
-        val current = users.findForCredentialUpdate(user.id!!) ?: throw ApiException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.")
-        current.broker = payload.broker
-        current.kisAppKey = cipher.encrypt(payload.kisAppKey)
-        current.kisAppSecret = cipher.encrypt(payload.kisAppSecret)
-        current.kisAccountNo = payload.kisAccountNo
-        return users.save(current).toOut(props)
-    }
-
-    /** 통합 시세(국내+해외)용 토스 자격증명. 주문 브로커와 독립 — payload.broker 는 무시. */
-    @PutMapping("/toss-quote")
-    fun tossQuote(@CurrentUser user: User, @Valid @RequestBody payload: KisCredentialsIn): UserOut {
-        user.tossAppKey = cipher.encrypt(payload.kisAppKey)
-        user.tossAppSecret = cipher.encrypt(payload.kisAppSecret)
-        user.tossAccountNo = payload.kisAccountNo
-        return users.save(user).toOut(props)
-    }
+    @PutMapping("/credentials", "/toss-quote")
+    fun credentials(@CurrentUser user: User): Nothing =
+        throw ApiException(HttpStatus.FORBIDDEN, "증권사 자격증명은 서버 설정에서 관리합니다.")
 }

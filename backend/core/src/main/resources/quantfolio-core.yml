@@ -25,6 +25,7 @@ quantfolio:
   app-env: ${APP_ENV:dev}
   secret-key: ${secret_key:${SECRET_KEY:}}
   credential-enc-key: ${credential_enc_key:${CREDENTIAL_ENC_KEY:}}
+  trading-owner-user-id: ${TRADING_OWNER_USER_ID:}
   session-ttl-minutes: ${SESSION_TTL_MINUTES:20160}
   cookie:
     secure: ${COOKIE_SECURE:false}

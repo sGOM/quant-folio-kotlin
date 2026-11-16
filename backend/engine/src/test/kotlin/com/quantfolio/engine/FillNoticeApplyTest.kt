@@ -53,6 +53,7 @@ class FillNoticeApplyTest(
     private fun user(): Pair<Int, Int> {
         willReturn(broker).given(brokers).forUser(anyUser())
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        willReturn(true).given(brokers).isOwner(uid)
         return uid to strategies.save(Strategy(uid, "s", config = mapOf("type" to "rsi"))).id!!
     }
 

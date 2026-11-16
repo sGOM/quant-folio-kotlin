@@ -8,6 +8,7 @@ import com.quantfolio.broker.Fill
 import com.quantfolio.broker.OrderNotSent
 import com.quantfolio.broker.OrderResult
 import com.quantfolio.broker.Quote
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertRepository
 import com.quantfolio.domain.alert.AlertSeverity
@@ -23,10 +24,12 @@ import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.test.ContainersConfig
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.io.IOException
 import java.math.BigDecimal
 import java.util.UUID
@@ -59,6 +62,8 @@ class OrderExecutorTest(
     @Autowired private val fills: Fills,
     @Autowired private val jdbc: JdbcTemplate,
 ) {
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
+
     /** 가짜 증권사 — 주문·체결 응답을 시나리오별로 바꾼다. */
     class FakeBroker(
         var place: () -> OrderResult = { OrderResult("ODNO1", "ORG1") },
@@ -77,9 +82,10 @@ class OrderExecutorTest(
         override fun getBalance() = Balance()
     }
 
-    private fun setup(): Pair<Int, Int> {
+    private fun setup(authorized: Boolean = true): Pair<Int, Int> {
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x"))
         val s = strategies.save(Strategy(u.id!!, "s", config = mapOf("type" to "rsi")))
+        if (authorized) willReturn(u.id).given(props).tradingOwnerUserId
         return u.id!! to s.id!!
     }
 
@@ -100,6 +106,27 @@ class OrderExecutorTest(
 
     private fun ledgerQty(broker: BrokerClient, uid: Int, sid: Int, symbol: String) =
         broker.orderAccountKey?.let { positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(uid, it, sid, symbol)?.qty } ?: BigDecimal.ZERO
+
+    @Test
+    fun directOrderWithoutAuthorizationDoesNotReserveOrSend() {
+        val (uid, sid) = setup(authorized = false)
+        val broker = FakeBroker()
+        val idempotencyKey = key()
+        assertNull(run(broker, uid, sid, "buy", 1, key = idempotencyKey))
+        assertEquals(0, broker.placed)
+        assertEquals(false, orders.existsByIdempotencyKey(idempotencyKey))
+    }
+
+    @Test
+    fun ownerCannotSubmitAnOrderForAnotherUsersStrategy() {
+        val (owner, _) = setup()
+        val (_, foreignStrategy) = setup(authorized = false)
+        val broker = FakeBroker()
+        val idempotencyKey = key()
+        assertNull(run(broker, owner, foreignStrategy, "buy", 1, key = idempotencyKey))
+        assertEquals(0, broker.placed)
+        assertEquals(false, orders.existsByIdempotencyKey(idempotencyKey))
+    }
 
     @Test
     fun filledOrderRecordsExecutionPositionAndAveragePrice() {
@@ -186,6 +213,39 @@ class OrderExecutorTest(
         assertNull(run(broker, uid, sid, "buy", 7_500, k))
         assertEquals(1, broker.placed)
         assertEquals(false, redis.hasKey(RedisKeys.ORDER_LOCK_PREFIX + k))
+    }
+
+    /**
+     * 주문 POST 의 HTTP 500 + IGW00002(인증 시점 계좌 ≠ 요청 계좌, 2026-11-16 실측)는 접수불명이 아니라 거절 — rejected 로 끝나고 알림·종목 보류가 없으며,
+     * 같은 신호는 다시 보내지 않는다(다른 신호의 주문만 새로 나간다).
+     */
+    @Test
+    fun accountMismatchHttp500IsRejectedNotUnknown() {
+        val (uid, sid) = setup()
+        val http = object : com.quantfolio.broker.BrokerHttp {
+            var posts = 0
+            override fun send(method: String, url: String, query: Map<String, String>, headers: Map<String, String>, json: String?, form: Map<String, String>?) = when {
+                url.endsWith("/oauth2/tokenP") -> com.quantfolio.broker.BrokerResponse(200, """{"access_token":"t","expires_in":86400}""")
+                url.endsWith("/uapi/hashkey") -> com.quantfolio.broker.BrokerResponse(200, """{"HASH":"h"}""")
+                url.endsWith("/order-cash") -> { posts++; com.quantfolio.broker.BrokerResponse(500, """{"rt_cd":"1","msg_cd":"IGW00002","msg1":"인증 시점의 계좌번호와 요청 계좌번호가 일치하지 않습니다."}""") }
+                else -> error("예상하지 않은 요청: $method $url")
+            }
+        }
+        val support = com.quantfolio.broker.BrokerSupport(http, redis, com.quantfolio.common.QuantfolioProperties(), java.time.Clock.systemUTC(), tools.jackson.databind.json.JsonMapper.builder().build()) { }
+        val kis = com.quantfolio.broker.KisClient("test-${UUID.randomUUID()}", "test", TEST_KIS_ACCOUNT, support)
+        val k = key()
+
+        val o = run(kis, uid, sid, "buy", 3, k)!!
+
+        assertEquals(OrderStatus.rejected, o.status)
+        assertEquals(OrderStatus.rejected, orders.findById(o.id!!).orElseThrow().status)
+        assertNull(o.kisOrderId)
+        assertTrue(alerts.findAll().none { it.strategyId == sid }, "접수불명·미전송 알림이 없어야 한다")
+        assertNull(run(kis, uid, sid, "buy", 3, k)) // 같은 신호는 재전송하지 않는다
+        assertEquals(1, http.posts)
+        // 접수불명 집합에 없으므로 같은 종목의 다른 신호는 막히지 않는다(이것도 거절되지만 POST 는 신호당 한 번)
+        assertEquals(OrderStatus.rejected, run(kis, uid, sid, "buy", 3)!!.status)
+        assertEquals(2, http.posts)
     }
 
     /** 전송 전 실패(우리 쪽 장애)는 증권사의 명시적 거절과 같이 rejected 지만, 신호의 주문이 빠졌으니 알려야 한다. */

@@ -2,6 +2,7 @@ package com.quantfolio.engine
 
 import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.broker.BrokerClient
+import com.quantfolio.broker.BrokerCredentials
 import com.quantfolio.broker.BrokerError
 import com.quantfolio.broker.OrderNotSent
 import com.quantfolio.broker.OrderOutcomeUnknown
@@ -121,6 +122,7 @@ class Fills(
 @Component
 class OrderExecutor(
     private val orders: OrderRepository,
+    private val brokers: BrokerCredentials,
     private val fills: Fills,
     private val redis: StringRedisTemplate,
     private val alerts: AlertPublisher,
@@ -139,6 +141,10 @@ class OrderExecutor(
         broker: BrokerClient, userId: Int, strategyId: Int, symbol: String, side: String, qty: Int, price: BigDecimal,
         idempotencyKey: String, heldQty: BigDecimal, reason: String? = null,
     ): Order? {
+        if (!brokers.isOwner(userId)) {
+            log.warn("지정된 거래 소유자가 아니어서 주문 차단 user={} strategy={}", userId, strategyId)
+            return null
+        }
         val accountKey = broker.orderAccountKey ?: throw BrokerError("주문 계좌를 확인할 수 없습니다.")
         val lockKey = RedisKeys.ORDER_LOCK_PREFIX + idempotencyKey
         return redis.withLockOrElse(lockKey, Duration.ofSeconds(LOCK_TTL), busy = {
@@ -151,9 +157,16 @@ class OrderExecutor(
             }
             val order = try {
                 orderTx.execute {
-                    val p = MapSqlParameterSource("u", userId).addValue("s", symbol)
+                    val p = MapSqlParameterSource("u", userId).addValue("s", symbol).addValue("st", strategyId)
                     // 신호 키가 달라도 같은 계좌의 접수불명 주문을 넘지 못하게 예약을 직렬화한다.
-                    jdbc.queryForObject("select id from users where id = :u for update", p, Int::class.java)
+                    val ownsStrategy = jdbc.queryForList(
+                        "select id from users where id = :u and exists (select 1 from strategies where id = :st and user_id = :u) for update",
+                        p, Int::class.java,
+                    ).isNotEmpty()
+                    if (!ownsStrategy) {
+                        log.warn("사용자의 전략이 아니어서 주문 차단 user={} strategy={}", userId, strategyId)
+                        return@execute null
+                    }
                     val unknown = jdbc.queryForObject(
                         "select count(*) from orders where user_id = :u and symbol = :s and closed_at is null and (status = 'pending' or (status in ('submitted', 'partial') and coalesce(trim(kis_order_id), '') = ''))",
                         p, Int::class.java,
@@ -162,7 +175,7 @@ class OrderExecutor(
                     // 주문일(KST)로 한정: 장 마감으로 잔량이 소멸한 주문은 주문일이 지나고 근거가 있을 때만 종결(closed_at)되므로 비종결로 남을 수 있다.
                     val live = jdbc.queryForObject(
                         "select count(*) from orders where user_id = :u and symbol = :s and strategy_id = :st and broker_account_key = :a and status in ('submitted', 'partial') and coalesce(trim(kis_order_id), '') <> '' and closed_at is null and created_at >= :day",
-                        p.addValue("st", strategyId).addValue("a", accountKey)
+                        p.addValue("a", accountKey)
                             .addValue("day", Timestamp.from(MarketClock.todayKst(clock).atStartOfDay(MarketClock.KST).toInstant())),
                         Int::class.java,
                     )!!

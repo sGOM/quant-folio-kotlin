@@ -4,22 +4,17 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  * QuantFolio E2E 스모크.
  *
  * `run-quantfolio` 스킬로 수동 수행하던 핵심 경로를 그대로 스크립트화한다:
- *   회원가입/로그인 → 전략 목록 진입 → 전략 생성 → 백테스트 1회 실행 → 모니터 진입.
+ *   비밀번호 로그인 → 전략 목록 진입 → 전략 생성 → 백테스트 1회 실행 → 모니터 진입.
  *
  * 실제 Docker Compose 전체 스택(web/engine/worker/frontend/db/redis/proxy)이
  * `baseURL`(기본 :8080, Caddy 프록시)로 떠 있어야 통과한다. CI 상시 게이트가
  * 아니라 야간 크론/수동 트리거 전용이므로(무거운 스택 기동 전제), 단계마다
  * 넉넉한 타임아웃을 둔다.
  *
- * 로그인/가입 관련 세부사항(폼 인코딩·401/404 무해 오류 등)은
- * `.claude/skills/run-quantfolio/SKILL.md` Gotcha 절을 참고했다.
+ * 혼자 쓰는 서비스라 회원가입이 없다 — 내부 소유자(`TRADING_OWNER_USER_ID`)의 접속 비밀번호를
+ * `E2E_SMOKE_PASSWORD` 로 받는다. 미설정이면 skip 한다. 기존 전략은 건드리지 않고 이 스모크가 만든 전략만 지운다.
  */
-
-/** 매 실행마다 겹치지 않는 테스트 계정. */
-function freshAccount() {
-  const tag = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  return { email: `e2e_${tag}@example.com`, password: "e2e-smoke-test-pw" };
-}
+const SMOKE_PASSWORD = process.env.E2E_SMOKE_PASSWORD ?? "";
 
 /** 스모크용 최소 SMA 크로스오버 단일종목 전략 설정(삼성전자). */
 function smokeStrategyConfig() {
@@ -52,19 +47,16 @@ async function createSmokeStrategy(
 }
 
 test.describe("QuantFolio 스모크", () => {
-  test("가입/로그인 → 전략 목록 → 백테스트 1회 → 모니터", async ({ page }) => {
-    const { email, password } = freshAccount();
+  test("로그인 → 전략 목록 → 백테스트 1회 → 모니터", async ({ page }) => {
+    test.skip(!SMOKE_PASSWORD, "E2E_SMOKE_PASSWORD 미설정 — 회원가입이 없어 소유자 접속 비밀번호가 필요하다");
 
-    await test.step("회원가입 후 로그인 → 대시보드 이동", async () => {
+    await test.step("비밀번호 로그인 → 대시보드 이동", async () => {
       await page.goto("/login");
       // CardTitle 은 시맨틱 heading 이 아니라 div 다 — 텍스트로만 확인한다.
       await expect(page.getByText("QuantFolio")).toBeVisible();
 
-      // "회원가입" 모드로 전환(기본은 로그인 모드).
-      await page.getByRole("button", { name: "계정이 없으신가요? 회원가입" }).click();
-      await page.getByLabel("이메일").fill(email);
-      await page.getByLabel("비밀번호").fill(password);
-      await page.getByRole("button", { name: "가입하고 로그인" }).click();
+      await page.getByLabel("비밀번호").fill(SMOKE_PASSWORD);
+      await page.getByRole("button", { name: "로그인" }).click();
 
       await page.waitForURL("**/dashboard", { timeout: 20_000 });
       await expect(page.getByRole("heading", { name: "대시보드" })).toBeVisible();
@@ -75,8 +67,6 @@ test.describe("QuantFolio 스모크", () => {
     await test.step("전략 목록 페이지 진입 확인", async () => {
       await page.goto("/strategies");
       await expect(page.getByRole("heading", { name: "전략" })).toBeVisible();
-      // 신규 계정이므로 빈 상태 문구가 보여야 한다.
-      await expect(page.getByText("아직 전략이 없습니다.")).toBeVisible();
     });
 
     await test.step("전략 생성(API) 후 목록에 노출 확인", async () => {
@@ -117,7 +107,7 @@ test.describe("QuantFolio 스모크", () => {
 
     await test.step("정리: 스모크 전략 삭제", async () => {
       // 라이프사이클 가드(미청산 포지션 등)로 실패해도 스모크 자체는 이미 통과했으므로
-      // 삭제 실패는 무시한다(실행 계정은 매번 새로 만들어 누적되어도 무해).
+      // 삭제 실패는 무시한다(소유자 계정에 스모크 전략이 남을 수 있다 — 이름 "E2E 스모크 …").
       await page.request.delete(`/api/strategies/${strategyId}`).catch(() => {});
     });
   });

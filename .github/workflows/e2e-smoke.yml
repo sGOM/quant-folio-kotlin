@@ -1,7 +1,8 @@
 name: E2E Smoke
 
 # 전체 Compose 스택(web/engine/worker/frontend/db/redis/proxy)을 띄우고 Playwright 로
-# "회원가입 → 로그인 → 전략 목록 → 백테스트 1회 → 모니터링" 핵심 경로를 검증한다.
+# "비밀번호 로그인 → 전략 목록 → 백테스트 1회 → 모니터링" 핵심 경로를 검증한다.
+# 회원가입이 없으므로 빈 DB 에 내부 소유자(id 1) 행을 SQL 로 시드하고 실행마다 새 비밀번호를 쓴다.
 # 무거워서 필수 게이트(ci.yml)가 아니라 야간 크론 + 수동 트리거로만 돈다.
 on:
   workflow_dispatch: {}
@@ -37,7 +38,14 @@ jobs:
             : > "secrets/$n.txt"
           done
 
-      - run: cp .env.example .env
+      - name: .env 와 스모크 소유자 비밀번호
+        run: |
+          cp .env.example .env
+          sed -i 's/^TRADING_OWNER_USER_ID=.*/TRADING_OWNER_USER_ID=1/' .env
+          # APP_PORT 는 표준 8080 그대로 둔다 — 비표준 포트 뒤 같은 출처 POST(Caddyfile X-Forwarded-Port)를 이 스모크가 지킨다.
+          pw=$(openssl rand -hex 16)
+          echo "::add-mask::$pw"
+          echo "E2E_SMOKE_PASSWORD=$pw" >> "$GITHUB_ENV"
 
       - name: Docker Compose 스택 기동
         run: docker compose up -d --build
@@ -52,6 +60,14 @@ jobs:
             echo "waiting for stack... ($i)"; sleep 5
           done
           echo "스택이 제한 시간 내에 기동하지 않음"; exit 1
+
+      # Flyway 가 끝난 빈 DB 에 소유자 행을 만든다. pgcrypto 의 bf 해시($2a$)는 BCrypt.checkpw 가 검증한다.
+      - name: 스모크 소유자 시드
+        run: |
+          docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v pw="$1"' _ "$E2E_SMOKE_PASSWORD" <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          INSERT INTO users (id, email, password_hash) VALUES (1, 'e2e-owner@example.invalid', crypt(:'pw', gen_salt('bf')));
+          SQL
 
       - working-directory: frontend
         run: npm ci

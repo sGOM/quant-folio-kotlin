@@ -14,7 +14,7 @@ import java.util.Base64
  * 인증이 성공할 때마다 TTL 을 갱신한다(슬라이딩 만료).
  */
 @Component
-class SessionStore(private val redis: StringRedisTemplate, props: QuantfolioProperties) {
+class SessionStore(private val redis: StringRedisTemplate, private val props: QuantfolioProperties) {
     private val ttl = Duration.ofMinutes(props.sessionTtlMinutes)
     private val random = SecureRandom()
 
@@ -24,11 +24,16 @@ class SessionStore(private val redis: StringRedisTemplate, props: QuantfolioProp
         return sid
     }
 
+    /**
+     * 세션의 user_id. HTTP(`CurrentUserResolver`)·WebSocket(`EventSocket`) 인증이 함께 쓰는 단일 지점이라,
+     * 내부 소유자(`TRADING_OWNER_USER_ID`)가 아닌 사용자의 세션은 여기서 없는 것으로 본다(미설정이면 전부). 갱신도 하지 않는다.
+     */
     fun userId(sid: String?): Int? {
         if (sid.isNullOrEmpty()) return null
-        val raw = redis.opsForValue().get(key(sid)) ?: return null
+        val userId = redis.opsForValue().get(key(sid))?.toIntOrNull() ?: return null
+        if (userId != props.tradingOwnerUserId) return null
         redis.expire(key(sid), ttl)
-        return raw.toIntOrNull()
+        return userId
     }
 
     fun destroy(sid: String?) {

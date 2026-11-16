@@ -106,6 +106,7 @@ class RunnersTest(
 
     private fun strategy(config: Map<String, Any?>): Pair<Int, Int> {
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        willReturn(true).given(brokers).isOwner(uid)
         return uid to strategies.save(Strategy(uid, "s", config = config, status = StrategyStatus.live)).id!!
     }
 

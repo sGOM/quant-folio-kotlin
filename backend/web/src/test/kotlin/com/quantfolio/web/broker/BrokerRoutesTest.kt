@@ -5,6 +5,7 @@ import com.quantfolio.broker.BrokerClient
 import com.quantfolio.broker.BrokerCredentials
 import com.quantfolio.broker.BrokerError
 import com.quantfolio.broker.Quote
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.User
@@ -23,6 +24,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import java.math.BigDecimal
@@ -38,9 +40,11 @@ class BrokerRoutesTest(
     @Autowired private val positions: PositionRepository,
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private fun me(broker: String = "kis"): Pair<User, Cookie> {
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", broker = broker))
+        willReturn(u.id).given(props).tradingOwnerUserId // 단일 소유자 서비스: 소유자 외 세션은 401
         return u to Cookie(SESSION_COOKIE, sessions.create(u.id!!))
     }
 

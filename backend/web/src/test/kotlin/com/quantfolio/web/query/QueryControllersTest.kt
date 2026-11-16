@@ -1,5 +1,6 @@
 package com.quantfolio.web.query
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.news.NewsArticle
 import com.quantfolio.domain.news.NewsArticleRepository
 import com.quantfolio.domain.news.NewsArticleSymbol
@@ -37,12 +38,14 @@ import org.mockito.ArgumentMatchers.anyDouble
 import org.mockito.ArgumentMatchers.anyInt
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.ArgumentMatchers.eq
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import java.time.Instant
@@ -78,6 +81,7 @@ class QueryControllersTest(
     @MockitoBean lateinit var panic: PanicService
     @MockitoBean lateinit var screener: ScreenerService
     @MockitoBean lateinit var recommend: RecommendService
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val asOf = LocalDate.of(2026, 10, 16)
 
@@ -88,6 +92,7 @@ class QueryControllersTest(
     @BeforeEach
     fun setUp() {
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
+        willReturn(u.id).given(props).tradingOwnerUserId // 단일 소유자 서비스: 소유자 외 세션은 401
         cookie = Cookie(SESSION_COOKIE, sessions.create(u.id!!))
         redis.keys("metrics:*").plus(redis.keys("screener:*")).plus(redis.keys("recommend:*")).forEach { redis.delete(it) }
         given(common.lastBusinessDay()).willReturn(asOf)

@@ -8,6 +8,7 @@ import com.quantfolio.broker.Fill
 import com.quantfolio.broker.LegacyFillEvidence
 import com.quantfolio.broker.OrderResult
 import com.quantfolio.broker.Quote
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.trading.Execution
@@ -26,12 +27,14 @@ import jakarta.servlet.http.Cookie
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.any
 import org.mockito.BDDMockito.given
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
@@ -55,6 +58,7 @@ class LegacyAccountLinksTest(
     @Autowired private val sessions: SessionStore,
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
     private val json = JsonMapper.builder().build()
     private val created = Instant.parse("2026-10-19T01:00:00Z")
 
@@ -77,7 +81,9 @@ class LegacyAccountLinksTest(
         val user = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", kisAccountNo = "A"))
         val uid = user.id!!
         val strategy = strategies.save(Strategy(uid, "legacy", config = mapOf("type" to "rsi"))).id!!
-        val cookie = Cookie(SESSION_COOKIE, sessions.create(uid))
+        private val session = Cookie(SESSION_COOKIE, sessions.create(uid))
+        /** 단일 소유자 서비스라 세션을 쓰는 사용자가 곧 설정된 소유자다(그 외 세션은 401) — 쿠키를 쓰는 순간 소유자로 지정한다. */
+        val cookie: Cookie get() = session.also { willReturn(uid).given(props).tradingOwnerUserId }
         fun order(number: String?, side: String = "buy", qty: String = "2", price: String = "1000", second: Long = 0, status: OrderStatus = OrderStatus.filled): Order {
             val o = orders.save(Order(uid, strategy, "005930", side, BigDecimal(qty), BigDecimal(price), kisOrderId = number, kisOrderOrgNo = "12345",
                 status = status, idempotencyKey = UUID.randomUUID().toString(), createdAt = created.plusSeconds(second)))

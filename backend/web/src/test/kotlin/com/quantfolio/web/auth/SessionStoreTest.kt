@@ -21,6 +21,9 @@ class SessionStoreTest(
 ) {
     private val ttl = props.sessionTtlMinutes * 60
 
+    /** 내부 소유자를 [ownerId] 로 둔 세션 저장소(같은 Redis). */
+    private fun ownedBy(ownerId: Int) = SessionStore(redis, props.copy(tradingOwnerUserId = ownerId))
+
     @Test
     fun createStoresUserIdWithTtl() {
         val sid = sessions.create(42)
@@ -33,8 +36,18 @@ class SessionStoreTest(
     fun userIdRenewsTtl() {
         val sid = sessions.create(7)
         redis.expire("session:$sid", Duration.ofSeconds(10))
-        assertEquals(7, sessions.userId(sid))
+        assertEquals(7, ownedBy(7).userId(sid))
         assertTrue(redis.getExpire("session:$sid") > 10)
+    }
+
+    /** 내부 소유자(`TRADING_OWNER_USER_ID`)가 아닌 사용자의 세션은 없는 것으로 본다(미설정이면 전부). */
+    @Test
+    fun nonOwnerSessionNullWithoutRenewing() {
+        val sid = sessions.create(8)
+        redis.expire("session:$sid", Duration.ofSeconds(10))
+        assertNull(sessions.userId(sid)) // 테스트 설정은 소유자 미설정
+        assertNull(ownedBy(7).userId(sid))
+        assertTrue(redis.getExpire("session:$sid") <= 10)
     }
 
     @Test

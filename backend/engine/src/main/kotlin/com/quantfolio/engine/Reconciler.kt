@@ -573,6 +573,7 @@ class Reconciler(
                 nextCheck.remove(id)
                 return
             }
+            if (!brokers.isOwner(seen.userId)) return
             val b = seen.brokerAccountKey?.let { broker(seen.userId) }
             val verified = seen.brokerAccountKey != null && (b == null || b.orderAccountKey == seen.brokerAccountKey)
             val odno = seen.kisOrderId

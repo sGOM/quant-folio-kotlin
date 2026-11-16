@@ -61,6 +61,8 @@ class EngineRuntime(
 
     override fun start() {
         log.info("매매 엔진 시작 — KIS_ENV={} (모의투자={})", props.kis.env, props.kis.isPaperTrading)
+        // 미설정이면 전략 복구·주문·정합(접수불명 알림 포함)이 전부 조용히 건너뛰어진다 — 기동 때 한 번은 드러낸다.
+        if (props.tradingOwnerUserId == null) log.warn("거래 소유자 미설정(TRADING_OWNER_USER_ID) — 전략 복구·주문·체결 정합·증권사 호출을 모두 차단합니다")
         running = true
         recover()
         listeners.addMessageListener(control, ChannelTopic(RedisKeys.ENGINE_CONTROL))
@@ -169,6 +171,10 @@ class EngineRuntime(
     private fun liveGateAllowsStart(sid: Int): Boolean {
         return try {
             val uid = strategies.findById(sid).map { it.userId }.orElse(null) ?: return false
+            if (!brokers.isOwner(uid)) {
+                log.warn("지정된 거래 소유자가 아니어서 전략 {} 기동 거부", sid)
+                return false
+            }
             if (liveGate.isPaperTrading(uid)) return true
             val gate = liveGate.evaluate(uid, sid, paper = false)
             if (gate.passed) return true
@@ -215,7 +221,8 @@ class EngineRuntime(
     fun recover() {
         val ids = strategies.findAll().filter { it.status == StrategyStatus.live }.mapNotNull { it.id }
         ids.forEach { startStrategy(it) }
-        if (ids.isNotEmpty()) log.info("운용 중 전략 복구: {}", ids)
+        val recovered = ids.filter { it in runners.keys }
+        if (recovered.isNotEmpty()) log.info("운용 중 전략 복구: {}", recovered)
     }
 
     /** KIS 사용자 한 명의 실시간 구독 대상: 자격증명 + 단일종목 전략들의 종목. */

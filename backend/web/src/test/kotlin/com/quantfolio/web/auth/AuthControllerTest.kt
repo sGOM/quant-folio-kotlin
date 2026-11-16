@@ -1,27 +1,29 @@
 package com.quantfolio.web.auth
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.security.Passwords
 import com.quantfolio.test.ContainersConfig
 import jakarta.servlet.http.Cookie
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.http.MediaType
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import java.util.UUID
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -37,10 +39,23 @@ class AuthControllerTest(
     private fun saveUser(email: String, password: String = "password-1", hash: String = Passwords.hash(password)) =
         users.save(User(email = email, passwordHash = hash))
 
-    private fun login(email: String, password: String, ip: String = UUID.randomUUID().toString()) =
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
+
+    private val ownerFailKey = RedisKeys.loginFailByEmail(OWNER_THROTTLE_KEY)
+
+    @BeforeEach
+    fun clearOwnerThrottle() {
+        redis.delete(ownerFailKey)
+    }
+
+    /** 내부 소유자(`TRADING_OWNER_USER_ID`)로 지정한 사용자. */
+    private fun ownerUser(hash: String = Passwords.hash("password-1")) =
+        saveUser(email(), hash = hash).also { willReturn(it.id).given(props).tradingOwnerUserId }
+
+    private fun login(username: String?, password: String, ip: String = UUID.randomUUID().toString()) =
         mvc.post("/api/auth/login") {
             contentType = MediaType.APPLICATION_FORM_URLENCODED
-            param("username", email)
+            username?.let { param("username", it) }
             param("password", password)
             header("X-Forwarded-For", ip)
         }
@@ -48,115 +63,91 @@ class AuthControllerTest(
     private fun sessionFor(user: User) = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
 
     @Test
-    fun registerHashesPassword() {
-        val e = email()
+    fun registerIsRejectedWithoutCreatingUser() {
+        val before = users.count()
         mvc.post("/api/auth/register") {
             contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"$e","password":"password-1"}"""
-        }.andExpect {
-            status { isCreated() }
-            jsonPath("$.email") { value(e) }
-            jsonPath("$.display_name") { value(null) }
-            jsonPath("$.broker") { value("kis") }
-            jsonPath("$.has_kis_credentials") { value(false) }
-            jsonPath("$.has_toss_quote") { value(false) }
-        }
-        val saved = users.findByEmail(e)!!
-        assertTrue(saved.passwordHash != "password-1" && Passwords.verify("password-1", saved.passwordHash))
+            content = """{"email":"${email()}","password":"password-1"}"""
+        }.andExpect { status { isForbidden() }; jsonPath("$.detail") { value("회원가입은 지원하지 않습니다.") } }
+        assertEquals(before, users.count())
     }
 
     @Test
-    fun registerDuplicate409() {
-        val e = email()
-        saveUser(e)
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"$e","password":"password-1"}"""
-        }.andExpect { status { isConflict() }; jsonPath("$.detail") { value("이미 등록된 이메일입니다.") } }
-    }
-
-    @Test
-    fun registerShortPassword422() {
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"${email()}","password":"short"}"""
-        }.andExpect { status { isUnprocessableContent() }; jsonPath("$.detail[0].loc[1]") { value("password") } }
-    }
-
-    @Test
-    fun registerInvalidEmail422() {
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"not-an-email","password":"password-1"}"""
-        }.andExpect { status { isUnprocessableContent() }; jsonPath("$.detail[0].loc[1]") { value("email") } }
-    }
-
-    /** 원본 EmailStr(pydantic+email-validator) 정규화 — 앞뒤 공백 제거·도메인 소문자, 도메인에 점 없으면 422(원본 컨테이너 실측). */
-    @Test
-    fun registerNormalizesEmailLikeOriginal() {
-        val local = "N" + UUID.randomUUID().toString().take(8)
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"  $local@Test.DEV ","password":"password-1"}"""
-        }.andExpect { status { isCreated() }; jsonPath("$.email") { value("$local@test.dev") } }
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"$local@TEST.dev","password":"password-1"}"""
-        }.andExpect { status { isConflict() } }
-        mvc.post("/api/auth/register") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"email":"a@localhost","password":"password-1"}"""
-        }.andExpect { status { isUnprocessableContent() }; jsonPath("$.detail[0].loc[1]") { value("email") } }
-    }
-
-    @Test
-    fun loginSetsCookieAndResets() {
-        val e = email()
-        saveUser(e)
-        redis.opsForValue().set(RedisKeys.loginFailByEmail(e), "3")
-        val result = login(e, "password-1").andExpect {
+    fun loginWithPasswordOnlyAsOwnerSetsCookieAndResets() {
+        val owner = ownerUser()
+        redis.opsForValue().set(ownerFailKey, "3")
+        val result = login(null, "password-1").andExpect {
             status { isOk() }
-            jsonPath("$.email") { value(e) }
+            jsonPath("$.id") { value(owner.id!!) }
+            jsonPath("$.email") { value(owner.email) }
             cookie { exists(SESSION_COOKIE); httpOnly(SESSION_COOKIE, true); path(SESSION_COOKIE, "/") }
         }.andReturn()
         val sid = result.response.getCookie(SESSION_COOKIE)!!.value
-        assertNotNull(sessions.userId(sid))
-        assertNull(redis.opsForValue().get(RedisKeys.loginFailByEmail(e)))
+        assertEquals(owner.id, sessions.userId(sid))
+        assertNull(redis.opsForValue().get(ownerFailKey))
     }
 
     @Test
-    fun loginWrongPassword401Counts() {
-        val e = email()
-        saveUser(e)
-        login(e, "wrong-pass").andExpect {
+    fun usernameCannotSelectAnotherUser() {
+        val owner = ownerUser()
+        val other = saveUser(email(), password = "other-pass-1")
+        // 다른 사용자의 올바른 이메일+비밀번호로는 들어갈 수 없다.
+        login(other.email, "other-pass-1").andExpect { status { isUnauthorized() } }
+        // username 이 무엇이든 소유자 비밀번호면 소유자로 로그인한다.
+        login(other.email, "password-1").andExpect { status { isOk() }; jsonPath("$.id") { value(owner.id!!) } }
+    }
+
+    @Test
+    fun loginWrongPassword401CountsOwnerKey() {
+        ownerUser()
+        login(null, "wrong-pass").andExpect {
             status { isUnauthorized() }
-            jsonPath("$.detail") { value("이메일 또는 비밀번호가 올바르지 않습니다.") }
+            jsonPath("$.detail") { value("비밀번호가 올바르지 않습니다.") }
         }
-        assertEquals("1", redis.opsForValue().get(RedisKeys.loginFailByEmail(e)))
+        assertEquals("1", redis.opsForValue().get(ownerFailKey))
     }
 
     @Test
-    fun loginUnknownEmail401Counts() {
-        val e = email()
-        login(e, "whatever").andExpect { status { isUnauthorized() } }
-        assertEquals("1", redis.opsForValue().get(RedisKeys.loginFailByEmail(e)))
+    fun loginFailsWhenOwnerUnsetOrMissing() {
+        saveUser(email())
+        for (ownerId in listOf(null, Int.MAX_VALUE)) {
+            willReturn(ownerId).given(props).tradingOwnerUserId
+            login(null, "password-1").andExpect {
+                status { isServiceUnavailable() }
+                jsonPath("$.detail") { value("로그인을 사용할 수 없습니다. 서버 설정을 확인하세요.") }
+                cookie { doesNotExist(SESSION_COOKIE) }
+            }
+        }
     }
 
     @Test
-    fun loginBlocked429() {
-        val e = email()
-        saveUser(e)
-        redis.opsForValue().set(RedisKeys.loginFailByEmail(e), "10")
-        // 올바른 비밀번호여도 차단 상태면 429.
-        login(e, "password-1").andExpect {
+    fun loginBlockedAfterTenFailuresEvenWithChangingUsername() {
+        ownerUser()
+        repeat(10) { login(email(), "wrong-pass").andExpect { status { isUnauthorized() } } }
+        // 올바른 비밀번호·새 username·새 IP 여도 차단 상태면 429.
+        login(email(), "password-1").andExpect {
             status { isTooManyRequests() }
             jsonPath("$.detail") { value("로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.") }
         }
     }
 
     @Test
+    fun nonOwnerSessionIsRejected() {
+        val owner = ownerUser()
+        val other = saveUser(email())
+        mvc.get("/api/auth/me") { cookie(sessionFor(other)) }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.detail") { value("자격 증명을 확인할 수 없습니다.") }
+        }
+        val ownerCookie = sessionFor(owner)
+        mvc.get("/api/auth/me") { cookie(ownerCookie) }.andExpect { status { isOk() } }
+        willReturn(null).given(props).tradingOwnerUserId
+        mvc.get("/api/auth/me") { cookie(ownerCookie) }.andExpect { status { isUnauthorized() } }
+    }
+
+    @Test
     fun logoutDestroysAndClears() {
-        val user = saveUser(email())
+        val user = ownerUser()
         val cookie = sessionFor(user)
         mvc.post("/api/auth/logout") { cookie(cookie) }.andExpect {
             status { isNoContent() }
@@ -179,21 +170,28 @@ class AuthControllerTest(
         mvc.get("/api/auth/me") { cookie(Cookie(SESSION_COOKIE, "bogus")) }.andExpect { status { isUnauthorized() } }
     }
 
+    /** 소유자라도 DB 에 남은 옛 자격증명·계좌는 쓰지 않는다(서버 설정 미설정이면 없음으로 표시). */
     @Test
-    fun meReturnsUser() {
-        val user = saveUser(email())
+    fun meIgnoresLegacyDbCredentialsAndAccount() {
+        val user = ownerUser()
         user.kisAppKey = "enc"
+        user.kisAppSecret = "legacy-secret"
+        user.kisAccountNo = "50012345-01"
+        user.tossAppKey = "legacy-toss-key"
+        user.tossAppSecret = "legacy-toss-secret"
         users.save(user)
         mvc.get("/api/auth/me") { cookie(sessionFor(user)) }.andExpect {
             status { isOk() }
             jsonPath("$.id") { value(user.id!!) }
-            jsonPath("$.has_kis_credentials") { value(true) }
+            jsonPath("$.has_kis_credentials") { value(false) }
+            jsonPath("$.has_toss_quote") { value(false) }
+            jsonPath("$.kis_account_no") { value(null) }
         }
     }
 
     @Test
     fun patchMeTrims() {
-        val user = saveUser(email())
+        val user = ownerUser()
         mvc.patch("/api/auth/me") {
             cookie(sessionFor(user))
             contentType = MediaType.APPLICATION_JSON
@@ -203,7 +201,7 @@ class AuthControllerTest(
 
     @Test
     fun patchMeBlankToNull() {
-        val user = saveUser(email())
+        val user = ownerUser()
         user.displayName = "old"
         users.save(user)
         mvc.patch("/api/auth/me") {
@@ -215,8 +213,7 @@ class AuthControllerTest(
 
     @Test
     fun existingPythonUserCanLogin() {
-        val e = email()
-        saveUser(e, hash = "\$2b\$12\$tzU.mBUX9gtZUw3/q0ZafehPvEa.xtjVjhvJqfSPzzETSeaPxJC3y")
-        login(e, "correct horse 8").andExpect { status { isOk() } }
+        ownerUser(hash = "\$2b\$12\$tzU.mBUX9gtZUw3/q0ZafehPvEa.xtjVjhvJqfSPzzETSeaPxJC3y")
+        login(null, "correct horse 8").andExpect { status { isOk() } }
     }
 }

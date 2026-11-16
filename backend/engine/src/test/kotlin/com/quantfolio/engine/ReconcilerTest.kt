@@ -25,7 +25,6 @@ import com.quantfolio.domain.trading.OrderStatus
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
-import com.quantfolio.security.CredentialCipher
 import com.quantfolio.test.ContainersConfig
 import com.quantfolio.alert.AlertPublisher
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
@@ -84,7 +83,6 @@ class ReconcilerTest(
     @Autowired private val positions: com.quantfolio.domain.trading.PositionRepository,
     @Autowired private val notices: FillNoticeApplier,
     @Autowired private val executor: OrderExecutor,
-    @Autowired private val cipher: CredentialCipher,
     @Autowired private val ctx: ApplicationContext,
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
@@ -98,9 +96,10 @@ class ReconcilerTest(
 
     private fun anyUser(): User = any(User::class.java) ?: User(email = "", passwordHash = "")
 
-    private fun setup(kisAccountNo: String? = null): Pair<Int, Int> {
+    private fun setup(kisAccountNo: String? = null, authorized: Boolean = true): Pair<Int, Int> {
         willReturn(wrapped).given(brokers).forUser(anyUser())
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", kisAccountNo = kisAccountNo))
+        if (authorized) willReturn(true).given(brokers).isOwner(u.id)
         val s = strategies.save(Strategy(u.id!!, "s", config = mapOf("type" to "rsi")))
         return u.id!! to s.id!!
     }
@@ -111,6 +110,21 @@ class ReconcilerTest(
     private fun recorded(o: Order) = executions.findAll().filter { it.orderId == o.id }.sumOf { it.filledQty.toInt() }
 
     private fun acctPosition(uid: Int, sid: Int) = positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(uid, TEST_KIS_ACCOUNT_KEY, sid, "005930")!!
+
+    @Test
+    fun automaticReconciliationSkipsNonOwnersEvenWithMatchingAccountKey() {
+        val (uid, sid) = setup(authorized = false)
+        val o = order(uid, sid, "005930", 1, OrderStatus.submitted, "ODNO-A")
+        var brokerQueries = 0
+        broker.execution = { brokerQueries++; Fill(1, BigDecimal("1000"), true) }
+
+        assertEquals(0, reconciler.reconcileOpenOrders(uid).getValue("checked"))
+        assertEquals(0, reconciler.reconcileOrder(o.id!!).getValue("checked"))
+        assertEquals(0, brokerQueries)
+        assertEquals(0, recorded(o))
+        assertEquals(OrderStatus.submitted, orders.findById(o.id!!).orElseThrow().status)
+        assertEquals(TEST_KIS_ACCOUNT_KEY, orders.findById(o.id!!).orElseThrow().brokerAccountKey)
+    }
 
     @Test
     fun recordsOnlyTheIncrementAndIsIdempotent() {
@@ -209,7 +223,7 @@ class ReconcilerTest(
             }
         }
         fun configured(account: String): BrokerClient = BrokerCredentials(
-            cipher, QuantfolioProperties(kis = QuantfolioProperties.Kis(appKey = UUID.randomUUID().toString(), appSecret = "test", accountNo = account)),
+            QuantfolioProperties(tradingOwnerUserId = uid, kis = QuantfolioProperties.Kis(appKey = UUID.randomUUID().toString(), appSecret = "test", accountNo = account)),
             redis, http, Clock.systemUTC(),
         ).forUser(user)
 
@@ -293,6 +307,38 @@ class ReconcilerTest(
         reconciler.reconcileOpenOrders(uid)
         assertEquals(2, recorded(current))
         assertEquals(2, recorded(legacy))
+    }
+
+    /**
+     * 컷오버 시나리오: 계좌는 시크릿 교체로 바뀌어 V2 트리거가 발화하지 않았다(`kis_balance_reconcile_blocked`=false). 이전 계좌의 체결 이력은 계좌 키 NULL.
+     * 그래도 그 이력 하나로 이 사용자의 모의 잔고 추정(매수 배정·잔고 종결 근거 ④)은 전부 막혀야 한다 — 잔고를 읽지도 않는다.
+     */
+    @Test
+    fun legacyHistoryBlocksBalanceInferenceAndClosureWithoutAccountChangeFlag() {
+        val (uid, sid) = setup()
+        val legacy = order(uid, sid, "005930", 10, OrderStatus.filled, "OLD-ACCOUNT", dayAgo().minus(Duration.ofDays(120)), accountKey = null)
+        executions.save(Execution(legacy.id!!, sid, BigDecimal.TEN, BigDecimal("1000")))
+        val numbered = order(uid, sid, "005930", 3, OrderStatus.submitted, "NEW-BUY", dayAgo())
+        val unknownBuy = order(uid, sid, "000660", 4, OrderStatus.pending, null, dayAgo())
+        val unknownSell = order(uid, sid, "005930", 2, OrderStatus.pending, null, dayAgo(), side = "sell")
+        broker.execution = { Fill(0, null, false) }
+        balance = Balance(listOf(mapOf("pdno" to "005930", "hldg_qty" to "13", "pchs_avg_pric" to "1000"))) // 000660 없음 → 허용되면 unknownBuy 가 잔고 근거로 종결된다
+        var balanceReads = 0
+        onBalance = { balanceReads++ }
+        val flag = ctx.getBean(NamedParameterJdbcTemplate::class.java)
+            .queryForObject("select kis_balance_reconcile_blocked from users where id = :u", mapOf("u" to uid), Boolean::class.java)
+        assertEquals(false, flag)
+
+        reconciler.reconcileOpenOrders(uid)
+
+        assertEquals(0, balanceReads)
+        for (o in listOf(numbered, unknownBuy, unknownSell)) {
+            assertNull(reload(o).closedAt, "order ${o.id}")
+            assertEquals(0, recorded(o), "order ${o.id}")
+        }
+        assertTrue(alertsOf(sid, "order_unconfirmed").isNotEmpty()) // 접수불명은 사람에게(재주문 없음)
+        assertTrue(alertsOf(sid, "order_closed_unconfirmed").isEmpty())
+        assertEquals(0, broker.placed)
     }
 
     @Test
@@ -1160,8 +1206,8 @@ class ReconcilerTest(
     }
 
     /** 스프링 빈과 같은 의존성으로 시계·KIS 환경만 바꾼 정합기. 재확인 맵도 따로라 공유 빈과 섞이지 않는다. */
-    private fun reconcilerWith(clock: Clock = Clock.systemUTC(), kisEnv: String = "vts") = Reconciler(
-        orders, users, brokers, ctx.getBean(Fills::class.java), ctx.getBean(AlertPublisher::class.java), redis,
+    private fun reconcilerWith(clock: Clock = Clock.systemUTC(), kisEnv: String = "vts", fills: Fills = ctx.getBean(Fills::class.java)) = Reconciler(
+        orders, users, brokers, fills, ctx.getBean(AlertPublisher::class.java), redis,
         ctx.getBean(NamedParameterJdbcTemplate::class.java), ctx.getBean(TransactionTemplate::class.java),
         QuantfolioProperties(kis = QuantfolioProperties.Kis(env = kisEnv, prodApproved = kisEnv == "prod")), clock, // 정합기는 isPaperTrading 만 본다 — 증권사 호출은 가짜
     )
@@ -1693,6 +1739,38 @@ class ReconcilerTest(
         val o = order(uid, sid, "005930", 3, OrderStatus.submitted, "SYM-TRIM", dayAgo())
         assertTrue(reconciler.resolveManually(o.id!!, " 005930\t", 0, null))
         assertEquals(OrderStatus.cancelled, reload(o).status)
+    }
+
+    /**
+     * 증분 기록 뒤 종결 조건부 update 가 실패하면(락 만료 뒤 다른 경로가 같은 트랜잭션 구간에 상태를 바꾼 것과 같은 효과) 기록한 증분까지 되돌린다 —
+     * 증분만 기록되고 종결 안 된 반쪽 상태를 남기지 않는다. 경합은 `Fills.record` 직후 같은 트랜잭션에서 주문 상태를 바꿔 만든다(main 코드 훅 없음).
+     */
+    @Test
+    fun manualResolveRollsBackRecordedIncrementWhenCloseFails() {
+        val (uid, sid) = setup()
+        val o = order(uid, sid, "005930", 3, OrderStatus.partial, "MANUAL-RB", dayAgo())
+        executions.save(Execution(o.id!!, sid, BigDecimal.ONE, BigDecimal("1000")))
+        positions.save(com.quantfolio.domain.trading.Position(uid, sid, "005930", BigDecimal.ONE, BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        val jdbc = ctx.getBean(NamedParameterJdbcTemplate::class.java)
+        var recordedInTx = 0
+        val racingFills = object : Fills(executions, positions, orders, ctx.getBean(AlertPublisher::class.java), jdbc) {
+            override fun record(order: Order, qty: Int, price: BigDecimal, fullyFilled: Boolean, expectedRecordedQty: Int): Fills.RecordedFill? {
+                val r = super.record(order, qty, price, fullyFilled, expectedRecordedQty)
+                recordedInTx = recordedQty(order.id!!)
+                jdbc.update("update orders set status = 'submitted' where id = :id", mapOf("id" to order.id)) // 종결 조건(status = 읽은 값)을 깬다
+                return r
+            }
+        }
+        val before = ledger(o)
+
+        assertEquals(false, reconcilerWith(fills = racingFills).resolveManually(o.id!!, "005930", 2, BigDecimal("1100")))
+
+        assertEquals(2, recordedInTx) // 증분은 실제로 기록됐다가
+        assertEquals(before, ledger(o)) // executions·포지션·주문 상태 모두 호출 전과 같다
+        val alert = alertsOf(sid, "order_resolve_rejected").single()
+        listOf("#${o.id}", "종결하지 못했습니다", "아무것도 바꾸지 않았습니다").forEach { assertTrue(alert.message.contains(it), alert.message) }
+        assertTrue(alertsOf(sid, "order_resolved_manually").isEmpty())
+        assertEquals(0, broker.placed)
     }
 
     @Test

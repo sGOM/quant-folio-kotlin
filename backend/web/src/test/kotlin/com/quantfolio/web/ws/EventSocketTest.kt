@@ -1,5 +1,6 @@
 package com.quantfolio.web.ws
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
@@ -8,11 +9,13 @@ import com.quantfolio.test.ContainersConfig
 import com.quantfolio.web.auth.SESSION_COOKIE
 import com.quantfolio.web.auth.SessionStore
 import org.junit.jupiter.api.Test
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.web.socket.CloseStatus
 import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketHttpHeaders
@@ -35,6 +38,10 @@ class EventSocketTest(
 ) {
     @LocalServerPort var port: Int = 0
 
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
+
+    private fun user() = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
+
     private class Recorder : TextWebSocketHandler() {
         val messages = LinkedBlockingQueue<String>()
         val closed = CompletableFuture<CloseStatus>()
@@ -56,8 +63,18 @@ class EventSocketTest(
     }
 
     @Test
+    fun nonOwnerSessionIsClosedWith4401() {
+        val owner = user()
+        val other = user()
+        assertEquals(4401, connect(sessions.create(owner.id!!)).second.closed.get(5, TimeUnit.SECONDS).code) // 소유자 미설정
+        willReturn(owner.id).given(props).tradingOwnerUserId
+        assertEquals(4401, connect(sessions.create(other.id!!)).second.closed.get(5, TimeUnit.SECONDS).code)
+    }
+
+    @Test
     fun relaysOnlyOwnUserEventsAndSkipsInvalidJson() {
-        val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
+        val u = user()
+        willReturn(u.id).given(props).tradingOwnerUserId
         val (session, rec) = connect(sessions.create(u.id!!))
         try {
             assertEquals("""{"type":"connected","user_id":${u.id}}""", rec.messages.poll(5, TimeUnit.SECONDS))

@@ -84,7 +84,9 @@ export interface UserOut {
   /** 공유 전략 목록에 표시할 닉네임. 미설정이면 null. */
   display_name: string | null;
   broker: Broker;
+  /** 소유자가 서버에 설정한 주문 계좌. */
   kis_account_no: string | null;
+  /** 소유자의 주문 브로커 자격증명 설정 여부. */
   has_kis_credentials: boolean;
   /** 통합 시세(토스) 연동 여부. true면 워치리스트가 국내+해외를 토스로 조회. */
   has_toss_quote: boolean;
@@ -1155,28 +1157,15 @@ export interface TrackingResponse {
 // ─────────────────────────── API ───────────────────────────
 export const api = {
   /**
-   * 이메일/비밀번호로 신규 계정을 생성한다.
-   * @param email    가입 이메일(서버에서 중복 검사)
-   * @param password 비밀번호(8자 이상)
-   * @returns 생성된 사용자 정보
-   * @throws Error 이미 등록된 이메일이거나 검증 실패 시
-   */
-  register: (email: string, password: string) =>
-    request<UserOut>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    }),
-
-  /**
    * 로그인. 성공 시 서버가 HttpOnly 쿠키(액세스/리프레시 토큰)를 발급하며,
    * 토큰 자체는 클라이언트 JS 로 노출되지 않는다.
-   * @param email    이메일(OAuth2 form 의 username 필드로 전송)
-   * @param password 비밀번호
+   * 계정 선택 없이 접속 비밀번호만 보낸다(서버가 내부 소유자 계정으로 검증).
+   * @param password 접속 비밀번호
    * @returns 로그인한 사용자 정보
-   * @throws Error 이메일/비밀번호 불일치 시
+   * @throws Error 비밀번호 불일치·시도 제한·서버 소유자 미설정 시
    */
-  login: async (email: string, password: string): Promise<UserOut> => {
-    const body = new URLSearchParams({ username: email, password });
+  login: async (password: string): Promise<UserOut> => {
+    const body = new URLSearchParams({ password });
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -1218,51 +1207,11 @@ export const api = {
     }>("/api/kis/health"),
 
   /**
-   * 증권사 API 자격증명을 등록·갱신한다. 키/시크릿은 서버에서 암호화 저장된다.
-   * broker 에 따라 필드 의미가 달라진다(kis: App Key/Secret/계좌, toss: client_id/secret/accountSeq).
-   * @param broker         증권사 식별자(kis|toss)
-   * @param kis_app_key    App Key 또는 토스 client_id
-   * @param kis_app_secret App Secret 또는 토스 client_secret
-   * @param kis_account_no 계좌번호(예: "50012345-01") 또는 토스 accountSeq
-   */
-  registerKis: (
-    broker: Broker,
-    kis_app_key: string,
-    kis_app_secret: string,
-    kis_account_no: string,
-  ) =>
-    request<UserOut>("/api/kis/credentials", {
-      method: "PUT",
-      body: JSON.stringify({ broker, kis_app_key, kis_app_secret, kis_account_no }),
-    }),
-
-  /**
    * 현재가 시세 조회. 통합 시세(토스) 연동 시 국내·해외 모두, 아니면 주문 브로커로 조회.
    * @param symbol 종목코드(국내: "005930", 해외: "AAPL")
    */
   quote: (symbol: string) =>
     request<Quote>(`/api/kis/quote/${encodeURIComponent(symbol)}`),
-
-  /**
-   * 통합 시세(국내+해외)용 토스 자격증명을 등록·갱신한다. 주문 브로커와 독립이다.
-   * @param client_id     토스 client_id
-   * @param client_secret 토스 client_secret
-   * @param account_seq   토스 accountSeq
-   */
-  registerTossQuote: (
-    client_id: string,
-    client_secret: string,
-    account_seq: string,
-  ) =>
-    request<UserOut>("/api/kis/toss-quote", {
-      method: "PUT",
-      body: JSON.stringify({
-        broker: "toss",
-        kis_app_key: client_id,
-        kis_app_secret: client_secret,
-        kis_account_no: account_seq,
-      }),
-    }),
 
   // --- 전략 ---
   /** 로그인 사용자의 전략 목록을 조회한다. */

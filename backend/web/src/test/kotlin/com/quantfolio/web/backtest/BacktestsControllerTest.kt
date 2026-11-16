@@ -1,6 +1,7 @@
 package com.quantfolio.web.backtest
 
 import com.quantfolio.backtest.BacktestRunner
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.Strategy
@@ -19,12 +20,14 @@ import com.quantfolio.web.auth.SESSION_COOKIE
 import com.quantfolio.web.auth.SessionStore
 import jakarta.servlet.http.Cookie
 import org.junit.jupiter.api.Test
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -53,12 +56,15 @@ class BacktestsControllerTest(
     @MockitoBean lateinit var loader: OhlcvLoader
     @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
 
     private inner class Me {
         val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
-        val cookie = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        private val session = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        /** 단일 소유자 서비스라 세션을 쓰는 사용자가 곧 설정된 소유자다(그 외 세션은 401) — 쿠키를 쓰는 순간 소유자로 지정한다. */
+        val cookie: Cookie get() = session.also { willReturn(user.id).given(props).tradingOwnerUserId }
         fun strategy(config: Map<String, Any?>) = strategies.save(Strategy(user.id!!, "s", config = config))
     }
 

@@ -8,7 +8,6 @@ import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.hibernate.annotations.UpdateTimestamp
 import org.springframework.data.jpa.repository.JpaRepository
-import org.springframework.data.jpa.repository.Query
 import java.time.Instant
 
 @Entity
@@ -19,7 +18,7 @@ class User(
     var displayName: String? = null,
     /** "kis" | "toss" */
     @Column(nullable = false) var broker: String = "kis",
-    /** 증권사 자격증명은 Fernet 암호문으로 저장된다(평문 저장 금지). */
+    /** 이전 DB 자격증명(Fernet 암호문)과 계좌 기록. 연결에는 서버 설정을 쓴다. */
     var kisAppKey: String? = null,
     var kisAppSecret: String? = null,
     var kisAccountNo: String? = null,
@@ -34,8 +33,4 @@ class User(
 
 interface UserRepository : JpaRepository<User, Int> {
     fun findByEmail(email: String): User?
-
-    // FK 참조(새 전략·주문)까지 계좌 변경 판단과 직렬화한다.
-    @Query(value = "select * from users where id = :id for update", nativeQuery = true)
-    fun findForCredentialUpdate(id: Int): User?
 }

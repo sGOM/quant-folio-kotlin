@@ -1,5 +1,6 @@
 package com.quantfolio.engine
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertRepository
 import com.quantfolio.domain.strategy.Strategy
@@ -13,6 +14,7 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyInt
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
+import org.mockito.BDDMockito.willReturn
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
@@ -21,6 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.math.BigDecimal
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -39,6 +42,7 @@ class EngineRuntimeTest(
     @Value("\${quantfolio.engine.autostart}") private val autostart: Boolean,
 ) {
     @MockitoBean lateinit var reconciler: Reconciler
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     @Test
     fun testsNeverAutostartTheEngine() {
@@ -47,8 +51,23 @@ class EngineRuntimeTest(
     }
 
     @Test
+    fun unauthorizedLiveStrategyIsNeverRecovered() {
+        val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        val sid = strategies.save(Strategy(uid, "live", config = mapOf("type" to "rsi"), status = StrategyStatus.live)).id!!
+        try {
+            runtime.recover()
+            assertFalse(sid in runtime.activeStrategies())
+            assertEquals(false, redis.opsForSet().isMember(RedisKeys.ACTIVE_STRATEGIES, sid.toString()))
+        } finally {
+            runtime.stopStrategy(sid)
+            strategies.deleteById(sid)
+        }
+    }
+
+    @Test
     fun controlMessagesStartAndStopRunners() {
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        willReturn(uid).given(props).tradingOwnerUserId
         val sid = strategies.save(Strategy(uid, "s", config = mapOf("type" to "rsi", "symbol" to "005930"))).id!!
         runtime.handleControl("""{"action": "start", "strategy_id": $sid}""")
         assertTrue(sid in runtime.activeStrategies())
@@ -118,6 +137,7 @@ class EngineRuntimeTest(
     @Test
     fun tossStrategyCannotStartWithPaperKisSettings() {
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", broker = "toss")).id!!
+        willReturn(uid).given(props).tradingOwnerUserId
         val sid = strategies.save(Strategy(uid, "toss", config = mapOf("type" to "rsi", "symbol" to "005930"))).id!!
         try {
             runtime.startStrategy(sid)
@@ -140,6 +160,7 @@ class EngineRuntimeTest(
     @Test
     fun startRecoversLiveStrategiesAndBeatsHeart() {
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        willReturn(uid).given(props).tradingOwnerUserId
         val live = strategies.save(Strategy(uid, "live", config = mapOf("type" to "rsi", "symbol" to "005930"), status = StrategyStatus.live)).id!!
         val draft = strategies.save(Strategy(uid, "draft", config = mapOf("type" to "rsi", "symbol" to "005930"))).id!!
         redis.delete(RedisKeys.ENGINE_HEARTBEAT)

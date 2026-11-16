@@ -1,5 +1,6 @@
 package com.quantfolio.web.strategy
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
@@ -17,6 +18,7 @@ import com.quantfolio.web.auth.SESSION_COOKIE
 import com.quantfolio.web.auth.SessionStore
 import jakarta.servlet.http.Cookie
 import org.junit.jupiter.api.Test
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -24,6 +26,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
@@ -36,7 +39,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -54,11 +56,14 @@ class StrategiesControllerTest(
     @Autowired private val cipher: CredentialCipher,
     @Autowired private val jdbc: JdbcTemplate,
 ) {
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
     private val json = JsonMapper.builder().build()
 
     private inner class Me(displayName: String? = null) {
         val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1"), displayName = displayName))
-        val cookie = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        private val session = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        /** 단일 소유자 서비스라 세션을 쓰는 사용자가 곧 설정된 소유자다(그 외 세션은 401) — 쿠키를 쓰는 순간 소유자로 지정한다. */
+        val cookie: Cookie get() = session.also { willReturn(user.id).given(props).tradingOwnerUserId }
         fun strategy(name: String = "s", config: Map<String, Any?> = mapOf("type" to "sma_crossover", "symbol" to "005930"), shared: Boolean = false) =
             strategies.save(Strategy(user.id!!, name, config = config, isShared = shared, sharedAt = if (shared) Instant.now() else null))
     }
@@ -298,16 +303,13 @@ class StrategiesControllerTest(
     }
 
     @Test
-    fun switchingOrderAccountsDisablesBalanceInferenceButRotatingKeysDoesNot() {
+    fun legacyAccountChangeTriggerDisablesBalanceInferenceButKeyRotationDoesNot() {
         val me = Me()
         fun credentials(account: String, broker: String = "kis", key: String = "APPKEY", who: Me = me) {
-            mvc.put("/api/kis/credentials") {
-                cookie(who.cookie)
-                contentType = MediaType.APPLICATION_JSON
-                content = json.writeValueAsString(
-                    mapOf("broker" to broker, "kis_app_key" to key, "kis_app_secret" to "SECRET", "kis_account_no" to account),
-                )
-            }.andExpect { status { isOk() } }
+            jdbc.update(
+                "update users set broker = ?, kis_app_key = ?, kis_app_secret = ?, kis_account_no = ? where id = ?",
+                broker, cipher.encrypt(key), cipher.encrypt("SECRET"), account, who.user.id,
+            )
         }
         fun blocked(who: Me = me) = jdbc.queryForObject(
             "select kis_balance_reconcile_blocked from users where id = ?",
@@ -344,34 +346,25 @@ class StrategiesControllerTest(
     }
 
     @Test
-    fun credentialsAreEncryptedAndTossQuoteIgnoresBroker() {
+    fun credentialRoutesRejectWrites() {
         val me = Me()
-        mvc.put("/api/kis/credentials") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"broker":"kis","kis_app_key":"APPKEY","kis_app_secret":"SECRET","kis_account_no":"12345678-01"}"""
-        }.andExpect {
-            status { isOk() }
-            jsonPath("$.has_kis_credentials") { value(true) }
-            jsonPath("$.kis_account_no") { value("12345678-01") }
-            jsonPath("$.kis_app_key") { doesNotExist() }
+        for (route in listOf("credentials", "toss-quote")) {
+            mvc.put("/api/kis/$route") {
+                cookie(me.cookie)
+                contentType = MediaType.APPLICATION_JSON
+                content = """{"broker":"toss","kis_app_key":"APPKEY","kis_app_secret":"SECRET","kis_account_no":"1234"}"""
+            }.andExpect {
+                status { isForbidden() }
+                jsonPath("$.detail") { value("증권사 자격증명은 서버 설정에서 관리합니다.") }
+            }
         }
-        val saved = users.findById(me.user.id!!).get()
-        assertNotEquals("APPKEY", saved.kisAppKey)
-        assertEquals("APPKEY", cipher.decrypt(saved.kisAppKey!!))
-        mvc.put("/api/kis/toss-quote") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"broker":"toss","kis_app_key":"T1","kis_app_secret":"T2","kis_account_no":"9"}"""
-        }.andExpect {
-            jsonPath("$.broker") { value("kis") }
-            jsonPath("$.has_toss_quote") { value(true) }
-        }
-        assertEquals("T2", cipher.decrypt(users.findById(me.user.id!!).get().tossAppSecret!!))
-        mvc.put("/api/kis/credentials") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"broker":"xx","kis_app_key":"a","kis_app_secret":"b","kis_account_no":"c"}"""
-        }.andExpect { status { isUnprocessableContent() } }
+        val saved = users.findById(me.user.id!!).orElseThrow()
+        assertEquals("kis", saved.broker)
+        assertNull(saved.kisAppKey)
+        assertNull(saved.kisAppSecret)
+        assertNull(saved.kisAccountNo)
+        assertNull(saved.tossAppKey)
+        assertNull(saved.tossAppSecret)
+        assertNull(saved.tossAccountNo)
     }
 }

@@ -51,10 +51,11 @@ class EngineController(
     @PostMapping("/strategies/{id}/start")
     fun start(@CurrentUser user: User, @PathVariable id: Int): Map<String, String> {
         val s = strategies.owned(user, id)
+        if (!credentials.isOwner(user.id)) throw ApiException(HttpStatus.FORBIDDEN, "지정된 거래 소유자만 전략을 시작할 수 있습니다.")
         val broker = try {
             credentials.forUser(user)
         } catch (e: BrokerError) {
-            throw ApiException(HttpStatus.BAD_REQUEST, "증권사 자격증명을 먼저 등록하세요.")
+            throw ApiException(HttpStatus.BAD_REQUEST, e.message ?: "증권사 자격증명이 서버에 설정되지 않았습니다.")
         }
         if (broker.orderAccountKey == null) throw ApiException(HttpStatus.BAD_REQUEST, "주문 계좌를 확인할 수 없습니다.")
         s.status = StrategyStatus.live

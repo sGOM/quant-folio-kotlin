@@ -49,7 +49,7 @@ function DashboardContent() {
         <header className="mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">대시보드</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            계정과 KIS 연동 상태를 한눈에 확인하세요.
+            계정과 증권사 연동 상태를 확인하세요.
           </p>
         </header>
 
@@ -68,16 +68,16 @@ function DashboardContent() {
                 <div className="divide-y divide-border/60">
                   <Row label="이메일" value={me.data?.email ?? "-"} />
                   <Row
-                    label="KIS 계좌"
-                    value={me.data?.kis_account_no ?? "미등록"}
+                    label="주문 계좌"
+                    value={me.data?.kis_account_no ?? "미설정"}
                   />
                   <Row
-                    label="KIS 자격증명"
+                    label="증권사 자격증명"
                     value={
                       me.data?.has_kis_credentials ? (
-                        <Badge variant="success">등록됨</Badge>
+                        <Badge variant="success">설정됨</Badge>
                       ) : (
-                        <Badge variant="muted">미등록</Badge>
+                        <Badge variant="muted">미설정</Badge>
                       )
                     }
                   />
@@ -89,12 +89,12 @@ function DashboardContent() {
           <Card>
             <CardHeader className="flex-row items-center gap-2 space-y-0">
               <KeyRound className="h-4 w-4 text-muted-foreground" />
-              <CardTitle className="text-sm">KIS 연동 상태</CardTitle>
+              <CardTitle className="text-sm">증권사 연동 상태</CardTitle>
             </CardHeader>
             <CardContent>
               {!me.data?.has_kis_credentials ? (
                 <p className="text-sm text-muted-foreground">
-                  설정에서 KIS 모의투자 API 키를 등록하세요.
+                  이 계정에서 사용할 수 있는 증권사 자격증명이 없습니다.
                 </p>
               ) : kis.isLoading ? (
                 <CardSkeleton rows={3} />

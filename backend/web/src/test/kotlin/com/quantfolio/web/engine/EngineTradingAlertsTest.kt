@@ -1,5 +1,6 @@
 package com.quantfolio.web.engine
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
@@ -20,6 +21,7 @@ import com.quantfolio.web.auth.SESSION_COOKIE
 import com.quantfolio.web.auth.SessionStore
 import jakarta.servlet.http.Cookie
 import org.junit.jupiter.api.Test
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -28,6 +30,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.listener.ChannelTopic
 import org.springframework.data.redis.listener.RedisMessageListenerContainer
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -38,6 +41,7 @@ import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @SpringBootTest
@@ -55,6 +59,8 @@ class EngineTradingAlertsTest(
     @Autowired private val cf: RedisConnectionFactory,
     @Autowired private val cipher: CredentialCipher,
 ) {
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
+
     private val json = JsonMapper.builder().build()
 
     private inner class Me(withKeys: Boolean = false, accountNo: String? = "50012345-01") {
@@ -85,16 +91,38 @@ class EngineTradingAlertsTest(
     }
 
     @Test
+    fun unauthorizedStartDoesNotChangeStatusOrPublishControl() {
+        val (container, q) = listen(RedisKeys.ENGINE_CONTROL)
+        try {
+            val me = Me(withKeys = true)
+            val owner = Me()
+            val s = me.strategy()
+            for (ownerId in listOf(null, owner.user.id)) {
+                willReturn(ownerId).given(props).tradingOwnerUserId
+                // 비소유자 세션은 세션 조회 단계에서 401(소유자 미설정이면 모든 세션).
+                mvc.post("/api/engine/strategies/${s.id}/start") { cookie(me.cookie) }.andExpect { status { isUnauthorized() } }
+                assertEquals(StrategyStatus.backtested, strategies.findById(s.id!!).orElseThrow().status)
+                assertNull(q.poll(250, TimeUnit.MILLISECONDS))
+            }
+        } finally {
+            container.stop()
+        }
+    }
+
+    @Test
     fun startNeedsCredentialsThenPublishesControl() {
         val (container, q) = listen(RedisKeys.ENGINE_CONTROL)
         try {
             val noKeys = Me()
+            willReturn(noKeys.user.id).given(props).tradingOwnerUserId
             val s0 = noKeys.strategy()
             mvc.post("/api/engine/strategies/${s0.id}/start") { cookie(noKeys.cookie) }.andExpect {
                 status { isBadRequest() }
-                jsonPath("$.detail") { value("증권사 자격증명을 먼저 등록하세요.") }
+                jsonPath("$.detail") { value("증권사 API 자격증명이 서버에 설정되지 않았습니다.") }
             }
-            val noAccount = Me(withKeys = true, accountNo = null)
+            val noAccount = Me()
+            willReturn(noAccount.user.id).given(props).tradingOwnerUserId
+            willReturn(QuantfolioProperties.Kis(appKey = "test-key", appSecret = "test-secret")).given(props).kis
             val withoutAccount = noAccount.strategy()
             mvc.post("/api/engine/strategies/${withoutAccount.id}/start") { cookie(noAccount.cookie) }.andExpect {
                 status { isBadRequest() }
@@ -102,7 +130,9 @@ class EngineTradingAlertsTest(
             }
             assertEquals(StrategyStatus.backtested, strategies.findById(withoutAccount.id!!).orElseThrow().status)
 
-            val me = Me(withKeys = true)
+            val me = Me()
+            willReturn(me.user.id).given(props).tradingOwnerUserId
+            willReturn(QuantfolioProperties.Kis(appKey = "test-key", appSecret = "test-secret", accountNo = "50012345-01")).given(props).kis
             val s = me.strategy()
             mvc.post("/api/engine/strategies/${s.id}/start") { cookie(me.cookie) }.andExpect { jsonPath("$.status") { value("live") } }
             assertEquals(StrategyStatus.live, strategies.findById(s.id!!).get().status)
@@ -117,8 +147,27 @@ class EngineTradingAlertsTest(
     }
 
     @Test
+    fun userProfileShowsServerBrokerStateOnlyToOwner() {
+        val owner = Me(withKeys = true, accountNo = "12345678-02")
+        val other = Me(withKeys = true)
+        willReturn(owner.user.id).given(props).tradingOwnerUserId
+        willReturn(QuantfolioProperties.Kis(appKey = "test-key", appSecret = "test-secret", accountNo = "50012345-01")).given(props).kis
+        willReturn(QuantfolioProperties.Toss(appKey = "test-toss-key", appSecret = "test-toss-secret")).given(props).toss
+
+        mvc.get("/api/auth/me") { cookie(owner.cookie) }.andExpect {
+            jsonPath("$.kis_account_no") { value("50012345-01") }
+            jsonPath("$.has_kis_credentials") { value(true) }
+            jsonPath("$.has_toss_quote") { value(true) }
+        }
+        // 비소유자는 기존 세션으로도 들어올 수 없다 — 소유자 계좌·잔고 응답 자체가 없다.
+        mvc.get("/api/auth/me") { cookie(other.cookie) }.andExpect { status { isUnauthorized() } }
+        mvc.get("/api/trading/positions") { cookie(other.cookie) }.andExpect { status { isUnauthorized() } }
+    }
+
+    @Test
     fun statusAndStrategyHealth() {
         val me = Me()
+        willReturn(me.user.id).given(props).tradingOwnerUserId
         redis.opsForValue().set(RedisKeys.ENGINE_HEARTBEAT, "alive")
         redis.opsForValue().set(RedisKeys.BACKUP_LAST_SUCCESS, "2026-10-18T03:00:00+00:00")
         mvc.get("/api/engine/status") { cookie(me.cookie) }.andExpect {
@@ -151,6 +200,7 @@ class EngineTradingAlertsTest(
     @Test
     fun unknownAccountPositionsAreHiddenAndOrdersAreCapped() {
         val me = Me()
+        willReturn(me.user.id).given(props).tradingOwnerUserId
         positions.save(Position(me.user.id!!, null, "005930", BigDecimal("10"), BigDecimal("70000.5")))
         positions.save(Position(me.user.id!!, null, "000660", BigDecimal("0"), BigDecimal("1")))
         mvc.get("/api/trading/positions") { cookie(me.cookie) }.andExpect {
@@ -169,6 +219,7 @@ class EngineTradingAlertsTest(
     fun alertsVisibilityPagingAndRead() {
         val me = Me()
         val other = Me()
+        willReturn(me.user.id).given(props).tradingOwnerUserId
         val s = me.strategy()
         val t0 = Instant.now().minusSeconds(3600)
         val mine = alerts.save(Alert(me.user.id, s.id!!, AlertSeverity.warning, "x", "내 알림", createdAt = t0))

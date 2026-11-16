@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component
 import java.time.Duration
 
 /**
- * 로그인 브루트포스 방어. 같은 이메일·IP 로 실패가 누적되면 윈도우 동안 차단한다(Redis 고정 윈도우).
+ * 로그인 브루트포스 방어. 같은 사용자 키(로그인은 고정 소유자 키)·IP 로 실패가 누적되면 윈도우 동안 차단한다(Redis 고정 윈도우).
  * Redis 장애가 로그인 자체를 막으면 안 되므로 모든 연산은 실패 시 통과(fail-open)한다.
  */
 @Component

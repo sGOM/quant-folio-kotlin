@@ -1,5 +1,6 @@
 package com.quantfolio.web.analysis
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.Strategy
@@ -23,12 +24,14 @@ import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
+import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -57,12 +60,15 @@ class AnalysisControllersTest(
     @Autowired private val ticks: PriceTickStore,
 ) {
     @MockitoBean lateinit var loader: OhlcvLoader
+    @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
 
     private inner class Me {
         val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
-        val cookie = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        private val session = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
+        /** 단일 소유자 서비스라 세션을 쓰는 사용자가 곧 설정된 소유자다(그 외 세션은 401) — 쿠키를 쓰는 순간 소유자로 지정한다. */
+        val cookie: Cookie get() = session.also { willReturn(user.id).given(props).tradingOwnerUserId }
         fun strategy(config: Map<String, Any?> = mapOf("type" to "rsi", "symbol" to "005930", "cash" to 1_000_000)) = strategies.save(Strategy(user.id!!, "s", config = config))
     }
 

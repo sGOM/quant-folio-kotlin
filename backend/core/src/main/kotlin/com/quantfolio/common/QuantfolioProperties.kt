@@ -16,6 +16,7 @@ data class QuantfolioProperties(
     val secretKey: String = "",
     /** 증권사 자격증명 Fernet 키(base64 32바이트) */
     val credentialEncKey: String = "",
+    val tradingOwnerUserId: Int? = null,
     val sessionTtlMinutes: Long = 60L * 24 * 14,
     val cookie: Cookie = Cookie(),
     val kis: Kis = Kis(),
@@ -35,6 +36,7 @@ data class QuantfolioProperties(
 
     /** 부팅 시 안전측 강제. 실패하면 프로세스가 뜨지 않는다. */
     fun validate() {
+        check(tradingOwnerUserId == null || tradingOwnerUserId > 0) { "TRADING_OWNER_USER_ID는 양의 사용자 ID여야 합니다." }
         check(!(kis.env == "prod" && !kis.prodApproved)) {
             "KIS_ENV=prod(실전)인데 KIS_PROD_APPROVED 가 승인(true)되지 않았습니다. 실전 전환은 명시적 2단계 승인이 필요합니다."
         }
