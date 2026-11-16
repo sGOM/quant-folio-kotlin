@@ -41,6 +41,7 @@ paths:
   `/run/secrets/<name>` 파일(configtree, 앞뒤 공백 제거) > 원본과 같은 이름의 환경변수(.env 호환) > 기본값.
 - 부팅 거부(안전측): `KIS_ENV=prod` 인데 `KIS_PROD_APPROVED` 아님, `APP_ENV=prod` 인데 시크릿 누락·`COOKIE_SECURE=false`.
 - DB URL 은 `DATABASE_JDBC_URL`(원본 `DATABASE_URL` 은 SQLAlchemy 형식이라 쓰지 않는다).
+- `TRADING_OWNER_USER_ID`는 거래 가능한 소유자 ID이며 미설정이면 거래를 차단한다. 증권사 자격증명은 서버 설정만 사용하고 사용자 DB 값으로 덮어쓰지 않는다.
 
 ## 함정
 
