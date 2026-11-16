@@ -34,6 +34,10 @@
 			#  스푸핑된 첫 항목을 백엔드가 그대로 신뢰하게 되어 IP 기반 로그인
 			#  실패 카운터(web ClientIp)가 무력화된다.)
 			header_up X-Forwarded-For {remote_host}
+			# 브라우저가 쓴 포트(Host 의 포트, 호스트 매핑 APP_PORT=8080 이면 8080)를 넘긴다.
+			# web(Tomcat RemoteIpValve)은 X-Forwarded-Host 의 포트를 버리고 이 헤더가 없으면 80/443 으로 보아,
+			# 비표준 포트 접속의 같은 출처 POST 를 CORS 403 으로 거절한다(ProxyHttpsTest). Host 에 포트가 없으면 빈 값(미관측)이고 web 은 빈 값을 무시해 80/443 으로 본다.
+			header_up X-Forwarded-Port {http.request.port}
 		}
 	}
 
