@@ -44,3 +44,6 @@ paths:
 - `orders.reason` 은 주문 근거를 사람이 읽을 한국어로. 새 주문 경로는 반드시 채운다.
 - `alerts.user_id = null` 은 전역 알림(배치 장애 등). `code` 로 종류를 식별하고 중복 억제에 쓴다.
 - `strategies.config` 는 저장된 행에 필드가 빠져 있을 수 있다. 읽을 때 원본 pydantic 기본값을 적용해야 한다(4단계).
+- `orders.closed_at` 은 자동 근거 종결과 수동 `resolve_order` 가 같은 조건부 update(`Reconciler.closeIfUnchanged`) 한 문장으로만 쓴다(엔티티 `updatable=false`). "살아 있는 주문"은 status 만이 아니라 `closed_at is null` 로 판정한다 — 종결된 partial 이 있다.
+- `orders.order_type` 의 DB(`V1__baseline.sql`)·엔티티(`Trading.kt`) 기본값은 `'limit'` 다. 엔진은 `"market"` 만 쓰고(`OrderExecutor`), `order_type` 을 빼고 넣은 행은 `'limit'` 로 남는다 — 지정가의 근거가 아니다.
+- 상태 enum(`OrderStatus`·`AlertSeverity`·`StrategyStatus`)은 소문자 상수 = DB 문자열. JPA 는 변환하지만 **JdbcTemplate 바인딩은 `.name`** — enum 을 그대로 넘기면 실패한다.

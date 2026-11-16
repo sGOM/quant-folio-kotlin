@@ -34,6 +34,8 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
+**예외(원본 보존):** 상장폐지 판정 `lastValid`·DART 정정공시·업종 PIT 폴백은 미래를 본다 — `docs/migration-notes.md` #10~12.
+교란 테스트는 cut 이후 값을 **배율로만** 바꿔 결측 패턴이 같으므로 `lastValid` 를 잡지 못한다.
 백테스트 엔진을 고치면 `PortfolioLookaheadTest`(cut 이후 교란 → cut 까지 결과 동일)가 반드시 초록이어야 한다.
 
 ## 계산부와 조회부 분리
