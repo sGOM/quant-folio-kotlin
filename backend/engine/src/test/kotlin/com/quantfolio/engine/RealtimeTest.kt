@@ -72,7 +72,7 @@ class RealtimeTest {
         }
     }
 
-    /** 원본 int()/Decimal() 은 앞뒤 공백을 받는다 — 공백 낀 수량을 0 으로 읽어 체결을 버리면 모의 매도는 복구되지 않는다. */
+    /** 원본 int()/Decimal() 은 앞뒤 공백을 받는다 — 공백 낀 수량을 0 으로 읽어 버리면 그 체결 통보가 정합을 트리거하지 못한다(다음 주기 정합까지 늦어진다). */
     @Test
     fun fillNoticeAcceptsPaddedNumbers() {
         val f = MutableList(23) { "" }

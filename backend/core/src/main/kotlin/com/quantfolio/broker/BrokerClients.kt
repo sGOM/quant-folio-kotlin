@@ -244,7 +244,11 @@ class KisClient(
     override fun getOrderExecution(orderId: String, symbol: String?): Fill =
         getOrderExecution(orderId, symbol, MarketClock.todayKst(s.clock))
 
-    /** 주문일 하루만 조회한다. 날짜가 다른 주문의 번호가 같아도 서로 섞지 않는다. */
+    /**
+     * 주문일 하루만 조회한다. 날짜가 다른 주문의 번호가 같아도 서로 섞지 않는다.
+     * TR 은 `TTC0081R`(3개월 이내 일별주문체결, 공식 샘플과 같은 TR) — 원본의 `TTC8001R` 은 2026-11-16 모의 실측에서 전량·부분 체결 주문 모두
+     * `rt_cd=0` "조회할 내역 없음"(행 0개)이라 체결을 0 으로 오독했고, `VTTC0081R` + `ODNO` 는 그 주문의 행 하나를 돌려줬다. 실전(`TTTC0081R`)은 측정하지 못했다.
+     */
     @Suppress("UNCHECKED_CAST")
     override fun getOrderExecution(orderId: String, symbol: String?, orderDate: LocalDate): Fill {
         val day = orderDate.format(DateTimeFormatter.BASIC_ISO_DATE)
@@ -262,7 +266,7 @@ class KisClient(
 
     private fun dailyExecutions(
         orderId: String, symbol: String?, day: String, organizationNo: String = "",
-        requireComplete: Boolean = false, transactionId: String = trId("TTC8001R"),
+        requireComplete: Boolean = false, transactionId: String = trId("TTC0081R"),
     ): Map<String, Any?> {
         val (cano, prdt) = accountParts()
         return request(
@@ -270,8 +274,8 @@ class KisClient(
             linkedMapOf(
                 "CANO" to cano, "ACNT_PRDT_CD" to prdt, "INQR_STRT_DT" to day, "INQR_END_DT" to day, "SLL_BUY_DVSN_CD" to "00",
                 "INQR_DVSN" to "00", "PDNO" to (symbol ?: ""), "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to organizationNo, "ODNO" to orderId,
-                "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "",
-            ).apply { if (requireComplete) put("EXCG_ID_DVSN_CD", "ALL") }, requireComplete = requireComplete,
+                "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "", "EXCG_ID_DVSN_CD" to "ALL",
+            ), requireComplete = requireComplete,
         )
     }
 
@@ -364,8 +368,8 @@ class KisClient(
      * 행 규칙: 주문일(ord_dt)이 있고 [day] 와 다르면 제외, 주문번호(odno)가 빈 행은 제외(어떤 주문에도 붙일 수 없다),
      * 원주문번호(orgn_odno)가 있는(공백·전부 0 이 아닌) 행은 정정·취소 주문 — 빼지 않고 [BrokerOrderRow.originalOrderNo] 에 trim 한 원문을 담는다.
      * 종목·매도매수구분·수량을 읽지 못하면(정정·취소 행 포함) 목록을 믿을 수 없으므로 [KisError].
-     * 확인 못 한 것(실응답 미확인): orgn_odno 가 odno 와 같은 자릿수·0 채움으로 오는지 — 그래서 0 을 떼거나 붙이지 않는다(orderNo 도 odno 원문).
-     * 취소 행의 ord_qty·tot_ccld_qty 가 어떤 값인지(취소 수량인지 0 인지)도 공식 예제(`inquire_daily_ccld`)에 설명이 없다.
+     * 2026-11-16 모의 실측: 원주문 행 orgn_odno="0000000000", 정정·취소 행 orgn_odno 는 원주문 odno 와 같은 10자리 0 채움 표기(그래서 정규화 없이 비교한다).
+     * 취소 행은 ord_qty=취소 수량·tot_ccld_qty=0·cncl_yn="Y", 정정 행은 cncl_yn="N". 정정된 원주문 행은 rmn_qty=0·tot_ccld_qty=0.
      */
     override fun dailyOrders(day: LocalDate): List<BrokerOrderRow>? {
         val (cano, prdt) = accountParts()

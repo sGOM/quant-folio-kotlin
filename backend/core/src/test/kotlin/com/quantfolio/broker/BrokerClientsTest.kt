@@ -242,7 +242,11 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         assertFalse(f.fullyFilled)
         val c = http.calls.last()
         assertEquals("20261019", c.query["INQR_STRT_DT"]) // KST 날짜
-        assertEquals("VTTC8001R", c.headers["tr_id"])
+        // 2026-11-16 모의 실측: VTTC8001R 은 체결된 주문도 "조회할 내역 없음"(행 0개) — VTTC0081R + ODNO 는 그 주문의 행을 준다.
+        assertEquals("VTTC0081R", c.headers["tr_id"])
+        assertEquals("0000123", c.query["ODNO"])
+        assertEquals("005930", c.query["PDNO"])
+        assertEquals("ALL", c.query["EXCG_ID_DVSN_CD"])
         val none = kis.getOrderExecution("777")
         assertEquals(0, none.filledQty)
         assertNull(none.avgPrice)
@@ -252,6 +256,32 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         assertFalse(full.terminal)
         assertFalse(f.terminal)
         assertFalse(none.terminal)
+    }
+
+    /** 2026-11-16 모의 실측의 0081R 단건 행 모양 — 부분 체결 뒤 잔량이 취소된 원주문(ord_qty 300, 총 체결 50, 잔량 0). */
+    @Test
+    fun executionReadsDailyOrderRowOfPartiallyCancelledOrder() {
+        val http = FakeHttp()
+        val kis = kisWithToken(http)
+        http.on({ it.url.endsWith("/inquire-daily-ccld") }) {
+            BrokerResponse(
+                200,
+                """{"rt_cd":"0","msg_cd":"70070000","output1":[{"ord_dt":"20261019","ord_gno_brno":"00950","odno":"0000022464","orgn_odno":"0000000000",""" +
+                    """"sll_buy_dvsn_cd":"02","pdno":"003480","ord_qty":"300","ord_unpr":"0","ord_tmd":"113930","tot_ccld_qty":"50","avg_prvs":"4265.5",""" +
+                    """"cncl_yn":"N","tot_ccld_amt":"213275","rmn_qty":"0"}],"output2":{}}""",
+                mapOf("tr_cont" to listOf("E")),
+            )
+        }
+        val f = kis.getOrderExecution("0000022464", "003480", LocalDate.parse("2026-10-19"))
+        assertEquals(50, f.filledQty)
+        assertEquals(BigDecimal("4265.5"), f.avgPrice)
+        assertFalse(f.fullyFilled)
+        assertFalse(f.terminal)
+        assertEquals("VTTC0081R", http.calls.last().headers["tr_id"])
+        val prod = FakeHttp()
+        prod.on({ it.url.endsWith("/inquire-daily-ccld") }) { BrokerResponse(200, """{"rt_cd":"0","output1":[]}""") }
+        assertEquals(0, kisWithToken(prod, "prod").getOrderExecution("0000022464", "003480").filledQty)
+        assertEquals("TTTC0081R", prod.calls.last().headers["tr_id"])
     }
 
     @Test

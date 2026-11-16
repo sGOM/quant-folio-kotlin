@@ -6,16 +6,12 @@ import com.quantfolio.broker.BrokerHttp
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
-import com.quantfolio.common.withLockOrElse
 import com.quantfolio.domain.alert.AlertSeverity
-import com.quantfolio.domain.trading.Order
-import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
-import org.springframework.transaction.support.TransactionTemplate
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.readValue
 import java.math.BigDecimal
@@ -36,14 +32,17 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-/** 복호화·파싱된 체결통보 1건(side 는 참고용 — 매칭에 쓰지 않는다). */
+/**
+ * 복호화·파싱된 체결통보 1건. [qty] 는 이 체결 한 건의 수량(CNTG_QTY — 주문 누적이 아니다, 2026-11-16 모의 실측), [price] 는 그 체결 단가.
+ * 둘 다 장부에 쓰지 않는다(로그용) — 반영은 [FillNoticeApplier] 가 트리거한 정합이 증권사 누적으로 한다. side 도 참고용(매칭에 쓰지 않는다).
+ */
 data class FillNotice(val odno: String, val symbol: String, val qty: Int, val price: BigDecimal, val side: String, val accountNo: String? = null) {
     override fun toString() = "FillNotice(odno=$odno, symbol=$symbol, qty=$qty, price=$price, side=$side)"
 }
 
 /**
  * KIS 실시간 프레임(원본 `kis_ws.py`·`fill_notice.py`). 데이터 프레임은 `암호화여부|tr_id|건수|필드^필드…`.
- * 체결통보 필드 인덱스는 KIS 공식 샘플 순서 — **실계정 프레임으로 종단 검증되지 않았다**(원본 주석의 미검증 가정 그대로).
+ * 체결통보 필드 인덱스는 KIS 공식 샘플 순서 — 2026-11-16 모의투자(H0STCNI9) 실프레임 23필드로 아래 인덱스를 확인했다. 실전(H0STCNI0) 프레임은 확인하지 못했다.
  */
 object KisFrames {
     private val json = JsonMapper.builder().build()
@@ -55,6 +54,14 @@ object KisFrames {
             "body" to linkedMapOf("input" to linkedMapOf("tr_id" to trId, "tr_key" to trKey)),
         ),
     )
+
+    /** 실시간 접속용 approval_key(`/oauth2/Approval`). */
+    fun approvalKey(http: BrokerHttp, baseUrl: String, appKey: String, appSecret: String): String {
+        val r = http.send("POST", "$baseUrl/oauth2/Approval", json = json.writeValueAsString(linkedMapOf("grant_type" to "client_credentials", "appkey" to appKey, "secretkey" to appSecret)))
+        if (r.status !in 200..299) throw IllegalStateException("approval_key 발급 실패: HTTP ${r.status}")
+        // 원본 `resp.json()["approval_key"]` 은 없으면 KeyError — "null" 로 구독하면 실패가 성공처럼 보여 피드 장애 경보가 안 난다
+        return json.readValue<Map<String, Any?>>(r.body)["approval_key"]?.toString() ?: throw IllegalStateException("approval_key 응답에 키 없음")
+    }
 
     @Suppress("UNCHECKED_CAST")
     fun control(raw: String): Map<String, Any?>? = runCatching { json.readValue<Map<String, Any?>>(raw) }.getOrNull()
@@ -83,6 +90,9 @@ object KisFrames {
      * 체결통보 평문(^ 구분). 체결 통보(CNTG_YN(13)=2)이고 거부(RFUS_YN(12)=1)가 아닐 때만 체결이다 — 1 은 주문·정정·취소·거부 접수
      * 통보로 CNTG_QTY 가 주문수량이다(KIS 공식 샘플). 판별 불가(빈 값)도 체결로 보지 않는다. 체결수량 0 이어도 null.
      * 원본(`fill_notice.py:91-115`)은 13·12 를 보지 않고 수량 > 0 이면 체결로 쓴다.
+     * 2026-11-16 모의 실측(23필드): 2=주문번호, 3=원주문번호(정정·취소 통보만), 9=CNTG_QTY(체결 건별 — 300주 시장가 매수 1,1,2,7,…, 합 = 총 체결),
+     * 10=CNTG_UNPR, 12=RFUS_YN, 13=CNTG_YN(접수·정정·취소 1, 체결 2), 14=ACPT_YN, 16=ODER_QTY(부분 취소 뒤엔 줄어든 수량). 체결 고유번호는 없고,
+     * 같은 초·같은 수량·단가의 별개 체결 통보가 연달아 온다 — 내용으로 중복과 구분할 수 없다.
      */
     fun parseFillNotice(plain: String): FillNotice? {
         val f = plain.split("^")
@@ -90,7 +100,7 @@ object KisFrames {
             LoggerFactory.getLogger("engine.fill_notice").warn("체결통보 필드 수 부족({}) — 무시", f.size)
             return null
         }
-        // CNTG_QTY 가 누적인지 건별인지 공식 문서가 밝히지 않는다 — 모의투자 로그로 판정하려고 모든 통보를 남긴다(고객ID·계좌·계좌명 제외).
+        // 모든 통보를 남긴다(고객ID·계좌·계좌명 제외) — 통보 수량은 장부에 쓰지 않으므로 체결 추적은 이 로그와 정합 로그로 한다.
         LoggerFactory.getLogger("engine.fill_notice").info(
             "체결통보 수신 odno={} CNTG_YN={} RFUS_YN={} ACPT_YN={} CNTG_QTY={} ODER_QTY={} CNTG_UNPR={} STCK_CNTG_HOUR={}",
             f[2].trim(), f[13].trim(), f[12].trim(), f[14].trim(), f[9].trim(), f[16].trim(), f[10].trim(), f[11].trim(),
@@ -107,24 +117,20 @@ object KisFrames {
 }
 
 /**
- * 체결통보 1건 반영(원본 `apply_fill_notice`). executor·reconcile 과 함께 3중 경로라, 이미 기록된 누적 대비 **델타만** 기록하고
- * read-then-write 구간을 reconcile 과 **같은 주문 락 키**로 감싼다(키가 다르면 서로 배제하지 못해 이중 가산된다).
- * 락이 바쁘면 [LOCK_RETRIES] 번 재시도한 뒤 스킵한다 — 스킵된 모의투자 매도는 자동 복구되지 않아 warning 으로 남긴다.
+ * 체결통보 1건 처리 — 그 주문의 정합을 지금 트리거한다(원본 `apply_fill_notice` 는 통보 수량을 장부에 직접 쓴다 — docs/migration-notes.md).
  *
- * 수량 의미: 통보 CNTG_QTY 가 그 주문의 누적인지 체결 건별인지 KIS 공식 문서가 밝히지 않고, 건별 체결번호 필드도 없다.
- * 증분 = 통보 수량 − 이미 기록된 수량. 누적이면 정확하다. 건별이면 두 번째 체결부터 과소 기록한다(REST 정합이 누적 조회로
- * 나머지를 기록한다. KIS 모의 매도는 그 조회가 비어 복구 경로가 없다). 어느 해석에서도 기기록을 넘는 만큼만 쓰므로 과대 기록은
- * 없다. 건별로 합산하면 REST 정합·실행기가 같은 체결을 누적으로 이미 기록했을 때 중복을 가를 키가 없어 이중 기록이 된다.
- * 판정용으로 [KisFrames.parseFillNotice] 가 모든 통보를 info 로 남긴다.
+ * 통보의 CNTG_QTY 는 체결 건별이고(2026-11-16 모의 실측) 체결 고유번호가 없다. 그래서 통보 수량을 장부에 더하면 정합(REST 누적)이 이미 반영한
+ * 체결의 늦은 통보를 가를 키가 없어 이중 기록이 되고, 누적으로 보고 빼면 두 번째 체결부터 누락된다. 통보는 "이 주문을 지금 정합하라"는 신호로만 쓰고,
+ * 수량·단가는 [Reconciler.reconcileOrder] 가 단건 체결조회 누적에서 읽어 기기록 대비 증분만 기록한다(주기 정합과 같은 경로·같은 주문 락).
+ * 통보 직후의 조회가 그 체결을 아직 포함하지 않으면 이번엔 기록되지 않고 다음 주기 정합(`EngineRuntime` 60초 루프)이 잡는다 — 조회 지연은 측정하지 못했다.
+ *
+ * 매칭: 오늘(KST)·사용자·통보 계좌 키·주문번호·종목. 주문번호 없는 주문(접수불명)·계좌 불일치·오늘이 아닌 주문은 매칭하지 않는다.
+ * 통보 스레드(수신 루프)는 이 처리(대기·증권사 조회)가 끝날 때까지 다음 프레임·PINGPONG 을 처리하지 않는다.
  */
 @Component
 class FillNoticeApplier(
-    private val orders: OrderRepository,
-    private val fills: Fills,
-    private val alerts: AlertPublisher,
-    private val redis: StringRedisTemplate,
+    private val reconciler: Reconciler,
     private val jdbc: NamedParameterJdbcTemplate,
-    private val tx: TransactionTemplate,
     private val props: QuantfolioProperties,
     private val clock: Clock,
 ) {
@@ -132,14 +138,13 @@ class FillNoticeApplier(
 
     private companion object {
         /**
-         * 주문 락이 바쁠 때, 그리고 전송 중 주문의 주문번호 커밋을 기다릴 때의 재시도 횟수·간격(ms). 대기 상한 = 횟수 × 간격(각각,
-         * 합치면 최대 약 2배) — 통보를 받는 WS 스레드가 그 동안 멈춘다. 측정값 아님.
-         * 락을 쥐는 쪽(정합·실행기 2차·다른 통보)은 증권사 조회를 락 밖에서 하고 락 안에서는 DB 반영(과 Redis 이벤트 발행)만 한다.
+         * 전송 중 주문의 주문번호 커밋을 기다릴 때의 재시도 횟수·간격(ms). 대기 상한 = 횟수 × 간격 — 통보를 받는 WS 스레드가 그 동안 멈춘다. 측정값 아님.
          */
-        const val LOCK_RETRIES = 20
-        const val LOCK_RETRY_MS = 250L
+        const val INFLIGHT_RETRIES = 20
+        const val INFLIGHT_RETRY_MS = 250L
     }
 
+    /** @return 주문에 매칭돼 정합을 트리거했으면 true(기록 여부와 무관 — 기록은 증권사 누적에 달렸다). */
     fun apply(userId: Int, n: FillNotice): Boolean {
         val accountKey = BrokerAccountKey.kisNotice(n.accountNo, props.kis.isPaperTrading) ?: return false
         val day = MarketClock.todayKst(clock)
@@ -162,8 +167,8 @@ class FillNoticeApplier(
         )!! > 0
         var id = matchId()
         var waits = 0
-        while (id == null && waits < LOCK_RETRIES && inFlight()) { // 전송 중 주문이 없으면(HTS 직접 주문 등) 기다리지 않는다
-            Thread.sleep(LOCK_RETRY_MS)
+        while (id == null && waits < INFLIGHT_RETRIES && inFlight()) { // 전송 중 주문이 없으면(HTS 직접 주문 등) 기다리지 않는다
+            Thread.sleep(INFLIGHT_RETRY_MS)
             waits++
             id = matchId()
         }
@@ -171,56 +176,14 @@ class FillNoticeApplier(
             log.warn("체결통보 매칭 실패(주문 없음) user={} odno={} symbol={}", userId, n.odno, n.symbol)
             return false
         }
-        val lockTtl = Duration.ofSeconds(RedisKeys.RECONCILE_LOCK_TTL_SECONDS)
-        // 다른 경로(정합·실행기·다른 통보)가 같은 주문 락으로 DB 반영 중이면 잠깐 기다려 다시 잡는다 — 통보는 재전달되지 않고 모의 매도는 이 경로뿐이다.
-        // 락을 잡은 뒤 주문·기록 수량을 다시 읽고 Fills.record 가 재확인하므로 기다려도 이중 기록은 없다.
-        var applied: Triple<Int, BigDecimal, Fills.RecordedFill>? = null
-        var order: Order? = null
-        for (attempt in 0..LOCK_RETRIES) {
-            applied = redis.withLockOrElse(RedisKeys.reconcileLock(id), lockTtl, busy = { null }) {
-                // 락 밖에서 읽은 엔티티를 Fills.record 에 넘기면 전 컬럼 save 가 그 사이 다른 경로의 변경을 되돌린다.
-                val current = orders.findById(id).orElse(null)
-                if (current == null || current.kisOrderId != n.odno || current.brokerAccountKey != accountKey) {
-                    log.warn("체결통보 스킵(락 대기 중 주문 식별 정보가 바뀜) order={} odno={}", id, n.odno)
-                    return false
-                }
-                order = current
-                val price = if (n.price.signum() > 0) n.price else current.price ?: run {
-                    log.warn("체결통보 스킵(통보 단가 0 이고 주문가 없음) order={} odno={} 누적통보={}", id, n.odno, n.qty)
-                    return false
-                }
-                var already = fills.recordedQty(id)
-                var recorded: Fills.RecordedFill? = null
-                while (already < n.qty) {
-                    recorded = tx.execute { fills.record(current, n.qty - already, price, n.qty >= current.qty.toInt(), already) }
-                    if (recorded != null) break
-                    // 경합에서 다른 경로가 일부만 반영했어도 이 누적 통보의 나머지는 기록한다.
-                    already = fills.recordedQty(id)
-                }
-                if (recorded == null) {
-                    log.debug("체결통보 중복/이미 반영 — 스킵 odno={} 누적통보={} 기록됨={}", n.odno, n.qty, already)
-                    return false
-                }
-                Triple(n.qty - already, price, recorded)
-            }
-            if (applied != null) break
-            if (attempt < LOCK_RETRIES) Thread.sleep(LOCK_RETRY_MS)
-        }
-        if (applied == null) {
-            log.warn("체결통보 스킵(다른 프로세스가 같은 주문 정합 중) order={} odno={} 누적통보={}", id, n.odno, n.qty)
-            return false
-        }
-        val (delta, price, recorded) = applied
-        val o = order!!
-        fills.publishExecution(o, delta, price, recorded, source = "fill_notice")
-        log.info("체결통보 반영: 주문={} +{}주 @ {} → {}", o.kisOrderId, delta, price, o.status)
-        log.info("체결통보 반영 수량 odno={} 통보수량={} 기기록={} 증분={}", n.odno, n.qty, n.qty - delta, delta)
+        val stats = reconciler.reconcileOrder(id)
+        log.info("체결통보로 주문 정합 order={} odno={} 통보 건별수량={} 결과={}", id, n.odno, n.qty, stats)
         return true
     }
 }
 
-/** KIS WebSocket 한 연결 — 텍스트 프레임을 큐로 넘기고, 닫히면 null 을 넣어 수신 루프를 끝낸다. */
-private class KisSocket(url: String) : WebSocket.Listener {
+/** KIS WebSocket 한 연결 — 텍스트 프레임을 큐로 넘기고, 닫히면 null 을 넣어 수신 루프를 끝낸다. internal: 모의투자 확인 도구(test `KisProbe`)가 재사용한다. */
+internal class KisSocket(url: String) : WebSocket.Listener {
     private val frames = LinkedBlockingQueue<Any>()
     private val buf = StringBuilder()
     val ws: WebSocket = HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(url), this).join()
@@ -279,7 +242,6 @@ class KisRealtime(
     private val notices: FillNoticeApplier,
 ) {
     private val log = LoggerFactory.getLogger("engine.price_feed")
-    private val json = JsonMapper.builder().build()
 
     private class Feed(val stop: CountDownLatch, val thread: Thread, val symbols: Set<String>)
 
@@ -288,12 +250,7 @@ class KisRealtime(
     private val failCounts = ConcurrentHashMap<Int, Int>()
 
     /** 실시간 시세용 approval_key. */
-    fun approvalKey(appKey: String, appSecret: String): String {
-        val r = http.send("POST", "${props.kis.baseUrl}/oauth2/Approval", json = json.writeValueAsString(linkedMapOf("grant_type" to "client_credentials", "appkey" to appKey, "secretkey" to appSecret)))
-        if (r.status !in 200..299) throw IllegalStateException("approval_key 발급 실패: HTTP ${r.status}")
-        // 원본 `resp.json()["approval_key"]` 은 없으면 KeyError — "null" 로 구독하면 실패가 성공처럼 보여 피드 장애 경보가 안 난다
-        return json.readValue<Map<String, Any?>>(r.body)["approval_key"]?.toString() ?: throw IllegalStateException("approval_key 응답에 키 없음")
-    }
+    fun approvalKey(appKey: String, appSecret: String): String = KisFrames.approvalKey(http, props.kis.baseUrl, appKey, appSecret)
 
     /** 사용자의 시세 피드를 원하는 종목 집합으로 맞춘다(같으면 무시, 다르면 재구독, 비면 정리). */
     // 제어 처리 스레드와 체결통보 재동기화 루프가 동시에 부른다 — 확인 후 생성(check-then-act)이 겹치면 추적 안 되는 WS 리스너가 남는다.

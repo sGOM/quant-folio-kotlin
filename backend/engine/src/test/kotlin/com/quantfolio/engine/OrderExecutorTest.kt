@@ -56,7 +56,6 @@ class OrderExecutorTest(
     @Autowired private val alerts: AlertRepository,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val tx: org.springframework.transaction.support.TransactionTemplate,
-    @Autowired private val notices: FillNoticeApplier,
     @Autowired private val fills: Fills,
     @Autowired private val jdbc: JdbcTemplate,
 ) {
@@ -85,6 +84,13 @@ class OrderExecutorTest(
     }
 
     private fun key() = "s0:TEST:buy:" + UUID.randomUUID()
+
+    /** 다른 경로(정합 — 주기 또는 체결통보가 트리거)가 이 주문의 증분을 기록한 것과 같은 DB 반영. */
+    private fun recordElsewhere(orderId: Int, qty: Int, price: String) {
+        val o = orders.findById(orderId).orElseThrow()
+        val already = fills.recordedQty(orderId)
+        assertNotNull(tx.execute { fills.record(o, qty, BigDecimal(price), already + qty >= o.qty.toInt(), already) })
+    }
 
     private fun acctPosition(uid: Int, sid: Int) = positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(uid, TEST_KIS_ACCOUNT_KEY, sid, "005930")!!
 
@@ -262,7 +268,7 @@ class OrderExecutorTest(
         assertNull(run(broker, uid, sid, "sell", 2))
         assertNull(run(broker, uid, sid, "buy", 2))
         assertEquals(0, broker.placed)
-        assertTrue(notices.apply(uid, FillNotice("ODNO1", "005930", 1, BigDecimal("70000"), "sell", TEST_KIS_ACCOUNT)))
+        recordElsewhere(first.id!!, 1, "70000")
         assertEquals(OrderStatus.partial, orders.findById(first.id!!).orElseThrow().status)
         assertNull(run(broker, uid, sid, "sell", 1))
         assertEquals(0, broker.placed)
@@ -326,8 +332,8 @@ class OrderExecutorTest(
         val first = run(FakeBroker(), uid, sid, "buy", 2)!!
         assertEquals(OrderStatus.submitted, first.status)
         val decided = BigDecimal.ZERO // 다음 신호가 첫 주문의 체결이 오기 전 장부로 판단
-        // 게이트를 지나는 동안 체결통보가 첫 주문을 filled 로 기록 — 미완료 주문 보류는 더 이상 첫 주문을 보지 않는다
-        assertTrue(notices.apply(uid, FillNotice("ODNO1", "005930", 2, BigDecimal("70000"), "buy", TEST_KIS_ACCOUNT)))
+        // 게이트를 지나는 동안 정합(주기·체결통보 트리거)이 첫 주문을 filled 로 기록 — 미완료 주문 보류는 더 이상 첫 주문을 보지 않는다
+        recordElsewhere(first.id!!, 2, "70000")
         assertEquals(OrderStatus.filled, orders.findById(first.id!!).orElseThrow().status)
         val broker = FakeBroker(place = { OrderResult("NEXT") })
         assertNull(run(broker, uid, sid, "buy", 2, held = decided))
@@ -426,7 +432,7 @@ class OrderExecutorTest(
     }
 
     @Test
-    fun fillNoticeAndImmediateLookupRecordTheFillOnlyOnce() {
+    fun fillRecordedByAnotherPathDuringImmediateLookupIsRecordedOnlyOnce() {
         val (uid, sid) = setup()
         val entered = CountDownLatch(1)
         val finish = CountDownLatch(1)
@@ -439,10 +445,9 @@ class OrderExecutorTest(
             val first = pool.submit<com.quantfolio.domain.trading.Order?> { run(broker, uid, sid, "buy", 2) }
             try {
                 assertTrue(entered.await(10, SECONDS))
-                assertEquals(true, notices.apply(uid, FillNotice("ODNO1", "005930", 2, BigDecimal("70100"), "buy", TEST_KIS_ACCOUNT)))
+                recordElsewhere(orders.findAll().single { it.userId == uid }.id!!, 2, "70100")
             } finally { finish.countDown() }
             val order = first.get(10, SECONDS)!!
-            assertEquals(false, notices.apply(uid, FillNotice("ODNO1", "005930", 2, BigDecimal("70100"), "buy", TEST_KIS_ACCOUNT)))
             assertEquals(1, executions.findAll().count { it.orderId == order.id })
             assertEquals(0, BigDecimal("2").compareTo(acctPosition(uid, sid).qty))
         }
@@ -506,50 +511,12 @@ class OrderExecutorTest(
         val (uid, sid) = setup()
         val order = run(FakeBroker(), uid, sid, "buy", 3)!!
         val stale = orders.findById(order.id!!).orElseThrow()
-        assertTrue(notices.apply(uid, FillNotice("ODNO1", "005930", 1, BigDecimal("100"), "buy", TEST_KIS_ACCOUNT)))
+        recordElsewhere(order.id!!, 1, "100")
 
         assertNull(tx.execute { fills.record(stale, 3, BigDecimal("110"), true, expectedRecordedQty = 0) })
         assertEquals(OrderStatus.partial, orders.findById(order.id!!).orElseThrow().status)
         assertEquals(1, fills.recordedQty(order.id!!))
         assertEquals(BigDecimal("1.0000"), acctPosition(uid, sid).qty)
-    }
-
-    @Test
-    fun cumulativeNoticeRecordsRemainderAfterCompetingPartialFill() {
-        val (uid, sid) = setup()
-        val order = run(FakeBroker(), uid, sid, "buy", 2)!!
-        val firstPid = CompletableFuture<Int>()
-        val commit = CountDownLatch(1)
-        Executors.newVirtualThreadPerTaskExecutor().use { pool ->
-            val first = pool.submit {
-                tx.executeWithoutResult {
-                    assertNotNull(fills.record(order, 1, BigDecimal("100"), false, expectedRecordedQty = 0))
-                    firstPid.complete(jdbc.queryForObject("select pg_backend_pid()", Int::class.java)!!)
-                    check(commit.await(15, SECONDS))
-                }
-            }
-            val notice = pool.submit<Boolean> {
-                firstPid.get(10, SECONDS)
-                notices.apply(uid, FillNotice("ODNO1", "005930", 2, BigDecimal("120"), "buy", TEST_KIS_ACCOUNT))
-            }
-            try {
-                val pid = firstPid.get(10, SECONDS)
-                val deadline = System.nanoTime() + SECONDS.toNanos(3)
-                fun blocked() = jdbc.queryForObject(
-                    "select exists (select 1 from pg_stat_activity where ? = any(pg_blocking_pids(pid)))",
-                    Boolean::class.java, pid,
-                ) == true
-                while (!blocked() && !notice.isDone && System.nanoTime() < deadline) Thread.sleep(10)
-                assertTrue(blocked(), "Notice must calculate its delta before the first fill commits")
-            } finally {
-                commit.countDown()
-            }
-            first.get(10, SECONDS)
-            assertTrue(notice.get(10, SECONDS))
-        }
-        assertEquals(2, fills.recordedQty(order.id!!))
-        assertEquals(OrderStatus.filled, orders.findById(order.id!!).orElseThrow().status)
-        assertEquals(BigDecimal("110.0000"), acctPosition(uid, sid).avgPrice)
     }
 
     @Test

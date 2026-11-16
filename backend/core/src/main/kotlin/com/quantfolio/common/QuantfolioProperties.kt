@@ -59,8 +59,14 @@ data class QuantfolioProperties(
         val env: String = "vts",
         val baseUrlVts: String = "https://openapivts.koreainvestment.com:29443",
         val baseUrlProd: String = "https://openapi.koreainvestment.com:9443",
-        val wsUrlVts: String = "wss://ops.koreainvestment.com:31000",
-        val wsUrlProd: String = "wss://ops.koreainvestment.com:21000",
+        /**
+         * 실시간 시세·체결통보 WebSocket. 원본 기본값 `wss://…:31000`·`wss://…:21000` 은 2026-11-16 실측에서 두 포트 모두 TLS 핸드셰이크가
+         * 실패했다(서버가 TLS 로 응답하지 않음). 모의 `ws://…:31000/tryitout` 은 JDK 연결로 구독 성공·통보 수신을 확인했다.
+         * 실전 `ws://…:21000/tryitout` 은 접속을 측정하지 못했다 — 공식 설정 파일(`ws://…:21000`)·공식 예제(`/tryitout`)를 따른 값이다.
+         * 이 두 값은 환경변수로 바꿀 수 없다(`quantfolio-core.yml` 에 매핑 없음 — 원본 `KIS_WS_URL_*` 는 읽지 않는다).
+         */
+        val wsUrlVts: String = "ws://ops.koreainvestment.com:31000/tryitout",
+        val wsUrlProd: String = "ws://ops.koreainvestment.com:21000/tryitout",
         val appKey: String = "",
         val appSecret: String = "",
         /** 'CANO-PRDT' 형식 (예: 50012345-01) */

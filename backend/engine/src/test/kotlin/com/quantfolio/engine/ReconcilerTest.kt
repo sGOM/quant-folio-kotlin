@@ -313,7 +313,7 @@ class ReconcilerTest(
         val earlier = order(uid, sid, sym, 2, OrderStatus.filled, "ODNO-OLD")
         executions.save(Execution(earlier.id!!, sid, BigDecimal("2"), BigDecimal("1000")))
         val o = order(uid, sid, sym, 5, OrderStatus.submitted, "ODNO-C")
-        broker.execution = { Fill(0, null, false) } // 모의투자 일별체결조회는 늘 빈 응답
+        broker.execution = { Fill(0, null, false) } // 체결조회가 0(체결이 아직 안 보임) — 잔고 교차확인 경로
         balance = Balance(listOf(mapOf("pdno" to sym, "hldg_qty" to "5", "pchs_avg_pric" to "1005")))
         reconciler.reconcileOpenOrders(uid)
         assertEquals(3, recorded(o)) // 보유 5 − 다른 주문이 설명한 2
@@ -527,7 +527,9 @@ class ReconcilerTest(
         executions.save(Execution(prior.id!!, sid, BigDecimal.ONE, BigDecimal("500")))
         positions.save(com.quantfolio.domain.trading.Position(uid, sid, "005930", BigDecimal.ONE, BigDecimal("500"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         val o = order(uid, sid, "005930", 3, OrderStatus.submitted, "MIXED")
+        broker.execution = { Fill(1, BigDecimal("100"), false) } // 체결통보가 트리거한 정합이 그때의 누적(1주 @100)을 기록
         assertTrue(notices.apply(uid, FillNotice("MIXED", "005930", 1, BigDecimal("100"), "buy", TEST_KIS_ACCOUNT)))
+        assertEquals(1, recorded(o))
         broker.execution = { Fill(3, BigDecimal("110"), true) }
         repeat(2) { reconciler.reconcileOpenOrders(uid) }
         val fills = executions.findAll().filter { it.orderId == o.id }.sortedBy { it.id }
@@ -597,11 +599,10 @@ class ReconcilerTest(
         // 2/3 이 기록됐는데 상태가 submitted 로 남은 행 — 정합이 상태만 보정하는 분기.
         val o = order(uid, sid, "005930", 3, OrderStatus.submitted, "STALE")
         executions.save(Execution(o.id!!, sid, BigDecimal("2"), BigDecimal("1000")))
-        broker.execution = {
-            // 정합이 락을 쥔 채 증권사를 기다리는 동안 락이 만료되고 체결통보가 마지막 1주를 반영한 상황.
+        // 정합이 증권사를 기다리는 동안(락 만료 포함) 체결통보가 트리거한 정합이 새 누적(3주)으로 마지막 1주를 반영한 상황 — 바깥 정합의 응답은 낡은 2주.
+        broker.execution = lookups(Fill(2, BigDecimal("1000"), false), Fill(3, BigDecimal("1100"), true)) {
             redis.delete(RedisKeys.reconcileLock(o.id!!))
-            assertTrue(notices.apply(uid, FillNotice("STALE", "005930", 3, BigDecimal("1100"), "buy", TEST_KIS_ACCOUNT)))
-            Fill(2, BigDecimal("1000"), false)
+            assertTrue(notices.apply(uid, FillNotice("STALE", "005930", 1, BigDecimal("1100"), "buy", TEST_KIS_ACCOUNT)))
         }
 
         reconciler.reconcileOpenOrders(uid)
@@ -611,22 +612,36 @@ class ReconcilerTest(
     }
 
     /**
-     * 정합이 증권사 응답을 기다리는 중에 도착한 체결통보. 정합이 주문 락을 쥔 채 기다리면 통보는 약 5초 재시도 뒤 버려진다 —
-     * 그 대기에 기대지 않고 락이 비었는지 바로 판정한다.
+     * 정합이 증권사 응답을 기다리는 중에 도착한 체결통보. 통보는 그 주문의 정합을 트리거하고, 그 정합은 락이 바쁘면 기다리지 않고 넘긴다 —
+     * 정합이 주문 락을 쥔 채 증권사를 기다리면 통보가 트리거한 정합이 반영하지 못하므로 락이 비었는지 바로 판정한다.
+     * [qty] 는 건별 통보 수량(장부에 쓰이지 않는다).
      */
-    private fun noticeWhileReconcileWaits(uid: Int, o: Order, cumulativeQty: Int, price: String): Boolean {
-        assertNull(redis.opsForValue().get(RedisKeys.reconcileLock(o.id!!)), "정합이 증권사 조회 중 주문 락을 쥐고 있다 — 체결통보가 반영될 수 없다")
-        return notices.apply(uid, FillNotice(o.kisOrderId!!, o.symbol, cumulativeQty, BigDecimal(price), o.side, TEST_KIS_ACCOUNT))
+    private fun noticeWhileReconcileWaits(uid: Int, o: Order, qty: Int, price: String): Boolean {
+        assertNull(redis.opsForValue().get(RedisKeys.reconcileLock(o.id!!)), "정합이 증권사 조회 중 주문 락을 쥐고 있다 — 체결통보가 트리거한 정합이 반영될 수 없다")
+        return notices.apply(uid, FillNotice(o.kisOrderId!!, o.symbol, qty, BigDecimal(price), o.side, TEST_KIS_ACCOUNT))
+    }
+
+    /**
+     * 단건 체결조회 응답을 호출 순서대로 준다(마지막 응답은 이후 반복). 첫 호출(바깥 정합의 조회) 중에 [during] 을 실행한다 —
+     * 그 안의 체결통보가 트리거한 정합은 두 번째 응답을 받는다.
+     */
+    private fun lookups(vararg responses: Fill, during: () -> Unit = {}): (String) -> Fill {
+        var calls = 0
+        return {
+            val n = calls++
+            if (n == 0) during()
+            responses[minOf(n, responses.size - 1)]
+        }
     }
 
     @Test
-    fun paperSellNoticeArrivingWhileReconcileWaitsOnBrokerIsApplied() {
+    fun sellNoticeArrivingWhileReconcileWaitsOnBrokerIsApplied() {
         val (uid, sid) = setup()
         positions.save(com.quantfolio.domain.trading.Position(uid, sid, "005930", BigDecimal("5"), BigDecimal("900"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
-        // 모의 매도: 체결조회는 빈 응답, 잔고 교차확인은 매수만 — 체결통보가 유일한 반영 경로다.
+        // 매도는 잔고로 체결을 추정하지 않는다 — 바깥 정합의 조회가 아직 0 이어도 통보가 트리거한 정합이 새 누적(2주)으로 반영한다.
         val sell = order(uid, sid, "005930", 2, OrderStatus.submitted, "PAPER-SELL", side = "sell")
         var applied = false
-        broker.execution = { applied = noticeWhileReconcileWaits(uid, sell, 2, "1100"); Fill(0, null, false) }
+        broker.execution = lookups(Fill(0, null, false), Fill(2, BigDecimal("1100"), true)) { applied = noticeWhileReconcileWaits(uid, sell, 2, "1100") }
 
         reconciler.reconcileOpenOrders(uid)
 
@@ -641,7 +656,7 @@ class ReconcilerTest(
         val (uid, sid) = setup()
         val o = order(uid, sid, "005930", 2, OrderStatus.submitted, "BOTH")
         var applied = false
-        broker.execution = { applied = noticeWhileReconcileWaits(uid, o, 2, "1000"); Fill(2, BigDecimal("1000"), true) }
+        broker.execution = lookups(Fill(2, BigDecimal("1000"), true)) { applied = noticeWhileReconcileWaits(uid, o, 2, "1000") }
 
         repeat(2) { reconciler.reconcileOpenOrders(uid) }
 
@@ -656,7 +671,8 @@ class ReconcilerTest(
     fun partialNoticeDuringLookupLeavesOnlyTheRemainderToReconcile() {
         val (uid, sid) = setup()
         val o = order(uid, sid, "005930", 3, OrderStatus.submitted, "PART")
-        broker.execution = { assertTrue(noticeWhileReconcileWaits(uid, o, 1, "1000")); Fill(3, BigDecimal("1100"), true) }
+        // 통보가 트리거한 정합은 그때의 누적 1주 @1000 을, 바깥 정합은 3주 @1100 을 받는다.
+        broker.execution = lookups(Fill(3, BigDecimal("1100"), true), Fill(1, BigDecimal("1000"), false)) { assertTrue(noticeWhileReconcileWaits(uid, o, 1, "1000")) }
 
         reconciler.reconcileOpenOrders(uid)
 
@@ -670,8 +686,8 @@ class ReconcilerTest(
     fun fullNoticeDuringLookupIsNotRevertedByStaleRestCumulative() {
         val (uid, sid) = setup()
         val o = order(uid, sid, "005930", 2, OrderStatus.submitted, "FULL")
-        // 조회 응답은 통보보다 먼저 만들어진 누적(1주)이다.
-        broker.execution = { assertTrue(noticeWhileReconcileWaits(uid, o, 2, "1000")); Fill(1, BigDecimal("1000"), false) }
+        // 바깥 정합의 조회 응답은 통보가 트리거한 정합의 조회(2주)보다 먼저 만들어진 누적(1주)이다.
+        broker.execution = lookups(Fill(1, BigDecimal("1000"), false), Fill(2, BigDecimal("1000"), true)) { assertTrue(noticeWhileReconcileWaits(uid, o, 1, "1000")) }
 
         reconciler.reconcileOpenOrders(uid)
 
@@ -684,9 +700,10 @@ class ReconcilerTest(
     fun noticeDuringBalanceReadIsSubtractedFromBalanceFallback() {
         val (uid, sid) = setup()
         val o = order(uid, sid, "005930", 3, OrderStatus.submitted, "BAL")
-        broker.execution = { Fill(0, null, false) } // 모의투자 체결조회는 빈 응답 → 잔고 폴백
+        // 바깥 정합의 체결조회는 0(체결이 아직 안 보임) → 잔고 폴백. 잔고를 읽는 중 통보가 트리거한 정합은 누적 2주를 받는다.
+        broker.execution = lookups(Fill(0, null, false), Fill(2, BigDecimal("1000"), false))
         balance = Balance(listOf(mapOf("pdno" to "005930", "hldg_qty" to "3", "pchs_avg_pric" to "1000")))
-        onBalance = { assertTrue(noticeWhileReconcileWaits(uid, o, 2, "1000")) }
+        onBalance = { assertTrue(noticeWhileReconcileWaits(uid, o, 1, "1000")) }
 
         reconciler.reconcileOpenOrders(uid)
 
@@ -1325,7 +1342,7 @@ class ReconcilerTest(
         executions.save(Execution(buy2.id!!, sid, BigDecimal("4"), BigDecimal("1000")))
         val half = order(uid, sid, "000660", 3, OrderStatus.partial, "SELL1", dayAgo(), side = "sell")
         executions.save(Execution(half.id!!, sid, BigDecimal.ONE, BigDecimal("1000")))
-        broker.execution = { Fill(0, null, false) } // 모의 체결조회는 빈 응답, 목록 미지원
+        broker.execution = { Fill(0, null, false) } // 체결조회 0, 목록 미지원
         balance = hold("005930" to 5, "000660" to 3)
 
         reconciler.reconcileOpenOrders(uid)

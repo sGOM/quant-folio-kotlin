@@ -34,7 +34,9 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * - 이미 기록된 체결(executions 합)을 빼고 **증분만** 기록 — 몇 번을 돌려도 중복 가산이 없다.
  * - 체결 소스: ① 체결조회 ② 주문일 주문 목록 ③ KIS 모의 잔고 — 매수는 미기록 체결 배정, 매도는 주문일이 지난 뒤 "잔고 == 장부 순보유" 판정만
- *   (모의투자는 ①②가 늘 빈 응답이라는 원본 관찰).
+ *   (원본은 모의투자에서 ①②가 늘 빈 응답이라고 관찰했다 — 2026-11-16 실측에서 ①은 원본 TR(8001R)이 빈 응답이었고 0081R 로 바꾼 뒤 행이 오며, ②도 행이 온다.
+ *   ③은 조회가 0 일 때의 방어선으로 그대로 둔다).
+ * - 실시간 체결통보는 수량을 직접 쓰지 않고 그 주문 하나의 정합([reconcileOrder])을 트리거한다(`FillNoticeApplier`).
  * - 접수불명은 주문번호가 없어 목록의 유일 후보로 번호를 회수하거나 잔고 교차확인으로만 밝히고, 못 밝히면 critical 알림(자동 재주문은 이중 매수라 절대 안 함).
  *   전송 중인 주문을 오판하지 않게 5분 유예 후에만 대상.
  * - 주문일이 지난 주문은 확실한 근거(목록 행·체결조회 누적·종료 상태·모의 잔고·증인 있는 목록에 없음)로 체결이 다 기록됐다고 확정될 때만 종결(`closed_at`).
@@ -85,6 +87,21 @@ class Reconciler(
                 pass.count("errors")
             }
         }
+        return pass.stats
+    }
+
+    /**
+     * 주문 하나만 지금 정합한다 — 실시간 체결통보(`FillNoticeApplier`)가 부른다. 대상은 [reconcileOpenOrders] 의 주문번호 있는 집합
+     * (submitted·partial, 주문번호 있음, 미종결)과 같고, 아니면(전량 기록·종결·접수불명) 증권사를 조회하지 않는다. 처리는 주기 정합과 같은 [ReconcilePass.processOne]:
+     * 증권사 누적을 락 밖에서 읽고 락 안에서 기기록 대비 증분만 기록하며, 락이 바쁘면 기다리지 않고 넘긴다(다음 주기 정합이 잡는다).
+     */
+    fun reconcileOrder(orderId: Int): Map<String, Int> {
+        val pass = ReconcilePass()
+        val open = jdbc.queryForObject(
+            "select count(*) from orders where id = :id and status in ('submitted', 'partial') and kis_order_id is not null and kis_order_id <> '' and closed_at is null",
+            MapSqlParameterSource("id", orderId), Int::class.java,
+        )!! > 0
+        if (open) pass.processOne(orderId)
         return pass.stats
     }
 
@@ -474,8 +491,8 @@ class Reconciler(
 
         /**
          * 목록에서 [orderNo] 의 후손 행 — 원주문번호를 따라가면 [orderNo] 에 닿는 정정·취소 행(정정의 정정 포함), 목록 순서대로.
-         * 문자열 일치로만 잇는다(0 떼기 등 정규화 없음). KIS 가 orgn_odno 를 odno 와 같은 표기로 주는지 실응답으로 확인하지 못했다 —
-         * 표기가 다르면 사슬이 이어지지 않아 후손이 없는 것으로 보이고 원주문 행만으로 판단한다(이 확인을 넣기 전과 같은 동작, 그게 한계).
+         * 문자열 일치로만 잇는다(0 떼기 등 정규화 없음). KIS 모의는 orgn_odno 를 원주문 odno 와 같은 10자리 표기로 준다(2026-11-16 실측) —
+         * 표기가 다른 응답이 오면 사슬이 이어지지 않아 후손이 없는 것으로 보이고 원주문 행만으로 판단한다(이 확인을 넣기 전과 같은 동작, 그게 한계).
          * 각 행은 한 번만 담으므로 순환(잘못된 데이터)에도 끝난다.
          */
         private fun descendants(rows: List<BrokerOrderRow>, orderNo: String): List<BrokerOrderRow> {
@@ -497,7 +514,7 @@ class Reconciler(
         /**
          * 락 안: 접수불명 주문이 주문일 목록([rows], 완결)에 없다고 볼 수 있는가. 둘 다일 때만 참:
          * - 증인: 같은 사용자·계좌·주문일의 다른 주문에 붙은 번호의 원주문 행이 있다 — 목록이 이 계좌의 주문을 실제로 돌려준다
-         *   (모의투자는 이 조회가 늘 빈 응답이라는 원본 관찰 — 빈 목록·증인 없는 목록은 "주문 없음"의 근거가 아니다).
+         *   (빈 목록·증인 없는 목록은 "주문 없음"의 근거가 아니다 — 원본은 모의투자에서 이 조회가 늘 빈 응답이라고 관찰했다. 2026-11-16 모의 실측에서는 행이 왔다).
          * - 같은 종목·방향의 주인 없는 행(번호도, 있으면 원주문번호도 어떤 주문에도 안 붙음)이 하나도 없다. 수량·시각은 보지 않는다 —
          *   사람이 정정했거나 회수 창을 벗어난 이 주문일 수 있다.
          * 주문에 붙은 번호는 늘기만 한다(번호를 지우거나 계좌 키를 바꾸는 경로가 없다 — 계좌 키는 null 에서 채우기만). 그래서 이 조회와 종결 update
@@ -545,7 +562,7 @@ class Reconciler(
 
         /**
          * 증권사 근거(체결조회·잔고)를 락 밖에서 얻고, 락 안에서는 주문 행·기록 수량을 다시 읽어 DB 반영만 한다.
-         * 락을 쥔 채 증권사를 기다리면 그 사이 도착한 체결통보가 락을 못 잡아 버려진다(재전달 없음, 모의 매도는 통보가 유일한 경로).
+         * 락을 쥔 채 증권사를 기다리면 그 사이 도착한 체결통보가 트리거한 정합이 락을 못 잡아 반영을 다음 주기로 미룬다.
          */
         fun processOne(id: Int) {
             progressed = false
