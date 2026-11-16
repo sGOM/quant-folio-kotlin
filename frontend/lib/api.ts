@@ -911,7 +911,17 @@ export type AlertCode =
   | "live_gate_blocked"
   | "sector_map_outage"
   | "alert_cleanup_failed"
-  | "price_feed_outage";
+  | "price_feed_outage"
+  | "order_unconfirmed"
+  | "order_account_unverified"
+  | "order_not_sent"
+  | "order_number_recovered"
+  | "order_closed_unconfirmed"
+  | "order_fill_mismatch"
+  | "order_unresolved"
+  | "order_modified_externally"
+  | "order_resolved_manually"
+  | "order_resolve_rejected";
 
 /** 알림 심각도. critical=파국/치명, warning=주의(자동 폴백 등). */
 export type AlertSeverity = "warning" | "critical";

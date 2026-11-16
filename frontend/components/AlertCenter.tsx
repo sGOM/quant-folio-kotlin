@@ -43,6 +43,16 @@ const CODE_LABEL: Record<string, string> = {
   sector_map_outage: "업종분류 스냅샷 적재 실패",
   alert_cleanup_failed: "알림 보존정책 정리 실패",
   price_feed_outage: "실시간 시세 WS 재연결 실패",
+  order_unconfirmed: "주문 접수 불명",
+  order_account_unverified: "주문 계좌 미확인",
+  order_not_sent: "주문 미전송",
+  order_number_recovered: "주문번호 회수",
+  order_closed_unconfirmed: "접수불명 주문 종결",
+  order_fill_mismatch: "체결 수량 불일치",
+  order_unresolved: "주문 종결 근거 없음",
+  order_modified_externally: "주문 외부 정정",
+  order_resolved_manually: "주문 수동 정리",
+  order_resolve_rejected: "주문 수동 정리 거부",
 };
 
 /**
