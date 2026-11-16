@@ -3,6 +3,7 @@ package com.quantfolio.alert
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.source.ExternalHttp
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.LoggerFactory
@@ -48,7 +49,7 @@ class AlertPublisher(
      */
     private val ownTx = TransactionTemplate(txManager).apply { propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW }
 
-    fun publish(userId: Int?, strategyId: Int, severity: String, message: String, code: String? = null, dedupWindowHours: Double? = null) {
+    fun publish(userId: Int?, strategyId: Int, severity: AlertSeverity, message: String, code: String? = null, dedupWindowHours: Double? = null) {
         log.warn("엔진 알림[{}] 전략 {}{}: {}", severity, strategyId, code?.let { "($it)" } ?: "", message)
         val now = clock.instant()
         var dup = false
@@ -65,7 +66,7 @@ class AlertPublisher(
             if (!dup) {
                 jdbc.update(
                     "insert into alerts(user_id, strategy_id, severity, code, message, is_read, created_at) values (:u, :s, :sev, :c, :m, false, :t)",
-                    MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sev", severity).addValue("c", code)
+                    MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sev", severity.name).addValue("c", code)
                         .addValue("m", message).addValue("t", Timestamp.from(now)),
                 )
             }
@@ -75,7 +76,7 @@ class AlertPublisher(
         }
         if (dup) {
             log.info("알림[{}] dedup 창 내 미확인 알림 존재 — DB/텔레그램 생략", code)
-        } else if (severity == "critical" && props.telegram.enabled) {
+        } else if (severity == AlertSeverity.critical && props.telegram.enabled) {
             telegram("[QuantFolio] 전략 $strategyId${code?.let { "($it)" } ?: ""}\n$message")
         }
         if (userId == null) return

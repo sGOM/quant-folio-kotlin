@@ -4,9 +4,11 @@ import com.quantfolio.backtest.FillQualityReport
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.trading.Order
+import com.quantfolio.domain.trading.OrderStatus
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
@@ -107,7 +109,7 @@ class WorkerJobsTest(
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x"))
         val red = strategies.save(Strategy(u.id!!, "red", config = mapOf("type" to "rsi")))
         val prop = strategies.save(Strategy(u.id!!, "prop", config = mapOf("type" to "rsi")))
-        for (s in listOf(red, prop)) orders.save(Order(u.id!!, s.id, "005930", "buy", BigDecimal.ONE, null, status = "filled", idempotencyKey = UUID.randomUUID().toString()))
+        for (s in listOf(red, prop)) orders.save(Order(u.id!!, s.id, "005930", "buy", BigDecimal.ONE, null, status = OrderStatus.filled, idempotencyKey = UUID.randomUUID().toString()))
         fun report(m1: String, median: Double, mean: Double) = mutableMapOf<String, Any?>(
             "grades" to mapOf("m1_exec" to m1, "m3_total" to "GREEN"),
             "m1_exec" to mapOf("all" to mapOf("n" to 40, "median" to median, "mean" to mean)),
@@ -123,7 +125,7 @@ class WorkerJobsTest(
             "전략 ${red.id} 체결 정합 이탈 — M1(실행 슬리피지)=RED M3(총 정합)=GREEN 실측 18.2bp vs 가정 5.0bp(최근 90일, 연환산 드래그차 1.23%p/yr). 제안 slippage_bps=8.0(실측 중앙값 20.0bp, 표본 40)",
             critical.message,
         )
-        assertEquals("critical", critical.severity)
+        assertEquals(AlertSeverity.critical, critical.severity)
         val warn = alerts.findAll().single { it.code == "slippage_calibration_proposed" && it.strategyId == prop.id }
         assertEquals("전략 ${prop.id} 슬리피지 캘리브레이션 제안 — 현재 5.0bp → 제안 slippage_bps=6.6(실측 중앙값 6.6bp, 표본 40). 승인 시 config 에 반영됩니다.", warn.message)
     }
@@ -132,9 +134,9 @@ class WorkerJobsTest(
     fun alertRetentionAndNewsFailure() {
         val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x"))
         val now = Instant.now()
-        val readOld = alerts.save(Alert(u.id, 1, "warning", null, "r", isRead = true, createdAt = now.minus(91, ChronoUnit.DAYS)))
-        val unreadMid = alerts.save(Alert(u.id, 1, "warning", null, "u", isRead = false, createdAt = now.minus(91, ChronoUnit.DAYS)))
-        val unreadOld = alerts.save(Alert(u.id, 1, "warning", null, "o", isRead = false, createdAt = now.minus(181, ChronoUnit.DAYS)))
+        val readOld = alerts.save(Alert(u.id, 1, AlertSeverity.warning, null, "r", isRead = true, createdAt = now.minus(91, ChronoUnit.DAYS)))
+        val unreadMid = alerts.save(Alert(u.id, 1, AlertSeverity.warning, null, "u", isRead = false, createdAt = now.minus(91, ChronoUnit.DAYS)))
+        val unreadOld = alerts.save(Alert(u.id, 1, AlertSeverity.warning, null, "o", isRead = false, createdAt = now.minus(181, ChronoUnit.DAYS)))
         jobs.cleanupOldAlerts()
         assertFalse(alerts.existsById(readOld.id!!))
         assertTrue(alerts.existsById(unreadMid.id!!))
@@ -149,6 +151,7 @@ class WorkerJobsTest(
     @Test
     fun backupWritesGzipPrunesAndRecordsSuccess() {
         val dir = Path.of("build/test-backups")
+        dir.toFile().deleteRecursively() // 이전 실행 잔여 백업이 보존기한을 넘기면 함께 정리돼 removed 가 달라진다
         Files.createDirectories(dir)
         val stale = Files.writeString(dir.resolve("quant_20000101_000000.sql.gz"), "old")
         Files.setLastModifiedTime(stale, FileTime.from(Instant.now().minus(15, ChronoUnit.DAYS)))

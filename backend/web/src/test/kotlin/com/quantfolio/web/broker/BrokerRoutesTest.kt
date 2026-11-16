@@ -94,8 +94,12 @@ class BrokerRoutesTest(
     @Test
     fun positionsPreferBrokerBalanceAndFallBackToDb() {
         val (u, c) = me()
-        positions.save(Position(u.id!!, null, "000660", BigDecimal("5"), BigDecimal("120000")))
+        val account = "current-account"
+        positions.save(Position(u.id!!, null, "000660", BigDecimal("5"), BigDecimal("120000"), brokerAccountKey = account))
+        positions.save(Position(u.id!!, null, "000660", BigDecimal("10"), BigDecimal("80000"), brokerAccountKey = "old-account"))
+        positions.save(Position(u.id!!, null, "000660", BigDecimal("20"), BigDecimal("70000")))
         val client = mock(BrokerClient::class.java)
+        given(client.orderAccountKey).willReturn(account)
         given(brokers.forUser(anyUser())).willReturn(client)
         given(client.getBalance()).willReturn(Balance(listOf(mapOf("pdno" to "005930", "hldg_qty" to "7", "pchs_avg_pric" to "0"))))
         mvc.get("/api/trading/positions") { cookie(c) }.andExpect {
@@ -105,7 +109,9 @@ class BrokerRoutesTest(
         }
         given(client.getBalance()).willThrow(BrokerError("잔고 조회 실패"))
         mvc.get("/api/trading/positions") { cookie(c) }.andExpect {
+            jsonPath("$.length()") { value(1) }
             jsonPath("$[0].symbol") { value("000660") }
+            jsonPath("$[0].qty") { value(5.0) }
             jsonPath("$[0].avg_price") { value(120000.0) }
         }
     }

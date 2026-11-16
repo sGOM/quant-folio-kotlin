@@ -7,15 +7,13 @@ import com.quantfolio.backtest.SlippageCalibration
 import com.quantfolio.backtest.Tracking
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.backtest.BacktestRepository
-import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.market.store.PriceTickStore
-import com.quantfolio.quant.Panel
-import com.quantfolio.quant.Series
 import com.quantfolio.quant.pyFloat
 import com.quantfolio.rebalance.Cfg
 import com.quantfolio.web.api.ApiException
+import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
 import jakarta.validation.Valid
 import jakarta.validation.constraints.DecimalMax
@@ -32,7 +30,6 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import java.time.LocalDate
-import java.time.ZoneOffset
 import kotlin.math.abs
 
 private const val NO_FILLS = "해당 기간 실측 체결이 없습니다(모의투자/실거래 체결 후 이용 가능)."
@@ -57,7 +54,7 @@ class TrackingController(
         @RequestParam(name = "backtest_id", required = false) backtestId: Int?,
         @RequestParam(name = "initial_capital", required = false) @DecimalMin(value = "0", inclusive = false) initialCapital: Double?,
     ): Map<String, Any?> {
-        val strategy = owned(strategies, user, id)
+        val strategy = strategies.owned(user, id)
         val dTo = dateTo ?: MarketClock.todayKst()
         val dFrom = dateFrom ?: LocalDate.of(1970, 1, 1)
         if (dateFrom != null && dateFrom.isAfter(dTo)) throw ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "시작일이 종료일보다 늦습니다.")
@@ -65,7 +62,7 @@ class TrackingController(
         val all = reports.filledOrders(user.id!!, id).flatMap { o ->
             o.fills.mapNotNull { f ->
                 if (f.qty <= 0 || f.price <= 0) return@mapNotNull null
-                val d = FillQualityReport.kstDate(f.executedAt)
+                val d = MarketClock.kstDate(f.executedAt)
                 if (d.isAfter(dTo)) null else Tracking.Execution(d, o.symbol, o.side, f.qty, f.price, f.fee)
             }
         }
@@ -76,15 +73,9 @@ class TrackingController(
         val effTo = maxOf(window.maxOf { it.date }, dTo)
         val replayFrom = all.minOf { it.date }
 
-        val cols = linkedMapOf<String, Series>()
-        for (sym in all.map { it.symbol }.toSortedSet()) {
-            val bars = ticks.bars(sym, BacktestRunner.kstStart(replayFrom), BacktestRunner.kstEnd(effTo))
-            if (bars.isEmpty()) continue
-            val byDate = java.util.TreeMap<LocalDate, Double>()
-            for (b in bars) byDate[b.time.atZone(ZoneOffset.UTC).toLocalDate()] = b.close
-            cols[sym] = Series(byDate.keys.toList(), byDate.values.toDoubleArray())
-        }
-        val panel = if (cols.isEmpty()) Panel(emptyList(), emptyList(), emptyMap()) else Panel.fromSeries(cols)
+        val panel = FillQualityReport.dailyClosePanel(
+            all.map { it.symbol }.toSortedSet().associateWith { ticks.bars(it, BacktestRunner.kstStart(replayFrom), BacktestRunner.kstEnd(effTo)) },
+        )
         val capital = initialCapital ?: Cfg.num(Cfg.or(strategy.config, "cash", 10_000_000.0))
         val (realized, notes0) = Tracking.reconstructRealizedCurve(all, panel, capital, dFrom)
         val notes = notes0.toMutableList()
@@ -98,13 +89,7 @@ class TrackingController(
         } else {
             backtests.findByStrategyIdOrderByIdDesc(id).firstOrNull()
         }
-        @Suppress("UNCHECKED_CAST")
-        val btCurve = ((bt?.result?.get("equity_curve") as? List<Any?>).orEmpty()).mapNotNull { p ->
-            val m = p as? Map<String, Any?> ?: return@mapNotNull null
-            val t = m["t"] ?: return@mapNotNull null
-            val v = (m["v"] as? Number)?.toDouble() ?: return@mapNotNull null
-            linkedMapOf<String, Any?>("t" to t.toString(), "v" to v)
-        }
+        val btCurve = backtestCurve(bt?.result)
         val cmp = Tracking.compare(realized, btCurve)
         return linkedMapOf(
             "strategy_id" to id,
@@ -124,10 +109,17 @@ class TrackingController(
             "notes" to notes,
         )
     }
-}
 
-private fun owned(strategies: StrategyRepository, user: User, id: Int): Strategy =
-    strategies.findById(id).filter { it.userId == user.id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
+    /** 저장된 백테스트 결과의 equity_curve → [{t, v}]. 형식이 맞지 않는 점은 건너뛴다. */
+    @Suppress("UNCHECKED_CAST")
+    private fun backtestCurve(result: Map<String, Any?>?): List<Map<String, Any?>> =
+        ((result?.get("equity_curve") as? List<Any?>).orEmpty()).mapNotNull { p ->
+            val m = p as? Map<String, Any?> ?: return@mapNotNull null
+            val t = m["t"] ?: return@mapNotNull null
+            val v = (m["v"] as? Number)?.toDouble() ?: return@mapNotNull null
+            linkedMapOf<String, Any?>("t" to t.toString(), "v" to v)
+        }
+}
 
 data class SlippageCalibrationApply(@field:DecimalMin("0") @field:DecimalMax("1000") val proposedBps: Double)
 
@@ -154,7 +146,7 @@ class FillQualityController(private val strategies: StrategyRepository, private 
         val dTo = dateTo ?: MarketClock.todayKst()
         val dFrom = dateFrom ?: dTo.minusDays(days.toLong())
         if (dFrom.isAfter(dTo)) throw ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "시작일이 종료일보다 늦습니다.")
-        strategyId?.let { owned(strategies, user, it) }
+        strategyId?.let { strategies.owned(user, it) }
         val report = reports.report(user.id!!, dFrom, dTo, strategyId, annualTurnover, capital, minSample, detail)
         report["calibration"] = SlippageCalibration.propose(report, minSample)?.let {
             linkedMapOf(
@@ -167,7 +159,7 @@ class FillQualityController(private val strategies: StrategyRepository, private 
 
     @PostMapping("/api/backtest/slippage-calibration/{id}/apply")
     fun apply(@CurrentUser user: User, @PathVariable id: Int, @Valid @RequestBody payload: SlippageCalibrationApply): Map<String, Any?> {
-        val strategy = owned(strategies, user, id)
+        val strategy = strategies.owned(user, id)
         val dTo = MarketClock.todayKst()
         val proposal = SlippageCalibration.propose(reports.report(user.id!!, dTo.minusDays(90), dTo, id))
             ?: throw ApiException(HttpStatus.CONFLICT, "현재 반영할 슬리피지 캘리브레이션 제안이 없습니다(표본 부족 또는 유의 변화 없음).")

@@ -10,11 +10,13 @@ import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyLike
 import com.quantfolio.domain.strategy.StrategyLikeRepository
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.security.CredentialCipher
 import com.quantfolio.strategy.StrategyConfigParser
 import com.quantfolio.web.api.ApiException
+import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
 import com.quantfolio.web.auth.UserOut
 import com.quantfolio.web.auth.toOut
@@ -57,7 +59,7 @@ data class StrategyOut(
     val name: String,
     val description: String?,
     val config: Map<String, Any?>,
-    val status: String,
+    val status: StrategyStatus,
     val featuredBacktestId: Int?,
     val isShared: Boolean,
     val isFavorite: Boolean,
@@ -103,9 +105,6 @@ class StrategiesController(
     private val redis: StringRedisTemplate,
     private val json: JsonMapper,
 ) {
-    private fun owned(user: User, id: Int): Strategy =
-        strategies.findById(id).filter { it.userId == user.id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
-
     private fun likeCount(id: Int): Int = jdbc.queryForObject("select count(*) from strategy_likes where strategy_id = :id", MapSqlParameterSource("id", id), Int::class.java) ?: 0
 
     /** 저장 후 DB 에서 다시 읽어 응답(원본 `db.refresh`) — config 는 jsonb 키 순서, 시각은 DB 값이라 이후 GET 과 같다. */
@@ -120,7 +119,7 @@ class StrategiesController(
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     fun create(@CurrentUser user: User, @Valid @RequestBody payload: StrategyCreate): StrategyOut =
-        save(Strategy(user.id!!, payload.name, payload.description?.ifEmpty { null }, StrategyConfigParser.parse(payload.config), "draft"))
+        save(Strategy(user.id!!, payload.name, payload.description?.ifEmpty { null }, StrategyConfigParser.parse(payload.config), StrategyStatus.draft))
 
     @GetMapping("/shared")
     fun shared(
@@ -184,16 +183,16 @@ class StrategiesController(
     }
 
     @PostMapping("/{id}/share")
-    fun share(@CurrentUser user: User, @PathVariable id: Int) = save(owned(user, id).apply { isShared = true; sharedAt = Instant.now() })
+    fun share(@CurrentUser user: User, @PathVariable id: Int) = save(strategies.owned(user, id).apply { isShared = true; sharedAt = Instant.now() })
 
     @DeleteMapping("/{id}/share")
-    fun unshare(@CurrentUser user: User, @PathVariable id: Int) = save(owned(user, id).apply { isShared = false; sharedAt = null })
+    fun unshare(@CurrentUser user: User, @PathVariable id: Int) = save(strategies.owned(user, id).apply { isShared = false; sharedAt = null })
 
     @PostMapping("/{id}/favorite")
-    fun favorite(@CurrentUser user: User, @PathVariable id: Int) = save(owned(user, id).apply { isFavorite = true })
+    fun favorite(@CurrentUser user: User, @PathVariable id: Int) = save(strategies.owned(user, id).apply { isFavorite = true })
 
     @DeleteMapping("/{id}/favorite")
-    fun unfavorite(@CurrentUser user: User, @PathVariable id: Int) = save(owned(user, id).apply { isFavorite = false })
+    fun unfavorite(@CurrentUser user: User, @PathVariable id: Int) = save(strategies.owned(user, id).apply { isFavorite = false })
 
     /** 공유 전략(또는 내 전략)의 설정만 복제 — 공유·좋아요·즐겨찾기는 초기화, draft. */
     @PostMapping("/{id}/copy")
@@ -201,7 +200,7 @@ class StrategiesController(
     fun copy(@CurrentUser user: User, @PathVariable id: Int): StrategyOut {
         val src = strategies.findById(id).filter { it.isShared || it.userId == user.id }
             .orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
-        return save(Strategy(user.id!!, "${src.name} (사본)", src.description, LinkedHashMap(src.config), "draft", copiedFromId = src.id))
+        return save(Strategy(user.id!!, "${src.name} (사본)", src.description, LinkedHashMap(src.config), StrategyStatus.draft, copiedFromId = src.id))
     }
 
     /** 공유 전략 좋아요(인당 1회, 멱등). 내 전략엔 불가. */
@@ -226,7 +225,7 @@ class StrategiesController(
     /** 대표 백테스트 지정/해제. 지정하는 백테스트는 이 전략 소속이어야 한다. */
     @PutMapping("/{id}/featured-backtest")
     fun featured(@CurrentUser user: User, @PathVariable id: Int, @RequestBody payload: FeaturedBacktestIn): StrategyOut {
-        val s = owned(user, id)
+        val s = strategies.owned(user, id)
         payload.backtestId?.let { bid ->
             backtests.findById(bid).filter { it.strategyId == id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "백테스트를 찾을 수 없습니다.") }
         }
@@ -235,12 +234,12 @@ class StrategiesController(
     }
 
     @GetMapping("/{id}")
-    fun get(@CurrentUser user: User, @PathVariable id: Int) = owned(user, id).toOut()
+    fun get(@CurrentUser user: User, @PathVariable id: Int) = strategies.owned(user, id).toOut()
 
     /** 부분 갱신(전달된 필드만). 설명은 공백이면 null. */
     @PatchMapping("/{id}")
     fun update(@CurrentUser user: User, @PathVariable id: Int, @RequestBody payload: StrategyUpdate): StrategyOut {
-        val s = owned(user, id)
+        val s = strategies.owned(user, id)
         payload.name?.let { s.name = it }
         payload.description?.let { s.description = it.trim().ifEmpty { null } }
         payload.config?.let { s.config = StrategyConfigParser.parse(it) }
@@ -251,8 +250,8 @@ class StrategiesController(
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun delete(@CurrentUser user: User, @PathVariable id: Int) {
-        val s = owned(user, id)
-        if (s.status == "live") throw ApiException(HttpStatus.CONFLICT, "가동 중인 전략은 삭제할 수 없습니다. 먼저 중지하세요.")
+        val s = strategies.owned(user, id)
+        if (s.status == StrategyStatus.live) throw ApiException(HttpStatus.CONFLICT, "가동 중인 전략은 삭제할 수 없습니다. 먼저 중지하세요.")
         if (redis.opsForSet().isMember(RedisKeys.ACTIVE_STRATEGIES, id.toString()) == true) {
             throw ApiException(HttpStatus.CONFLICT, "엔진에서 실행 중인 전략입니다. 먼저 중지하세요.")
         }
@@ -323,12 +322,14 @@ class KisController(
     }
 
     @PutMapping("/credentials")
+    @Transactional
     fun credentials(@CurrentUser user: User, @Valid @RequestBody payload: KisCredentialsIn): UserOut {
-        user.broker = payload.broker
-        user.kisAppKey = cipher.encrypt(payload.kisAppKey)
-        user.kisAppSecret = cipher.encrypt(payload.kisAppSecret)
-        user.kisAccountNo = payload.kisAccountNo
-        return users.save(user).toOut(props)
+        val current = users.findForCredentialUpdate(user.id!!) ?: throw ApiException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.")
+        current.broker = payload.broker
+        current.kisAppKey = cipher.encrypt(payload.kisAppKey)
+        current.kisAppSecret = cipher.encrypt(payload.kisAppSecret)
+        current.kisAccountNo = payload.kisAccountNo
+        return users.save(current).toOut(props)
     }
 
     /** 통합 시세(국내+해외)용 토스 자격증명. 주문 브로커와 독립 — payload.broker 는 무시. */

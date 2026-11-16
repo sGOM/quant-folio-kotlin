@@ -3,8 +3,10 @@ package com.quantfolio.web.engine
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.trading.Order
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.trading.Position
@@ -55,17 +57,18 @@ class EngineTradingAlertsTest(
 ) {
     private val json = JsonMapper.builder().build()
 
-    private inner class Me(withKeys: Boolean = false) {
+    private inner class Me(withKeys: Boolean = false, accountNo: String? = "50012345-01") {
         val user: User = users.save(
             User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")).apply {
                 if (withKeys) {
                     kisAppKey = cipher.encrypt("k")
                     kisAppSecret = cipher.encrypt("s")
+                    kisAccountNo = accountNo
                 }
             },
         )
         val cookie = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
-        fun strategy(status: String = "backtested") = strategies.save(Strategy(user.id!!, "s-$status", config = mapOf("type" to "rsi"), status = status))
+        fun strategy(status: StrategyStatus = StrategyStatus.backtested) = strategies.save(Strategy(user.id!!, "s-$status", config = mapOf("type" to "rsi"), status = status))
     }
 
     private fun listen(channel: String): Pair<RedisMessageListenerContainer, LinkedBlockingQueue<String>> {
@@ -91,13 +94,21 @@ class EngineTradingAlertsTest(
                 status { isBadRequest() }
                 jsonPath("$.detail") { value("증권사 자격증명을 먼저 등록하세요.") }
             }
+            val noAccount = Me(withKeys = true, accountNo = null)
+            val withoutAccount = noAccount.strategy()
+            mvc.post("/api/engine/strategies/${withoutAccount.id}/start") { cookie(noAccount.cookie) }.andExpect {
+                status { isBadRequest() }
+                jsonPath("$.detail") { value("주문 계좌를 확인할 수 없습니다.") }
+            }
+            assertEquals(StrategyStatus.backtested, strategies.findById(withoutAccount.id!!).orElseThrow().status)
+
             val me = Me(withKeys = true)
             val s = me.strategy()
             mvc.post("/api/engine/strategies/${s.id}/start") { cookie(me.cookie) }.andExpect { jsonPath("$.status") { value("live") } }
-            assertEquals("live", strategies.findById(s.id!!).get().status)
+            assertEquals(StrategyStatus.live, strategies.findById(s.id!!).get().status)
             assertEquals("""{"action": "start", "strategy_id": ${s.id}}""", q.poll(5, TimeUnit.SECONDS))
             mvc.post("/api/engine/strategies/${s.id}/stop") { cookie(me.cookie) }.andExpect { jsonPath("$.status") { value("stopped") } }
-            assertEquals("backtested", strategies.findById(s.id!!).get().status)
+            assertEquals(StrategyStatus.backtested, strategies.findById(s.id!!).get().status)
             assertEquals("""{"action": "stop", "strategy_id": ${s.id}}""", q.poll(5, TimeUnit.SECONDS))
             mvc.post("/api/engine/strategies/${Me().strategy().id}/stop") { cookie(me.cookie) }.andExpect { status { isNotFound() } }
         } finally {
@@ -114,11 +125,11 @@ class EngineTradingAlertsTest(
             jsonPath("$.engine_alive") { value(true) }
             jsonPath("$.backup_last_success_at") { value("2026-10-18T03:00:00+00:00") }
         }
-        val a = me.strategy("live")
-        val b = me.strategy("live")
-        me.strategy("backtested")
-        redis.opsForValue().set(RedisKeys.engineHealth(a.id!!), """{"last_success_ts":"t1","consecutive_failures":3,"last_error":"boom","updated_at":"u"}""")
-        redis.opsForValue().set(RedisKeys.mddState(a.id!!), """{"hwm":1.05,"killed":true,"kill_date":"2026-10-01"}""")
+        val a = me.strategy(StrategyStatus.live)
+        val b = me.strategy(StrategyStatus.live)
+        me.strategy(StrategyStatus.backtested)
+        redis.opsForValue().set(RedisKeys.engineHealth(a.id!!), """{"last_success_ts":"t1","consecutive_failures":3,"last_error":"boom","updated_at":"u","broker_account_key":"running-account"}""")
+        redis.opsForValue().set(RedisKeys.mddState(a.id!!, "running-account"), """{"hwm":1.05,"killed":true,"kill_date":"2026-10-01"}""")
         redis.opsForValue().set(RedisKeys.engineHealth(b.id!!), "not json")
         val body = json.readTree(mvc.get("/api/engine/strategies/health") { cookie(me.cookie) }.andReturn().response.contentAsString)
         assertEquals(RedisKeys.FAILURE_ALERT_THRESHOLD, body.get("threshold").asInt())
@@ -138,15 +149,12 @@ class EngineTradingAlertsTest(
     }
 
     @Test
-    fun positionsFallBackToDbAndOrdersAreCapped() {
+    fun unknownAccountPositionsAreHiddenAndOrdersAreCapped() {
         val me = Me()
         positions.save(Position(me.user.id!!, null, "005930", BigDecimal("10"), BigDecimal("70000.5")))
         positions.save(Position(me.user.id!!, null, "000660", BigDecimal("0"), BigDecimal("1")))
         mvc.get("/api/trading/positions") { cookie(me.cookie) }.andExpect {
-            jsonPath("$.length()") { value(1) }
-            jsonPath("$[0].symbol") { value("005930") }
-            jsonPath("$[0].qty") { value(10.0) }
-            jsonPath("$[0].avg_price") { value(70000.5) }
+            jsonPath("$.length()") { value(0) }
         }
         val t0 = Instant.parse("2026-10-01T00:00:00Z")
         repeat(3) { i -> orders.save(Order(me.user.id!!, null, "005930", "buy", BigDecimal("1"), null, idempotencyKey = UUID.randomUUID().toString(), createdAt = t0.plusSeconds(i * 60L))) }
@@ -163,9 +171,9 @@ class EngineTradingAlertsTest(
         val other = Me()
         val s = me.strategy()
         val t0 = Instant.now().minusSeconds(3600)
-        val mine = alerts.save(Alert(me.user.id, s.id!!, "warning", "x", "내 알림", createdAt = t0))
-        val global = alerts.save(Alert(null, s.id!!, "critical", "backup_failed", "전역", createdAt = t0.plusSeconds(10)))
-        val theirs = alerts.save(Alert(other.user.id, s.id!!, "warning", null, "남의 알림", createdAt = t0.plusSeconds(20)))
+        val mine = alerts.save(Alert(me.user.id, s.id!!, AlertSeverity.warning, "x", "내 알림", createdAt = t0))
+        val global = alerts.save(Alert(null, s.id!!, AlertSeverity.critical, "backup_failed", "전역", createdAt = t0.plusSeconds(10)))
+        val theirs = alerts.save(Alert(other.user.id, s.id!!, AlertSeverity.warning, null, "남의 알림", createdAt = t0.plusSeconds(20)))
         val body = json.readTree(mvc.get("/api/alerts?limit=1") { cookie(me.cookie) }.andReturn().response.contentAsString)
         assertTrue(body.get("has_more").asBoolean())
         assertTrue(body.get("unread_count").asInt() >= 2)

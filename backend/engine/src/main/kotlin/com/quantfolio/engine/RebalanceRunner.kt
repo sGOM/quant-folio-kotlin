@@ -4,10 +4,10 @@ import com.quantfolio.alert.pyIsoformat
 import com.quantfolio.backtest.PortfolioBacktest
 import com.quantfolio.backtest.RiskCaps
 import com.quantfolio.backtest.Tracking
-import com.quantfolio.backtest.FillQualityReport
 import com.quantfolio.backtest.Signals
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.metrics.UniverseScoreParams
@@ -93,10 +93,26 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             return
         }
 
+        val trigger = fireTrigger(now, marketOpen, mddKill != null, reentry) ?: return
+        log.info("리밸런싱 전략 {} {} ({})", strategyId, trigger.kind, now)
+        rebalanceOnce(now, riskOff = false, barTag = trigger.tag)
+        if (tickAbandoned) {
+            log.warn("리밸런싱 전략 {} 틱 중단됨 — 이번 주기를 실행됨으로 기록하지 않고 다음 점검에서 재시도", strategyId)
+            return
+        }
+        if (trigger.consumesCadence) setLast(now) // 재진입은 cadence 스케줄을 소비하지 않는다
+        if (trigger.rearm) clearRearmPending()
+    }
+
+    /** 위험회피가 아닐 때의 발화 사유. [consumesCadence] 면 실행 후 마지막 발화 시각을 갱신, [rearm] 이면 쿨다운 해제 표식을 지운다. */
+    private data class Trigger(val kind: String, val tag: String, val consumesCadence: Boolean, val rearm: Boolean)
+
+    /** 정기·콜드스타트·레짐 재진입·MDD 쿨다운 해제 중 무엇으로 발화하는지. 발화하지 않으면 null. */
+    private fun fireTrigger(now: ZonedDateTime, marketOpen: Boolean, mddKillOn: Boolean, reentry: Boolean): Trigger? {
         val last = getLast()
         val due = Rebalance.isRebalanceDue(cfg, last, now, marketOpen)
         var rearm = false
-        if (mddKill != null && marketOpen) {
+        if (mddKillOn && marketOpen) {
             val state = mddState()
             if (state?.get("rearm_pending") == true) {
                 rearm = !hasHoldings()
@@ -105,21 +121,13 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         }
         log.info("전략 {} 발화 판정: last={} due={} reentry={} rearm={}", strategyId, last, due, reentry, rearm)
         val bootstrap = !due && Cfg.truthy(cfg["initial_fill_immediate"]) && last == null && marketOpen && !hasHoldings()
-        if (!(due || reentry || bootstrap || rearm)) return
-        val (kind, tag) = when {
-            due -> "정기 발화" to "rebal"
-            bootstrap -> "콜드스타트 즉시 발화" to "rebal"
-            reentry -> "레짐 재진입" to "regime"
-            else -> "MDD 쿨다운 해제 재진입" to "rearm"
+        return when {
+            due -> Trigger("정기 발화", "rebal", consumesCadence = true, rearm = rearm)
+            bootstrap -> Trigger("콜드스타트 즉시 발화", "rebal", consumesCadence = true, rearm = rearm)
+            reentry -> Trigger("레짐 재진입", "regime", consumesCadence = false, rearm = rearm)
+            rearm -> Trigger("MDD 쿨다운 해제 재진입", "rearm", consumesCadence = false, rearm = rearm)
+            else -> null
         }
-        log.info("리밸런싱 전략 {} {} ({})", strategyId, kind, now)
-        rebalanceOnce(now, riskOff = false, barTag = tag)
-        if (tickAbandoned) {
-            log.warn("리밸런싱 전략 {} 틱 중단됨 — 이번 주기를 실행됨으로 기록하지 않고 다음 점검에서 재시도", strategyId)
-            return
-        }
-        if (due || bootstrap) setLast(now) // 재진입은 cadence 스케줄을 소비하지 않는다
-        if (rearm) clearRearmPending()
     }
 
     // ── Redis 상태 ──
@@ -133,13 +141,13 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     private fun setRegime(off: Boolean) = ctx.redis.opsForValue().set(RedisKeys.rebalanceRegime(strategyId), if (off) "1" else "0", STATE_TTL)
 
-    fun mddState(): Map<String, Any?>? = ctx.redis.opsForValue().get(RedisKeys.mddState(strategyId))?.let {
+    fun mddState(): Map<String, Any?>? = ctx.redis.opsForValue().get(RedisKeys.mddState(strategyId, accountKey))?.let {
         runCatching { json.readValue<Map<String, Any?>>(it) }.getOrNull()?.takeIf { s -> "hwm" in s }
     }
 
     private fun setMddState(hwm: Double, killed: Boolean, killDate: LocalDate?, rearmPending: Boolean = false) =
         ctx.redis.opsForValue().set(
-            RedisKeys.mddState(strategyId),
+            RedisKeys.mddState(strategyId, accountKey),
             pyJsonDumps(linkedMapOf("hwm" to hwm, "killed" to killed, "kill_date" to killDate?.toString(), "rearm_pending" to rearmPending)),
             STATE_TTL,
         )
@@ -151,8 +159,8 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     }
 
     private fun hasHoldings(): Boolean = ctx.jdbc.queryForObject(
-        "select exists(select 1 from positions where user_id = :u and strategy_id = :s and qty > 0)",
-        MapSqlParameterSource("u", userId).addValue("s", strategyId), Boolean::class.java,
+        "select exists(select 1 from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0)",
+        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey), Boolean::class.java,
     ) == true
 
     // ── MDD 킬스위치 ──
@@ -161,16 +169,19 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     private fun liveEquity(): Double {
         val capital = Cfg.num(Cfg.get(cfg, "capital", 10_000_000))
         val execs = ctx.jdbc.query(
-            "select o.symbol, o.side, e.filled_qty, e.filled_price, e.fee, e.executed_at from executions e join orders o on e.order_id = o.id " +
-                "where o.user_id = :u and o.strategy_id = :s and o.status in ('partial', 'filled') order by o.created_at, o.id, e.id",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId),
+            """select o.symbol, o.side, e.account_position_qty, e.filled_price,
+                      e.fee * e.account_position_qty / nullif(e.filled_qty, 0), e.executed_at
+               from executions e join orders o on e.order_id = o.id
+               where o.user_id = :u and o.strategy_id = :s and o.broker_account_key = :a and e.account_position_qty > 0
+               order by e.executed_at, e.id""",
+            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey),
         ) { rs, _ ->
-            Tracking.Execution(FillQualityReport.kstDate(rs.getTimestamp(6).toInstant()), rs.getString(1), rs.getString(2), rs.getBigDecimal(3).toDouble(), rs.getBigDecimal(4).toDouble(), rs.getBigDecimal(5).toDouble())
+            Tracking.Execution(MarketClock.kstDate(rs.getTimestamp(6).toInstant()), rs.getString(1), rs.getString(2), rs.getBigDecimal(3).toDouble(), rs.getBigDecimal(4).toDouble(), rs.getBigDecimal(5).toDouble())
         }.filter { it.qty > 0 && it.price > 0 }
         val cash = Tracking.replayCashBalance(execs, capital)
         val positions = ctx.jdbc.query(
-            "select symbol, qty, avg_price from positions where user_id = :u and strategy_id = :s and qty > 0",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId),
+            "select symbol, qty, avg_price from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0",
+            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey),
         ) { rs, _ -> Triple(rs.getString(1), rs.getBigDecimal(2), rs.getBigDecimal(3)) }
         if (positions.isEmpty()) return cash
         val prices = quotes(positions.map { it.first }.toSet())
@@ -231,7 +242,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             val dd = (equity / hwm - 1.0) * 100
             log.warn("리밸런싱 전략 {} MDD 킬스위치 발동 — 자산가치 {} / 고점 {} (낙폭 {}% ≤ −{}%) → 전량 청산·현금 대피", strategyId, pyFixed(equity, 0), pyFixed(hwm, 0), pyFixed(dd, 2), pyFixed(killPct * 100, 2))
             ctx.alerts.publish(
-                userId, strategyId, "critical",
+                userId, strategyId, AlertSeverity.critical,
                 "MDD 킬스위치 발동 — 고점 ${won(hwm)} 대비 낙폭 ${pyFixed(dd, 2)}%가 임계 −${pyFixed(killPct * 100, 1)}%를 넘어 전량 청산·현금 대피", "mdd_kill",
             )
         }
@@ -249,33 +260,15 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val method = selection["method"]
         val weighting = Cfg.get(cfg, "weighting", "equal")
         val riskLayer = Cfg.map(cfg, "risk_layer")
-        val wantVolTarget = Cfg.truthy(riskLayer["target_vol"])
-        @Suppress("UNCHECKED_CAST")
-        val volGate = (selection["vol_gate"] as? Map<String, Any?>).orEmpty()
         val hasRuleType = Cfg.truthy(rule["type"])
-        var history: Map<String, Series> = emptyMap()
-        if (hasRuleType || method in setOf("momentum", "custom", "all") || weighting == "inverse_vol" || wantVolTarget || volGate.isNotEmpty()) {
-            var minBars = if (hasRuleType) Cfg.int(Cfg.get(rule, "lookback", 0)) + 1 else 0
-            if (weighting == "inverse_vol") minBars = maxOf(minBars, 253)
-            if (wantVolTarget) minBars = maxOf(minBars, Cfg.int(Cfg.or(riskLayer, "vol_lookback", 20)) + 1)
-            if (volGate.isNotEmpty()) minBars = maxOf(minBars, Cfg.int(Cfg.or(volGate, "base_lookback", 252)) + 1)
-            history = seedHistory(pool, minBars)
-        }
+        val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it) } ?: emptyMap()
         val universe = if (hasRuleType) PortfolioBacktest.dynamicUniverse(Panel.fromSeries(history), pool, rule) else pool
         val planCfg = cfg + ("universe" to universe)
         var scores: Map<String, Double>? = null
         if (method == "score") {
             @Suppress("UNCHECKED_CAST")
             val fw = (selection["factor_weights"] as? Map<String, Any?>)?.mapValues { Cfg.num(it.value) }
-            scores = ctx.scores.compute(
-                universe, asOf,
-                UniverseScoreParams(
-                    fw, Cfg.get(selection, "neutralize", "none").toString(), Cfg.get(cfg, "financial_period", "annual").toString(),
-                    Cfg.int(Cfg.get(selection, "flow_window", 90)), Cfg.get(selection, "flow_denom", "mcap").toString(),
-                    Cfg.int(Cfg.get(selection, "resid_mom_reg_window", 36)), Cfg.int(Cfg.get(selection, "resid_mom_window", 11)),
-                    Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)),
-                ),
-            )
+            scores = ctx.scores.compute(universe, asOf, scoreParams(fw))
         }
         var targets = Rebalance.targetWeights(history, planCfg, scores)
         if (riskLayer.isNotEmpty() && targets.isNotEmpty()) {
@@ -284,6 +277,27 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         }
         return pool to targets
     }
+
+    /** 가격 히스토리가 필요하면 최소 봉 수(동적 유니버스·모멘텀·역변동성·변동성 타깃·변동성 게이트 중 최대), 필요 없으면 null. */
+    private fun historyBarsNeeded(method: Any?, weighting: Any?, riskLayer: Map<String, Any?>): Int? {
+        val wantVolTarget = Cfg.truthy(riskLayer["target_vol"])
+        @Suppress("UNCHECKED_CAST")
+        val volGate = (selection["vol_gate"] as? Map<String, Any?>).orEmpty()
+        val hasRuleType = Cfg.truthy(rule["type"])
+        if (!(hasRuleType || method in setOf("momentum", "custom", "all") || weighting == "inverse_vol" || wantVolTarget || volGate.isNotEmpty())) return null
+        var minBars = if (hasRuleType) Cfg.int(Cfg.get(rule, "lookback", 0)) + 1 else 0
+        if (weighting == "inverse_vol") minBars = maxOf(minBars, 253)
+        if (wantVolTarget) minBars = maxOf(minBars, Cfg.int(Cfg.or(riskLayer, "vol_lookback", 20)) + 1)
+        if (volGate.isNotEmpty()) minBars = maxOf(minBars, Cfg.int(Cfg.or(volGate, "base_lookback", 252)) + 1)
+        return minBars
+    }
+
+    private fun scoreParams(factorWeights: Map<String, Double>?) = UniverseScoreParams(
+        factorWeights, Cfg.get(selection, "neutralize", "none").toString(), Cfg.get(cfg, "financial_period", "annual").toString(),
+        Cfg.int(Cfg.get(selection, "flow_window", 90)), Cfg.get(selection, "flow_denom", "mcap").toString(),
+        Cfg.int(Cfg.get(selection, "resid_mom_reg_window", 36)), Cfg.int(Cfg.get(selection, "resid_mom_window", 11)),
+        Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)),
+    )
 
     private fun sectors(): Map<String, String> {
         sectorMap?.takeIf { it.isNotEmpty() }?.let { return it }
@@ -304,7 +318,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             log.info("리밸런싱 전략 {} 레짐 위험회피 — 보유 청산·신규 매수 중단", strategyId)
         } else if (targets.isEmpty()) {
             log.warn("리밸런싱 전략 {} 선정 종목 없음(데이터 부족) — 건너뜀", strategyId)
-            ctx.alerts.publish(userId, strategyId, "warning", "리밸런싱 발화 시점에 선정 종목이 하나도 산정되지 않아 이번 리밸런싱을 건너뜁니다(팩터/가격 데이터 조회 장애 가능). 다음 주기 재시도.", "factor_outage")
+            ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "리밸런싱 발화 시점에 선정 종목이 하나도 산정되지 않아 이번 리밸런싱을 건너뜁니다(팩터/가격 데이터 조회 장애 가능). 다음 주기 재시도.", "factor_outage")
             return
         }
         val positions = holdings(pool)
@@ -319,7 +333,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             log.info("리밸런싱 전략 {} 드리프트 밴드 내 — 매매 없음", strategyId)
             return
         }
-        executeOrders(orders, prices, "${now.toLocalDate()}:$barTag", targets, riskOff, liqKind)
+        executeOrders(orders, prices, "${now.toLocalDate()}:$barTag", targets, riskOff, liqKind, positions)
     }
 
     private fun sellReason(sym: String, targets: Map<String, Double>, riskOff: Boolean, qty: Int, liqKind: String): String {
@@ -393,7 +407,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     private fun alertPitFallback(source: String, cause: String) {
         if (pitFallbackActive) return
         pitFallbackActive = true
-        ctx.alerts.publish(userId, strategyId, "warning", "PIT 유니버스($source) $cause — config.universe 고정 폴백으로 전환. 생존편향 검증 원칙상 지수 구성 이탈은 즉시 점검이 필요합니다.", "pit_fallback")
+        ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "PIT 유니버스($source) $cause — config.universe 고정 폴백으로 전환. 생존편향 검증 원칙상 지수 구성 이탈은 즉시 점검이 필요합니다.", "pit_fallback")
     }
 
     /** panic_overlay 는 백테스트에만 구현 — 실거래에서 재현할 수 없으니 매매를 중단한다(보유 유지, 킬스위치는 계속). 1회 경보. */
@@ -402,7 +416,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         panicAlerted = true
         log.error("리밸런싱 전략 {} panic_overlay 가 설정돼 있으나 실거래 엔진에 구현이 없어 매매를 중단한다(보유 유지).", strategyId)
         ctx.alerts.publish(
-            userId, strategyId, "critical",
+            userId, strategyId, AlertSeverity.critical,
             "panic_overlay 는 백테스트에만 구현돼 있어 실거래에서 재현할 수 없습니다. 무시하고 매매하면 base_exposure·event_only 를 반영하지 않아 백테스트보다 " +
                 "공격적으로 운용되므로, 이 전략의 매매를 중단합니다(기존 보유는 유지, MDD 킬스위치는 계속 동작). 실거래하려면 panic_overlay 를 해제하십시오.",
             "panic_overlay_unsupported",
@@ -417,15 +431,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val start = end.minus(Duration.ofDays(need * 3L))
         val out = linkedMapOf<String, Series>()
         universe.forEachIndexed { i, sym ->
-            var bars = ctx.ticks.bars(sym, start, end)
-            if (bars.size < need) {
-                try {
-                    ctx.ticks.upsert(sym, ctx.loader.load(sym, start.atZone(ZoneOffset.UTC).toLocalDate(), end.atZone(ZoneOffset.UTC).toLocalDate()))
-                    bars = ctx.ticks.bars(sym, start, end)
-                } catch (e: Exception) {
-                    log.warn("{} 리밸런싱 시드 적재 실패: {}", sym, e.message)
-                }
-            }
+            val bars = barsWithBackfill(sym, start, end, need, "리밸런싱 시드")
             out[sym] = Series(bars.map { it.time.atZone(ZoneOffset.UTC).toLocalDate() }, DoubleArray(bars.size) { bars[it].close })
             if ((i + 1) % 20 == 0 || i + 1 == universe.size) log.info("전략 {} 히스토리 시딩 진행: {}/{}", strategyId, i + 1, universe.size)
         }
@@ -435,8 +441,8 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     private fun holdings(universe: List<String>): Map<String, BigDecimal> {
         if (universe.isEmpty()) return emptyMap()
         return ctx.jdbc.query(
-            "select symbol, qty from positions where user_id = :u and strategy_id = :s and qty > 0 and symbol in (:syms)",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("syms", universe),
+            "select symbol, qty from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0 and symbol in (:syms)",
+            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey).addValue("syms", universe),
         ) { rs, _ -> rs.getString(1) to rs.getBigDecimal(2) }.toMap()
     }
 
@@ -456,39 +462,40 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         }
     }.toMap()
 
-    /** 매도 먼저 → 매수(일일 손실 한도 초과면 매수 중단). 각 종목은 (사용자, 종목) 락 안에서. */
-    private fun executeOrders(orders: List<Triple<String, String, Int>>, prices: Map<String, BigDecimal>, barTs: String, targets: Map<String, Double>, riskOff: Boolean, liqKind: String) {
+    /**
+     * 매도 먼저 → 매수(일일 손실 한도 초과면 매수 중단). 각 종목은 (사용자, 종목) 락 안에서.
+     * [holdings] 는 주문 수량을 정한 보유(락 밖에서 읽음) — 예약 시점 장부와 다르면 실행기가 보류한다.
+     */
+    private fun executeOrders(orders: List<Triple<String, String, Int>>, prices: Map<String, BigDecimal>, barTs: String, targets: Map<String, Double>, riskOff: Boolean, liqKind: String, holdings: Map<String, BigDecimal>) {
         val ranked = targets.entries.sortedByDescending { it.value }.map { it.key }
         val rankOf = ranked.withIndex().associate { (i, s) -> s to i + 1 }
-        val daily = ctx.risk.checkDailyLoss(userId!!, strategyId, prices)
+        val daily = ctx.risk.checkDailyLoss(userId!!, strategyId, prices, accountKey)
         if (!daily.approved) log.info("리밸런싱 매수 차단: {}", daily.reason)
         for ((sym, side, qty) in orders) {
             val price = prices[sym] ?: continue
             if (qty <= 0) continue
+            val held = holdings[sym] ?: BigDecimal.ZERO
             val (acquired, _) = withPositionLock(sym) {
                 if (side == "sell") {
-                    val pos = ctx.jdbc.query(
-                        "select qty, avg_price from positions where user_id = :u and strategy_id = :s and symbol = :sym",
-                        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sym", sym),
-                    ) { rs, _ -> rs.getBigDecimal(1) to rs.getBigDecimal(2) }.firstOrNull()
-                    val sellQty = minOf(qty, pos?.first?.toInt() ?: 0)
+                    val pos = position(sym)
+                    val sellQty = minOf(qty, pos?.qty?.toInt() ?: 0)
                     if (sellQty <= 0) return@withPositionLock
                     var pnl = ""
-                    val avg = pos?.second
+                    val avg = pos?.avgPrice
                     if (avg != null && avg.signum() > 0) {
                         val r = (price - avg).divide(avg, MathContext.DECIMAL128).toDouble() * 100
                         pnl = " · 평단 ${won(avg.toDouble())} 대비 손익 ${if (r >= 0) "+" else ""}${pyFixed(r, 2)}%"
                     }
-                    place(sym, "sell", sellQty, price, barTs, sellReason(sym, targets, riskOff, sellQty, liqKind) + pnl)
+                    place(sym, "sell", sellQty, price, barTs, sellReason(sym, targets, riskOff, sellQty, liqKind) + pnl, heldQty = held)
                 } else {
                     if (!daily.approved) return@withPositionLock
-                    val d = ctx.risk.evaluateBuy(userId!!, strategyId, sym, price, BigDecimal(qty) * price)
+                    val d = ctx.risk.evaluateBuy(userId!!, strategyId, sym, price, BigDecimal(qty) * price, accountKey)
                     if (!d.approved) {
                         log.info("리밸런싱 매수 보류 {}: {}", sym, d.reason)
                         return@withPositionLock
                     }
                     val rank = rankOf[sym]?.let { "편입 $it/${ranked.size}위, " } ?: ""
-                    place(sym, "buy", d.qty, price, barTs, "리밸런싱 ${rank}목표비중 ${pyFixed((targets[sym] ?: 0.0) * 100, 1)}% 구성 · ${grouped(d.qty)}주 @ ${won(price.toDouble())} 매수")
+                    place(sym, "buy", d.qty, price, barTs, "리밸런싱 ${rank}목표비중 ${pyFixed((targets[sym] ?: 0.0) * 100, 1)}% 구성 · ${grouped(d.qty)}주 @ ${won(price.toDouble())} 매수", heldQty = held)
                 }
             }
             if (!acquired) log.info("포지션 락 경합 — {} 이번 리밸런싱 건너뜀", sym)

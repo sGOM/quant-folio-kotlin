@@ -5,6 +5,7 @@ import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
@@ -95,7 +96,7 @@ class BacktestsControllerTest(
         }
         val body = json.readTree(r.andReturn().response.contentAsString)
         assertEquals(body.get("result").get("total_return").asDouble(), body.get("total_return").asDouble(), 1e-6)
-        assertEquals("backtested", strategies.findById(s.id!!).get().status)
+        assertEquals(StrategyStatus.backtested, strategies.findById(s.id!!).get().status)
         assertTrue(backtests.existsById(body.get("id").asInt()))
     }
 
@@ -114,7 +115,7 @@ class BacktestsControllerTest(
             status { isUnprocessableContent() }
             jsonPath("$.detail") { value(org.hamcrest.Matchers.containsString("데이터")) }
         }
-        assertEquals("draft", strategies.findById(short.id!!).get().status)
+        assertEquals(StrategyStatus.draft, strategies.findById(short.id!!).get().status)
     }
 
     @Test

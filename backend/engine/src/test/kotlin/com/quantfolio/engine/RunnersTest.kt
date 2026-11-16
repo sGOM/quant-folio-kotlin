@@ -11,9 +11,11 @@ import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertRepository
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.trading.Execution
 import com.quantfolio.domain.trading.ExecutionRepository
 import com.quantfolio.domain.trading.Order
+import com.quantfolio.domain.trading.OrderStatus
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
@@ -39,7 +41,6 @@ import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import java.math.BigDecimal
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
@@ -73,15 +74,18 @@ class RunnersTest(
     class Broker(val quotes: MutableMap<String, BigDecimal> = mutableMapOf(), var halted: Set<String> = emptySet()) : BrokerClient {
         val placed = mutableListOf<Triple<String, String, Int>>()
         var quoteDelayMs = 0L
+        var onQuote: (String) -> Unit = {}
         override fun verifyConnection() = true
         override fun getQuote(symbol: String): Quote {
             if (quoteDelayMs > 0) Thread.sleep(quoteDelayMs)
+            onQuote(symbol)
             return Quote(symbol, quotes[symbol] ?: BigDecimal("1000"), halted = symbol in halted)
         }
         override fun placeOrder(symbol: String, side: String, qty: Int, price: Int, orderType: String): OrderResult {
             placed += Triple(symbol, side, qty)
             return OrderResult("ODNO-" + UUID.randomUUID())
         }
+        override val orderAccountKey = TEST_KIS_ACCOUNT_KEY
         override fun getOrderExecution(orderId: String, symbol: String?) = Fill(placed.last().third, quotes[symbol] ?: BigDecimal("1000"), true)
         override fun getBalance() = Balance()
     }
@@ -102,7 +106,7 @@ class RunnersTest(
 
     private fun strategy(config: Map<String, Any?>): Pair<Int, Int> {
         val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
-        return uid to strategies.save(Strategy(uid, "s", config = config, status = "live")).id!!
+        return uid to strategies.save(Strategy(uid, "s", config = config, status = StrategyStatus.live)).id!!
     }
 
     private fun seed(symbol: String, n: Int, f: (Int) -> Double) {
@@ -139,7 +143,7 @@ class RunnersTest(
         seed(code, 10) { 900.0 }
         // config 손절(stop_loss_pct)은 리스크 게이트와 달리 0 가격 방어가 없다 — 0 이 흘러들면 −100% 로 전량 손절된다
         val (uid, sid) = strategy(mapOf("type" to "rsi", "symbol" to code, "stop_loss_pct" to 0.5))
-        positions.save(Position(uid, sid, code, BigDecimal("10"), BigDecimal("1000")))
+        positions.save(Position(uid, sid, code, BigDecimal("10"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         limits.save(RiskLimit(uid, sid, stopLossPct = BigDecimal("0.1")))
         redis.opsForValue().set(RedisKeys.price(code), "0") // 비정상 캐시 → REST 폴백
         broker.quotes[code] = BigDecimal.ZERO // REST 도 0 → 이번 틱 건너뜀(손절 오발동 금지)
@@ -164,7 +168,9 @@ class RunnersTest(
         val code = sym()
         seed(code, 10) { 1000.0 }
         val (uid, sid) = strategy(mapOf("type" to "rsi", "symbol" to code, "take_profit_pct" to 0.1))
-        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000")))
+        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        positions.save(Position(uid, sid, code, BigDecimal("10"), BigDecimal("2000"), brokerAccountKey = "different-account"))
+        positions.save(Position(uid, sid, code, BigDecimal("20"), BigDecimal("3000")))
         broker.quotes[code] = BigDecimal("1200")
         broker.halted = setOf(code)
         single(sid).tickOnce()
@@ -173,7 +179,29 @@ class RunnersTest(
         single(sid).tickOnce()
         val o = ordersOf(sid).single()
         assertTrue(o.idempotencyKey.endsWith(":tp"))
+        assertEquals(BigDecimal("5.0000"), o.qty)
         assertEquals("익절: 현재가 1,200가 평균단가 1,000 대비 +20.00%로 익절 기준 +10.0% 도달", o.reason)
+    }
+
+    /** 판단 뒤 정지 게이트 시세 조회 중에 다른 경로가 체결을 기록하면 그 주문은 보류되고, 다음 틱이 새 장부로 다시 판단한다. */
+    @Test
+    fun ledgerChangeAfterDecisionHoldsOrderAndNextTickUsesNewQty() {
+        val code = sym()
+        seed(code, 10) { 1000.0 }
+        val (uid, sid) = strategy(mapOf("type" to "rsi", "symbol" to code, "take_profit_pct" to 0.1))
+        val pos = positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        redis.opsForValue().set(RedisKeys.price(code), "1200") // 현재가는 캐시 — 시세 조회는 정지 게이트에서만
+        broker.onQuote = {
+            broker.onQuote = {}
+            ctx.jdbc.update("update positions set qty = 3 where id = :id", mapOf("id" to pos.id))
+        }
+        single(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertTrue(broker.placed.isEmpty())
+        single(sid).tickOnce()
+        val o = ordersOf(sid).single()
+        assertTrue(o.idempotencyKey.endsWith(":tp"))
+        assertEquals(BigDecimal("3.0000"), o.qty)
     }
 
     @Test
@@ -181,14 +209,31 @@ class RunnersTest(
         val code = sym()
         seed(code, 10) { 1000.0 }
         val (uid, sid) = strategy(mapOf("type" to "rsi", "symbol" to code, "take_profit_pct" to 0.1))
-        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000")))
+        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         broker.quotes[code] = BigDecimal("1200")
         val prodProps = QuantfolioProperties(kis = QuantfolioProperties.Kis(env = "prod", prodApproved = true))
-        val prod = ctx.copy(props = prodProps, liveGate = LiveGateService(reports, ctx.risk, ctx.jdbc, prodProps, ctx.clock))
+        val prod = ctx.copy(props = prodProps, liveGate = LiveGateService(reports, ctx.risk, ctx.jdbc, prodProps, ctx.clock, users))
         single(sid, prod).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
         val a = alerts.findAll().single { it.code == "live_gate_blocked" && it.strategyId == sid }
         assertTrue(a.message.startsWith("실전 게이트 차단 — $code sell 5주 주문 거부. 사유: 체결 정합 표본 부족(n=0 < 30)"), a.message)
+    }
+
+    @Test
+    fun tossLiveAccountIsBlockedEvenWhenKisIsPaper() {
+        val code = sym()
+        seed(code, 10) { 1000.0 }
+        val (uid, sid) = strategy(mapOf("type" to "rsi", "symbol" to code, "take_profit_pct" to 0.1))
+        val user = users.findById(uid).get()
+        user.broker = "toss"
+        users.saveAndFlush(user)
+        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        broker.quotes[code] = BigDecimal("1200")
+        single(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertTrue(broker.placed.isEmpty())
+        assertTrue(alerts.findAll().any { it.strategyId == sid && it.code == "live_gate_blocked" })
+        assertEquals(false, ctx.liveGate.evaluate(uid, sid).passed)
     }
 
     @Test
@@ -224,6 +269,24 @@ class RunnersTest(
         assertEquals(2, ordersOf(sid).size)
     }
 
+    /** 락 밖에서 읽은 보유로 정한 매수는 그 뒤 체결이 기록되면 보류된다 — 이미 산 수량을 또 사지 않는다. */
+    @Test
+    fun rebalanceBuyDecidedOnStaleHoldingsIsHeld() {
+        val codes = (1..3).map { sym() }
+        codes.forEachIndexed { k, c -> seed(c, 30) { i -> 1000.0 + (k + 1) * 10.0 * i } }
+        val (uid, sid) = strategy(rebalCfg(codes))
+        codes.forEach { broker.quotes[it] = BigDecimal("1000") }
+        broker.onQuote = { // 보유 조회 뒤 첫 시세 조회
+            broker.onQuote = {}
+            positions.save(Position(uid, sid, codes[2], BigDecimal("500"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        }
+        val r = rebal(sid)
+        r.tickOnce()
+        assertEquals(listOf(codes[1]), ordersOf(sid).map { it.symbol })
+        r.rebalanceOnce(ZonedDateTime.now(), riskOff = false) // 다음 발화는 새 장부로 판단 — 이미 목표 수량
+        assertEquals(listOf(codes[1]), ordersOf(sid).map { it.symbol })
+    }
+
     @Test
     fun regimeRiskOffLiquidatesAndPanicOverlayRefuses() {
         val codes = listOf(sym())
@@ -231,7 +294,7 @@ class RunnersTest(
         val idx = (0 until 60).map { IndexBar(LocalDate.now().minusDays(60L - it), close = if (it < 59) 3000.0 else 2000.0) }
         given(snapshots.indexOhlcv(anyDate(), anyDate(), anyString())).willReturn(idx)
         val (uid, sid) = strategy(rebalCfg(codes, mapOf("regime_filter" to mapOf("enabled" to true, "ma_period" to 20))))
-        positions.save(Position(uid, sid, codes[0], BigDecimal("7"), BigDecimal("900")))
+        positions.save(Position(uid, sid, codes[0], BigDecimal("7"), BigDecimal("900"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         rebal(sid).tickOnce()
         val sell = ordersOf(sid).single()
         assertTrue(sell.idempotencyKey.endsWith(":regime"))
@@ -249,17 +312,35 @@ class RunnersTest(
         val codes = listOf(sym())
         seed(codes[0], 30) { 1000.0 }
         val (uid, sid) = strategy(rebalCfg(codes, mapOf("capital" to 100_000, "risk_layer" to mapOf("mdd_kill_pct" to 0.1, "mdd_rearm_days" to 5))))
-        val o = orders.save(Order(uid, sid, codes[0], "buy", BigDecimal("100"), BigDecimal("1000"), status = "filled", idempotencyKey = UUID.randomUUID().toString()))
-        executions.save(Execution(o.id!!, sid, BigDecimal("100"), BigDecimal("1000"), BigDecimal.ZERO, Instant.now()))
-        positions.save(Position(uid, sid, codes[0], BigDecimal("100"), BigDecimal("1000")))
-        redis.opsForValue().set(RedisKeys.mddState(sid), """{"hwm": 100000.0, "killed": false, "kill_date": null, "rearm_pending": false}""")
+        val o = orders.save(Order(uid, sid, codes[0], "buy", BigDecimal("100"), BigDecimal("1000"), status = OrderStatus.filled,
+            idempotencyKey = UUID.randomUUID().toString(), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        executions.save(Execution(o.id!!, sid, BigDecimal("100"), BigDecimal("1000"), accountPositionQty = BigDecimal("100")))
+        positions.save(Position(uid, sid, codes[0], BigDecimal("100"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        redis.opsForValue().set(RedisKeys.mddState(sid, TEST_KIS_ACCOUNT_KEY), """{"hwm": 100000.0, "killed": false, "kill_date": null, "rearm_pending": false}""")
         broker.quotes[codes[0]] = BigDecimal("800") // 자산가치 80,000 → 낙폭 −20%
         rebal(sid).tickOnce()
         val a = alerts.findAll().single { it.code == "mdd_kill" && it.strategyId == sid }
         assertEquals("MDD 킬스위치 발동 — 고점 100,000 대비 낙폭 -20.00%가 임계 −10.0%를 넘어 전량 청산·현금 대피", a.message)
         val sell = ordersOf(sid).single { it.side == "sell" }
         assertTrue(sell.idempotencyKey.endsWith(":mdd"))
-        assertTrue(redis.opsForValue().get(RedisKeys.mddState(sid))!!.contains("\"killed\": true"))
+        assertTrue(redis.opsForValue().get(RedisKeys.mddState(sid, TEST_KIS_ACCOUNT_KEY))!!.contains("\"killed\": true"))
+    }
+
+    @Test
+    fun mddIgnoresExecutionThatOnlyContributedToLegacyPosition() {
+        val code = sym()
+        val (uid, sid) = strategy(rebalCfg(listOf(code), mapOf("capital" to 100_000, "risk_layer" to mapOf("mdd_kill_pct" to 0.1))))
+        val old = orders.save(Order(uid, sid, code, "buy", BigDecimal("100"), BigDecimal("1000"), status = OrderStatus.filled,
+            idempotencyKey = UUID.randomUUID().toString(), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        executions.save(Execution(old.id!!, sid, BigDecimal("100"), BigDecimal("1000")))
+        positions.save(Position(uid, sid, code, BigDecimal("100"), BigDecimal("1000")))
+        val mddKey = RedisKeys.mddState(sid, TEST_KIS_ACCOUNT_KEY)
+        redis.opsForValue().set(mddKey, """{"hwm":100000.0,"killed":false}""")
+
+        rebal(sid).tickOnce()
+
+        assertTrue(alerts.findAll().none { it.code == "mdd_kill" && it.strategyId == sid })
+        assertTrue(redis.opsForValue().get(mddKey)!!.contains("\"killed\": false"))
     }
 
     @Test
@@ -309,7 +390,7 @@ class RunnersTest(
                 } catch (e: Exception) {
                     // 원래 코드의 조회 실패 처리처럼 인터럽트를 삼키고 계속
                 }
-                place(code, "buy", 1, BigDecimal("1000"), "slow", "늦은 틱")
+                place(code, "buy", 1, BigDecimal("1000"), "slow", "늦은 틱", heldQty = BigDecimal.ZERO)
             }
         }
         val stop = java.util.concurrent.CountDownLatch(1)

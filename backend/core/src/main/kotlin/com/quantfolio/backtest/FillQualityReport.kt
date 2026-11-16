@@ -3,6 +3,7 @@ package com.quantfolio.backtest
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.market.ohlcv.PriceHistory
+import com.quantfolio.market.store.Bar
 import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
 import com.quantfolio.rebalance.Cfg
@@ -82,7 +83,7 @@ class FillQualityReport(
             val tot = o.fills.sumOf { it.qty }
             if (tot <= 0) return@mapNotNull null
             val pLive = o.fills.sumOf { it.price * it.qty } / tot
-            FillQuality.Order(o.id, o.symbol, o.side, o.fills.maxOf { kstDate(it.executedAt) }, pLive, o.price) to tot
+            FillQuality.Order(o.id, o.symbol, o.side, o.fills.maxOf { MarketClock.kstDate(it.executedAt) }, pLive, o.price) to tot
         }
         var turnover = annualTurnover
         if (turnover == null && capital != null) turnover = estimateTurnover(norm, capital, (dTo.toEpochDay() - dFrom.toEpochDay()).toInt())
@@ -113,23 +114,29 @@ class FillQualityReport(
         if (orders.isEmpty()) return Panel(emptyList(), emptyList(), emptyMap())
         val start = orders.minOf { it.fillDate }.minusDays(45)
         val end = orders.maxOf { it.fillDate }.plusDays(10)
-        val cols = linkedMapOf<String, Series>()
+        val bars = linkedMapOf<String, List<Bar>>()
         for (sym in orders.map { it.symbol }.toSortedSet()) {
-            val bars = try {
+            bars[sym] = try {
                 prices.load(sym, start, end)
             } catch (e: Exception) {
                 log.warn("정합 실측 종가 적재 실패 {}: {}", sym, e.message)
                 continue
             }
-            if (bars.isEmpty()) continue
-            val byDate = java.util.TreeMap<LocalDate, Double>()
-            for (b in bars) byDate[b.time.atZone(ZoneOffset.UTC).toLocalDate()] = b.close
-            cols[sym] = Series(byDate.keys.toList(), byDate.values.toDoubleArray())
         }
-        return if (cols.isEmpty()) Panel(emptyList(), emptyList(), emptyMap()) else Panel.fromSeries(cols)
+        return dailyClosePanel(bars)
     }
 
     companion object {
-        fun kstDate(t: Instant): LocalDate = t.atZone(MarketClock.KST).toLocalDate()
+        /** 종목별 일봉 → 종가 패널(같은 날 여러 봉이면 마지막 값). 봉이 없는 종목은 열에서 빠진다. */
+        fun dailyClosePanel(barsBySymbol: Map<String, List<Bar>>): Panel {
+            val cols = linkedMapOf<String, Series>()
+            for ((sym, bars) in barsBySymbol) {
+                if (bars.isEmpty()) continue
+                val byDate = java.util.TreeMap<LocalDate, Double>()
+                for (b in bars) byDate[b.time.atZone(ZoneOffset.UTC).toLocalDate()] = b.close
+                cols[sym] = Series(byDate.keys.toList(), byDate.values.toDoubleArray())
+            }
+            return if (cols.isEmpty()) Panel(emptyList(), emptyList(), emptyMap()) else Panel.fromSeries(cols)
+        }
     }
 }

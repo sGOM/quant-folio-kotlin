@@ -5,11 +5,13 @@ import com.quantfolio.broker.BrokerError
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
-import com.quantfolio.domain.strategy.Strategy
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.quant.pyJsonDumps
 import com.quantfolio.web.api.ApiException
+import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Min
@@ -42,18 +44,20 @@ class EngineController(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private fun owned(user: User, id: Int): Strategy =
-        strategies.findById(id).filter { it.userId == user.id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "전략을 찾을 수 없습니다.") }
-
     /** 메시지 문자열은 원본 `json.dumps` 그대로(엔진이 파싱). */
     private fun control(action: String, id: Int) =
         redis.convertAndSend(RedisKeys.ENGINE_CONTROL, pyJsonDumps(linkedMapOf("action" to action, "strategy_id" to id)))
 
     @PostMapping("/strategies/{id}/start")
     fun start(@CurrentUser user: User, @PathVariable id: Int): Map<String, String> {
-        val s = owned(user, id)
-        if (!credentials.has(user)) throw ApiException(HttpStatus.BAD_REQUEST, "증권사 자격증명을 먼저 등록하세요.")
-        s.status = "live"
+        val s = strategies.owned(user, id)
+        val broker = try {
+            credentials.forUser(user)
+        } catch (e: BrokerError) {
+            throw ApiException(HttpStatus.BAD_REQUEST, "증권사 자격증명을 먼저 등록하세요.")
+        }
+        if (broker.orderAccountKey == null) throw ApiException(HttpStatus.BAD_REQUEST, "주문 계좌를 확인할 수 없습니다.")
+        s.status = StrategyStatus.live
         strategies.save(s)
         control("start", id)
         log.info("전략 {} start 명령 발행", id)
@@ -62,8 +66,8 @@ class EngineController(
 
     @PostMapping("/strategies/{id}/stop")
     fun stop(@CurrentUser user: User, @PathVariable id: Int): Map<String, String> {
-        val s = owned(user, id)
-        s.status = "backtested"
+        val s = strategies.owned(user, id)
+        s.status = StrategyStatus.backtested
         strategies.save(s)
         control("stop", id)
         log.info("전략 {} stop 명령 발행", id)
@@ -88,11 +92,11 @@ class EngineController(
      */
     @GetMapping("/strategies/health")
     fun health(@CurrentUser user: User): Map<String, Any?> {
-        val live = strategies.findByUserId(user.id!!).filter { it.status == "live" }.sortedByDescending { it.id }
+        val live = strategies.findByUserId(user.id!!).filter { it.status == StrategyStatus.live }.sortedByDescending { it.id }
         val out = live.map { s ->
             val h = redisJson(RedisKeys.engineHealth(s.id!!))
             val failures = (h["consecutive_failures"] as? Number)?.toInt() ?: 0
-            val mdd = redisJson(RedisKeys.mddState(s.id!!))
+            val mdd = (h["broker_account_key"] as? String)?.let { redisJson(RedisKeys.mddState(s.id!!, it)) }.orEmpty()
             linkedMapOf(
                 "strategy_id" to s.id, "name" to s.name, "status" to s.status,
                 "last_success_ts" to h["last_success_ts"], "consecutive_failures" to failures,
@@ -111,7 +115,7 @@ data class OrderOut(val id: Int, val symbol: String, val side: String, val qty: 
 
 /**
  * 매매 조회(원본 `routes/trading.py`). 잔고의 신뢰 소스는 **증권사 실계좌** — 로컬 DB 는 이 시스템이 낸 주문만 알아서
- * 수동 매매·다른 계좌 보유를 놓친다. 자격증명 미등록·조회 실패일 때만 DB 그림자 잔고(전략 무관 합산)로 폴백.
+ * 수동 매매·다른 계좌 보유를 놓친다. 잔고 조회 실패 시 확인된 계좌의 로컬 포지션만 보여준다.
  */
 @RestController
 @RequestMapping("/api/trading")
@@ -123,19 +127,20 @@ class TradingController(private val jdbc: NamedParameterJdbcTemplate, private va
         val broker = try {
             brokers.forUser(user)
         } catch (e: BrokerError) {
-            return dbPositions(user)
+            return emptyList()
         }
         val balance = try {
             broker.getBalance()
         } catch (e: BrokerError) {
             log.warn("실계좌 잔고 조회 실패 — 로컬 포지션으로 폴백 user={}: {}", user.id, e.message)
-            return dbPositions(user)
+            return broker.orderAccountKey?.let { dbPositions(user, it) }.orEmpty()
         }
         return balance.positionsNormalized().map { PositionOut(it.symbol, it.qty.toDouble(), it.avgPrice?.toDouble()) }
     }
 
-    private fun dbPositions(user: User): List<PositionOut> =
-        jdbc.query("select symbol, qty, avg_price from positions where user_id = :u and qty > 0", MapSqlParameterSource("u", user.id)) { rs, _ ->
+    private fun dbPositions(user: User, accountKey: String): List<PositionOut> =
+        jdbc.query("select symbol, qty, avg_price from positions where user_id = :u and broker_account_key = :a and qty > 0",
+            mapOf("u" to user.id, "a" to accountKey)) { rs, _ ->
             PositionOut(rs.getString(1), rs.getBigDecimal(2).toDouble(), rs.getBigDecimal(3).toDouble())
         }
 
@@ -153,7 +158,7 @@ class TradingController(private val jdbc: NamedParameterJdbcTemplate, private va
         }
 }
 
-data class AlertOut(val id: Int, val userId: Int?, val strategyId: Int, val severity: String, val code: String?, val message: String, val isRead: Boolean, val createdAt: Instant)
+data class AlertOut(val id: Int, val userId: Int?, val strategyId: Int, val severity: AlertSeverity, val code: String?, val message: String, val isRead: Boolean, val createdAt: Instant)
 
 fun Alert.toOut() = AlertOut(id!!, userId, strategyId, severity, code, message, isRead, createdAt)
 

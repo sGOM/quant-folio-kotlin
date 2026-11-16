@@ -4,13 +4,13 @@ import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.backtest.FillQualityReport
 import com.quantfolio.backtest.SlippageCalibration
 import com.quantfolio.common.MarketClock
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.kis.KisStockMaster
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.ohlcv.UniverseBuilder
-import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.news.NewsIngestor
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyFloat
@@ -23,7 +23,6 @@ import java.math.RoundingMode
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
-import java.time.LocalDate
 import java.time.ZoneOffset
 
 /**
@@ -46,7 +45,7 @@ class WorkerJobs(
     private val log = LoggerFactory.getLogger(javaClass)
 
     /** 원본 `date.today()` — 컨테이너 UTC 날짜(보존, migration-notes #1 과 같은 성격). */
-    private fun utcToday() = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)
+    private fun utcToday() = MarketClock.todayUtcLegacy(clock)
 
     private fun pct(ratio: Double) = pyFixed(ratio * 100, 0) + "%"
 
@@ -68,7 +67,7 @@ class WorkerJobs(
         log.info("일봉 로컬 적재 완료: {}", result)
         if (codes.isNotEmpty() && failed.size.toDouble() / codes.size > FAILURE_ALERT_RATIO) {
             alerts.publish(
-                null, 0, "warning",
+                null, 0, AlertSeverity.warning,
                 "야간 일봉 적재 실패율 ${failed.size}/${codes.size}(${pct(failed.size.toDouble() / codes.size)})가 임계치를 초과했습니다: " +
                     failed.take(10).joinToString(", ") + (if (failed.size > 10) " 외" else ""),
                 "ohlcv_ingest_failure_rate", dedupWindowHours = 20.0,
@@ -108,7 +107,7 @@ class WorkerJobs(
         if (total > 0 && failedNames.size.toDouble() / total > FAILURE_ALERT_RATIO) {
             runCatching {
                 alerts.publish(
-                    null, 0, "warning",
+                    null, 0, AlertSeverity.warning,
                     "야간 스냅샷 선적재 실패율 ${failedNames.size}/$total(${pct(failedNames.size.toDouble() / total)})가 임계치를 초과했습니다: ${failedNames.joinToString(", ")}",
                     "snapshot_ingest_failure_rate", dedupWindowHours = 20.0,
                 )
@@ -121,7 +120,7 @@ class WorkerJobs(
     private fun <T> withOutageAlert(code: String, label: String, dedupHours: Double = 24.0, block: () -> T): T = try {
         block()
     } catch (e: Exception) {
-        alerts.publish(null, 0, "warning", "$label: ${e.message}", code, dedupWindowHours = dedupHours)
+        alerts.publish(null, 0, AlertSeverity.warning, "$label: ${e.message}", code, dedupWindowHours = dedupHours)
         throw e
     }
 
@@ -165,12 +164,12 @@ class WorkerJobs(
                 val msg = "전략 $strategyId 체결 정합 이탈 — M1(실행 슬리피지)=${grades["m1_exec"]} M3(총 정합)=${grades["m3_total"]} 실측 ${mean}bp " +
                     "vs 가정 ${assumption?.let { pyFloat(it) } ?: "None"}bp(최근 ${FILL_QUALITY_WINDOW_DAYS}일" +
                     (drag?.let { ", 연환산 드래그차 ${pyFixed(it, 2)}%p/yr" } ?: "") + ").$propTxt"
-                alerts.publish(userId, strategyId, "critical", msg, "fill_quality_drift")
+                alerts.publish(userId, strategyId, AlertSeverity.critical, msg, "fill_quality_drift")
                 alerted += strategyId
                 if (proposal != null) proposed += strategyId
             } else if (proposal != null) {
                 alerts.publish(
-                    userId, strategyId, "warning",
+                    userId, strategyId, AlertSeverity.warning,
                     "전략 $strategyId 슬리피지 캘리브레이션 제안 — 현재 ${pyFixed(proposal.currentBps, 1)}bp →$propTxt. 승인 시 config 에 반영됩니다.",
                     "slippage_calibration_proposed",
                 )
@@ -201,7 +200,7 @@ class WorkerJobs(
         result["purged"] = news.purge()
         if (NewsIngestor.FEEDS.isNotEmpty() && result["feeds_ok"] == 0) {
             alerts.publish(
-                null, 0, "warning",
+                null, 0, AlertSeverity.warning,
                 "경제 뉴스 수집이 전체 실패했습니다(모든 피드 응답 없음). 네트워크 또는 피드 URL(NewsIngestor.FEEDS)을 확인하세요.",
                 "news_ingest_failure", dedupWindowHours = 6.0,
             )

@@ -5,6 +5,7 @@ import com.quantfolio.alert.pyIsoformat
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
+import com.quantfolio.domain.alert.AlertSeverity
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -86,7 +87,7 @@ class DbBackup(
         } catch (e: Exception) {
             Files.deleteIfExists(tmp)
             log.error("DB 백업 실패: {}", e.message)
-            alerts.publish(null, 0, "critical", "야간 DB 백업 실패: ${e.message}", "db_backup_failed")
+            alerts.publish(null, 0, AlertSeverity.critical, "야간 DB 백업 실패: ${e.message}", "db_backup_failed")
             return linkedMapOf("ok" to false, "error" to e.message)
         }
         val removed = prune(dir)
@@ -98,7 +99,7 @@ class DbBackup(
                 log.info("DB 백업 오프사이트 업로드 완료: s3://{}/{}", props.s3Backup.bucket, s3Key)
             } catch (e: Exception) {
                 log.error("DB 백업 오프사이트 업로드 실패(로컬 백업은 정상): {}", e.message)
-                alerts.publish(null, 0, "warning", "DB 백업 오프사이트 업로드 실패(로컬 백업은 정상): ${e.message}", "db_backup_s3_upload_failed")
+                alerts.publish(null, 0, AlertSeverity.warning, "DB 백업 오프사이트 업로드 실패(로컬 백업은 정상): ${e.message}", "db_backup_s3_upload_failed")
             }
         }
         val result = linkedMapOf<String, Any?>("ok" to true, "path" to out.toString(), "size_bytes" to size, "removed" to removed, "s3_key" to s3Key)
@@ -135,7 +136,7 @@ class DbBackup(
         if (stale) {
             val reason = if (ageHours == null) "백업 성공 기록이 없습니다(worker/beat 미기동 가능성)" else "마지막 백업 성공 이후 ${com.quantfolio.quant.pyFixed(ageHours, 1)}시간 경과"
             log.error("DB 백업 신선도 점검 실패: {}", reason)
-            alerts.publish(null, 0, "critical", "DB 백업이 최신이 아닙니다: $reason", "db_backup_stale", dedupWindowHours = 20.0)
+            alerts.publish(null, 0, AlertSeverity.critical, "DB 백업이 최신이 아닙니다: $reason", "db_backup_stale", dedupWindowHours = 20.0)
         }
         return linkedMapOf("ok" to !stale, "last_success_at" to raw, "age_hours" to ageHours)
     }

@@ -5,6 +5,7 @@ import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.User
@@ -22,6 +23,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.http.MediaType
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
@@ -50,6 +52,7 @@ class StrategiesControllerTest(
     @Autowired private val positions: PositionRepository,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val cipher: CredentialCipher,
+    @Autowired private val jdbc: JdbcTemplate,
 ) {
     private val json = JsonMapper.builder().build()
 
@@ -269,7 +272,7 @@ class StrategiesControllerTest(
     @Test
     fun deleteGuardsLiveActiveAndOpenPositions() {
         val me = Me()
-        val live = me.strategy().also { it.status = "live"; strategies.save(it) }
+        val live = me.strategy().also { it.status = StrategyStatus.live; strategies.save(it) }
         mvc.delete("/api/strategies/${live.id}") { cookie(me.cookie) }.andExpect {
             status { isConflict() }
             jsonPath("$.detail") { value("가동 중인 전략은 삭제할 수 없습니다. 먼저 중지하세요.") }
@@ -292,6 +295,52 @@ class StrategiesControllerTest(
         mvc.delete("/api/strategies/${ok.id}") { cookie(me.cookie) }.andExpect { status { isNoContent() } }
         assertFalse(strategies.existsById(ok.id!!))
         assertFalse(backtests.existsById(bt.id!!)) // DB FK CASCADE
+    }
+
+    @Test
+    fun switchingOrderAccountsDisablesBalanceInferenceButRotatingKeysDoesNot() {
+        val me = Me()
+        fun credentials(account: String, broker: String = "kis", key: String = "APPKEY", who: Me = me) {
+            mvc.put("/api/kis/credentials") {
+                cookie(who.cookie)
+                contentType = MediaType.APPLICATION_JSON
+                content = json.writeValueAsString(
+                    mapOf("broker" to broker, "kis_app_key" to key, "kis_app_secret" to "SECRET", "kis_account_no" to account),
+                )
+            }.andExpect { status { isOk() } }
+        }
+        fun blocked(who: Me = me) = jdbc.queryForObject(
+            "select kis_balance_reconcile_blocked from users where id = ?",
+            Boolean::class.java, who.user.id,
+        ) == true
+
+        credentials("12345678-01")
+        assertFalse(blocked())
+        credentials("1234567801", key = "NEWKEY")
+        assertFalse(blocked())
+        credentials("12345678-02")
+        assertTrue(blocked())
+        credentials("12345678-01")
+        assertTrue(blocked())
+
+        val other = Me()
+        credentials("12345678-01", who = other)
+        credentials("12345678-01", broker = "toss", who = other)
+        credentials("12345678-01", who = other)
+        assertTrue(blocked(other))
+
+        val withWhitespace = Me()
+        credentials("\t12345678-01", who = withWhitespace)
+        assertFalse(blocked(withWhitespace))
+        credentials("\t12345678-02", who = withWhitespace)
+        assertTrue(blocked(withWhitespace))
+
+        val alreadyLive = Me()
+        val live = alreadyLive.strategy()
+        live.status = StrategyStatus.live
+        strategies.saveAndFlush(live)
+        credentials("12345678-01", who = alreadyLive)
+        assertTrue(blocked(alreadyLive))
     }
 
     @Test

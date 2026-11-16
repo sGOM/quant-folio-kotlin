@@ -8,6 +8,7 @@ import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.hibernate.annotations.UpdateTimestamp
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
 import java.time.Instant
 
 @Entity
@@ -33,4 +34,8 @@ class User(
 
 interface UserRepository : JpaRepository<User, Int> {
     fun findByEmail(email: String): User?
+
+    // FK 참조(새 전략·주문)까지 계좌 변경 판단과 직렬화한다.
+    @Query(value = "select * from users where id = :id for update", nativeQuery = true)
+    fun findForCredentialUpdate(id: Int): User?
 }

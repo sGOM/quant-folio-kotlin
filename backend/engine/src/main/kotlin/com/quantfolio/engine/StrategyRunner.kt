@@ -8,11 +8,9 @@ import com.quantfolio.market.store.Bar
 import com.quantfolio.quant.Series
 import com.quantfolio.quant.pyFixed
 import org.slf4j.LoggerFactory
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import java.math.BigDecimal
 import java.math.MathContext
 import java.time.Duration
-import java.time.LocalDate
 import java.time.ZoneOffset
 
 /**
@@ -44,15 +42,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         val needBars = Signals.minPeriods(cfg)
         val end = ctx.clock.instant()
         val start = end.minus(Duration.ofDays(needBars * 4L * 2))
-        bars = ctx.ticks.bars(symbol, start, end)
-        if (bars.size < needBars + 1) {
-            try {
-                ctx.ticks.upsert(symbol, ctx.loader.load(symbol, start.atZone(ZoneOffset.UTC).toLocalDate(), end.atZone(ZoneOffset.UTC).toLocalDate()))
-                bars = ctx.ticks.bars(symbol, start, end)
-            } catch (e: Exception) {
-                log.warn("{} 시드 적재 실패: {}", symbol, e.message)
-            }
-        }
+        bars = barsWithBackfill(symbol, start, end, needBars + 1, "시드")
     }
 
     private fun currentPrice(): BigDecimal? {
@@ -78,7 +68,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
 
     /** 시드 + 오늘 봉(현재가 반영). 오늘은 원본 `date.today()` — 컨테이너 UTC 날짜(보존). */
     private fun dataWithToday(px: Double): PriceData {
-        val today = LocalDate.ofInstant(ctx.clock.instant(), ZoneOffset.UTC)
+        val today = MarketClock.todayUtcLegacy(ctx.clock)
         val rows = bars.associateBy { it.time.atZone(ZoneOffset.UTC).toLocalDate() }.toSortedMap()
         val prev = rows[today]
         rows[today] = if (ohlc && prev != null) {
@@ -96,55 +86,52 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         val price = currentPrice() ?: return
         val data = dataWithToday(price.toDouble())
         val sig = Signals.latestSignal(data, cfg)
-        val barTs = LocalDate.ofInstant(ctx.clock.instant(), ZoneOffset.UTC).toString()
+        val barTs = MarketClock.todayUtcLegacy(ctx.clock).toString()
         val (acquired, _) = withPositionLock(symbol) { decide(price, data, sig, barTs) }
         if (!acquired) log.info("포지션 락 경합 — 이번 tick 건너뜀 ({})", symbol)
     }
 
     private fun decide(price: BigDecimal, data: PriceData, sig: String?, barTs: String) {
         val held = holdingQty(symbol)
-        if (held.signum() > 0 && ctx.risk.checkStopLoss(userId!!, strategyId, symbol, price)) {
+        if (held.signum() > 0 && ctx.risk.checkStopLoss(userId!!, strategyId, symbol, price, accountKey)) {
             clearTrail()
-            doSell(price, "$barTs:stop", stopLossReason(price))
+            doSell(price, "$barTs:stop", stopLossReason(price), held)
             return
         }
         if (held.signum() > 0) {
             configExit(price)?.let { (kind, reason) ->
                 clearTrail()
-                doSell(price, "$barTs:$kind", reason)
+                doSell(price, "$barTs:$kind", reason, held)
                 return
             }
         } else {
             clearTrail()
         }
         if (sig == "buy" && held.signum() <= 0) {
-            val daily = ctx.risk.checkDailyLoss(userId!!, strategyId, mapOf(symbol to price))
+            val daily = ctx.risk.checkDailyLoss(userId!!, strategyId, mapOf(symbol to price), accountKey)
             if (!daily.approved) {
                 log.info("매수 차단: {}", daily.reason)
                 return
             }
-            val decision = ctx.risk.evaluateBuy(userId!!, strategyId, symbol, price, BigDecimal(cfg["cash"]?.toString() ?: "10000000"))
+            val decision = ctx.risk.evaluateBuy(userId!!, strategyId, symbol, price, BigDecimal(cfg["cash"]?.toString() ?: "10000000"), accountKey)
             if (decision.approved) {
                 val reason = signalReason(data, "buy") +
                     " · 진입 ${grouped(decision.qty)}주 @ ${won(price.toDouble())}(약 ${won(decision.qty * price.toDouble())}원)"
-                place(symbol, "buy", decision.qty, price, barTs, reason)
+                place(symbol, "buy", decision.qty, price, barTs, reason, heldQty = held)
             } else {
                 log.info("매수 보류: {}", decision.reason)
             }
         } else if (sig == "sell" && held.signum() > 0) {
             clearTrail()
-            doSell(price, barTs, signalReason(data, "sell"))
+            doSell(price, barTs, signalReason(data, "sell"), held)
         }
     }
 
     private fun clearTrail() {
-        ctx.redis.delete(RedisKeys.trail(strategyId, symbol))
+        ctx.redis.delete(RedisKeys.trail(strategyId, symbol, accountKey))
     }
 
-    private fun avgPrice(): BigDecimal? = ctx.jdbc.query(
-        "select qty, avg_price from positions where user_id = :u and strategy_id = :s and symbol = :sym",
-        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sym", symbol),
-    ) { rs, _ -> rs.getBigDecimal(1) to rs.getBigDecimal(2) }.firstOrNull()?.takeIf { it.first.signum() > 0 && it.second.signum() > 0 }?.second
+    private fun avgPrice(): BigDecimal? = position(symbol)?.takeIf { it.qty.signum() > 0 && it.avgPrice.signum() > 0 }?.avgPrice
 
     private fun pct(v: Any?) = v?.let { BigDecimal(it.toString()) }
 
@@ -166,7 +153,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
             return "sl" to "손절: 현재가 ${won(price.toDouble())}가 평균단가 ${won(avg.toDouble())} 대비 −${pyFixed(drop * 100, 2)}%로 손절 기준 −${pyFixed(sl.toDouble() * 100, 1)}% 이하로 하락"
         }
         if (trail != null) {
-            val key = RedisKeys.trail(strategyId, symbol)
+            val key = RedisKeys.trail(strategyId, symbol, accountKey)
             var peak = ctx.redis.opsForValue().get(key)?.let { BigDecimal(it) } ?: avg
             if (price > peak) peak = price
             ctx.redis.opsForValue().set(key, peak.toPlainString(), Duration.ofDays(7))
@@ -192,9 +179,9 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         "${cfg["type"] ?: "전략"} ${if (side == "buy") "매수" else "매도"} 신호"
     }
 
-    private fun doSell(price: BigDecimal, barTs: String, reason: String?) {
-        val d = ctx.risk.evaluateSell(userId!!, symbol, strategyId)
+    private fun doSell(price: BigDecimal, barTs: String, reason: String?, held: BigDecimal) {
+        val d = ctx.risk.evaluateSell(userId!!, symbol, strategyId, accountKey)
         if (!d.approved) return
-        place(symbol, "sell", d.qty, price, barTs, reason)
+        place(symbol, "sell", d.qty, price, barTs, reason, heldQty = held)
     }
 }

@@ -55,12 +55,21 @@ class BaselineMigrationTest {
         DriverManager.getConnection(url, pg.username, pg.password).use { c ->
             c.createStatement().execute(v1)
             c.createStatement().execute("insert into users(email, password_hash) values ('a@b.c', 'x')")
+            c.createStatement().execute("""insert into orders(user_id, symbol, side, qty, order_type, status, idempotency_key, created_at)
+                select id, '005930', 'buy', 1, 'market', 'submitted', 'legacy-order', now() from users""")
+            c.createStatement().execute("""insert into positions(user_id, symbol, qty, avg_price)
+                select id, '005930', 10, 900 from users""")
         }
 
         flyway(url).migrate()
 
-        val history = query(url, "select version, type from flyway_schema_history") { it.getString(1) to it.getString(2) }
-        assertEquals(listOf("1" to "BASELINE"), history)
-        assertEquals(listOf(1), query(url, "select count(*) from users") { it.getInt(1) })
+        val history = query(url, "select version, type from flyway_schema_history order by installed_rank") { it.getString(1) to it.getString(2) }
+        assertEquals(listOf("1" to "BASELINE", "2" to "SQL", "3" to "SQL", "4" to "SQL", "5" to "SQL"), history)
+        assertEquals(listOf(false), query(url, "select kis_balance_reconcile_blocked from users") { it.getBoolean(1) })
+        assertEquals(listOf<String?>(null), query(url, "select broker_account_key from orders where idempotency_key = 'legacy-order'") { it.getString(1) })
+        assertEquals(listOf<String?>(null), query(url, "select closed_at from orders where idempotency_key = 'legacy-order'") { it.getString(1) }) // 기존 주문은 미종결
+        assertEquals(listOf(Triple(null, "10.0000", "900.0000")), query(url, "select broker_account_key, qty, avg_price from positions") {
+            Triple(it.getString(1), it.getBigDecimal(2).toPlainString(), it.getBigDecimal(3).toPlainString())
+        })
     }
 }

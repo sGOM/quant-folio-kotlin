@@ -8,7 +8,12 @@ import com.quantfolio.broker.BrokerCredentials
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
+import com.quantfolio.common.withLockOrElse
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.domain.trading.Position
+import com.quantfolio.domain.trading.PositionRepository
+import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.live.LiveGate
 import com.quantfolio.market.MarketCalendar
@@ -16,10 +21,13 @@ import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.UniverseScores
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyJsonDumps
+import java.time.Instant
+import java.time.ZoneOffset
 import org.slf4j.Logger
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -62,8 +70,14 @@ class LiveGateService(
     private val jdbc: NamedParameterJdbcTemplate,
     private val props: QuantfolioProperties,
     private val clock: Clock,
+    private val users: UserRepository,
 ) {
-    fun evaluate(userId: Int, strategyId: Int, orderNotional: BigDecimal? = null): LiveGate.Result {
+    /** 모의투자는 KIS 에만 있다 — 토스 사용자는 KIS 환경 설정과 무관하게 실전이다. */
+    fun isPaperTrading(user: User): Boolean = user.broker.ifEmpty { "kis" } == "kis" && props.kis.isPaperTrading
+
+    fun isPaperTrading(userId: Int): Boolean = isPaperTrading(users.findById(userId).orElseThrow())
+
+    fun evaluate(userId: Int, strategyId: Int, orderNotional: BigDecimal? = null, paper: Boolean = isPaperTrading(userId)): LiveGate.Result {
         val today = MarketClock.todayKst(clock)
         val report = reports.report(userId, today.minusDays(90), today, strategyId)
         val order = orderNotional?.let {
@@ -73,7 +87,7 @@ class LiveGateService(
             )!!
             LiveGate.OrderCheck(it, risk.limit(userId, strategyId)?.maxPositionSize, used, props.kis.dailyOrderNotionalCap?.toDouble())
         }
-        return LiveGate.decide(props.kis.isPaperTrading, props.kis.env, props.kis.prodApproved, report, order, strategyId)
+        return LiveGate.decide(paper, props.kis.env, props.kis.prodApproved, report, order, strategyId)
     }
 }
 
@@ -99,6 +113,7 @@ data class RunnerContext(
     val common: MetricsCommon,
     val scores: UniverseScores,
     val krx: KrxIndexService,
+    val positions: PositionRepository,
 )
 
 /**
@@ -115,6 +130,9 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     protected var cfg: Map<String, Any?> = emptyMap()
     protected var userId: Int? = null
     protected lateinit var broker: BrokerClient
+    protected lateinit var accountKey: String
+        private set
+    private var paperTrading = false
     var consecutiveFailures = 0
         private set
     private var lastSuccessTs: String? = null
@@ -134,6 +152,11 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         cfg = LinkedHashMap(s.config)
         userId = s.userId
         broker = ctx.brokers.forUser(user)
+        accountKey = broker.orderAccountKey ?: run {
+            log.warn("전략 {} 주문 계좌를 확인할 수 없음 — 실행 취소", strategyId)
+            return false
+        }
+        paperTrading = ctx.liveGate.isPaperTrading(user)
         onLoad()
         return true
     }
@@ -179,6 +202,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     private fun writeHealth(lastError: String?) {
         val state = linkedMapOf<String, Any?>(
             "strategy_id" to strategyId, "user_id" to userId, "last_success_ts" to lastSuccessTs,
+            "broker_account_key" to if (::accountKey.isInitialized) accountKey else null,
             "consecutive_failures" to consecutiveFailures, "last_error" to lastError, "updated_at" to pyIsoformat(MarketClock.nowKst(ctx.clock)),
         )
         runCatching { ctx.redis.opsForValue().set(RedisKeys.engineHealth(strategyId), pyJsonDumps(state), Duration.ofHours(24)) }
@@ -195,40 +219,55 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         consecutiveFailures++
         writeHealth(reason)
         if (consecutiveFailures == RedisKeys.FAILURE_ALERT_THRESHOLD) {
-            ctx.alerts.publish(userId, strategyId, "critical", "$label $strategyId 연속 ${consecutiveFailures}회 실패 — 마지막 원인: $reason", "runner_failures")
+            ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "$label $strategyId 연속 ${consecutiveFailures}회 실패 — 마지막 원인: $reason", "runner_failures")
         }
     }
 
     /** (사용자, 종목) 분산 락. 못 잡으면 block 을 실행하지 않고 false. */
     protected fun <T> withPositionLock(symbol: String, block: () -> T): Pair<Boolean, T?> {
         val key = RedisKeys.positionLock(userId!!, symbol)
-        if (ctx.redis.opsForValue().setIfAbsent(key, "1", Duration.ofSeconds(POSITION_LOCK_TTL)) != true) return false to null
-        try {
-            return true to block()
-        } finally {
-            ctx.redis.delete(key)
+        return ctx.redis.withLockOrElse(key, Duration.ofSeconds(POSITION_LOCK_TTL), busy = { false to null }) { true to block() }
+    }
+
+    /**
+     * price_ticks 의 [start, end] 일봉. [minBars] 보다 적으면 외부 소스에서 적재해 다시 읽는다.
+     * 적재 실패는 경고만 남기고 있는 만큼 돌려준다(`"$symbol $failLogLabel 적재 실패"`).
+     */
+    protected fun barsWithBackfill(symbol: String, start: Instant, end: Instant, minBars: Int, failLogLabel: String): List<Bar> {
+        val bars = ctx.ticks.bars(symbol, start, end)
+        if (bars.size >= minBars) return bars
+        return try {
+            ctx.ticks.upsert(symbol, ctx.loader.load(symbol, start.atZone(ZoneOffset.UTC).toLocalDate(), end.atZone(ZoneOffset.UTC).toLocalDate()))
+            ctx.ticks.bars(symbol, start, end)
+        } catch (e: Exception) {
+            log.warn("{} {} 적재 실패: {}", symbol, failLogLabel, e.message)
+            bars
         }
     }
 
-    protected fun holdingQty(symbol: String): BigDecimal = ctx.jdbc.queryForList(
-        "select qty from positions where user_id = :u and strategy_id = :s and symbol = :sym",
-        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("sym", symbol), BigDecimal::class.java,
-    ).firstOrNull() ?: BigDecimal.ZERO
+    /** 이 전략에 귀속된 (사용자, 종목) 포지션. 없으면 null. */
+    protected fun position(symbol: String): Position? =
+        ctx.positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(userId!!, accountKey, strategyId, symbol)
 
-    /** 주문: 실전 게이트(prod 만) → 정지/CB 게이트 → 실행기(멱등 키 = 전략·종목·방향·신호봉). */
-    protected fun place(symbol: String, side: String, qty: Int, price: BigDecimal, barTs: String, reason: String?) {
+    protected fun holdingQty(symbol: String): BigDecimal = position(symbol)?.qty ?: BigDecimal.ZERO
+
+    /**
+     * 주문: 실전 게이트(prod 만) → 정지/CB 게이트 → 실행기(멱등 키 = 전략·종목·방향·신호봉).
+     * [heldQty] 는 수량·방향을 정할 때 읽은 이 전략·종목의 보유수량 — 예약 시점 장부와 다르면 실행기가 보류한다.
+     */
+    protected fun place(symbol: String, side: String, qty: Int, price: BigDecimal, barTs: String, reason: String?, heldQty: BigDecimal) {
         if (tickAborted(symbol, side, qty)) return
-        if (!ctx.props.kis.isPaperTrading) {
-            val gate = ctx.liveGate.evaluate(userId!!, strategyId, BigDecimal(qty) * price)
+        if (!paperTrading) {
+            val gate = ctx.liveGate.evaluate(userId!!, strategyId, BigDecimal(qty) * price, paper = false)
             if (!gate.passed) {
                 log.error("실전 게이트 차단 — 주문 거부 {} {} {}주: {}", symbol, side, qty, gate.reasons.joinToString("; "))
-                ctx.alerts.publish(userId, strategyId, "critical", "실전 게이트 차단 — $symbol $side ${grouped(qty)}주 주문 거부. 사유: ${gate.reasons.joinToString("; ")}", "live_gate_blocked")
+                ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "실전 게이트 차단 — $symbol $side ${grouped(qty)}주 주문 거부. 사유: ${gate.reasons.joinToString("; ")}", "live_gate_blocked")
                 return
             }
         }
         if (!haltGatePassed(symbol, side, qty)) return
         if (tickAborted(symbol, side, qty)) return
-        ctx.executor.execute(broker, userId!!, strategyId, symbol, side, qty, price, OrderExecutor.idempotencyKey(strategyId, symbol, side, barTs), reason)
+        ctx.executor.execute(broker, userId!!, strategyId, symbol, side, qty, price, OrderExecutor.idempotencyKey(strategyId, symbol, side, barTs), heldQty, reason)
     }
 
     /**
@@ -254,7 +293,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         val name = state.name.lowercase()
         log.error("시장 {} — 주문 중단 {} {} {}주 (정지비율 {}%, 표본 {}종목)", name, symbol, side, qty, pyFixed(ratio * 100, 0), n)
         ctx.alerts.publish(
-            userId, strategyId, "critical",
+            userId, strategyId, AlertSeverity.critical,
             "시장 ${if (state == MarketState.HALTED) "서킷브레이커" else "재개 유예"} — $symbol $side ${grouped(qty)}주 주문 보류 (동시 정지 ${pyFixed(ratio * 100, 0)}%, 표본 ${n}종목)",
             "market_$name",
         )
@@ -277,6 +316,6 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     protected val tickAbandoned: Boolean get() = tickAbort.get()?.get() == true
 
     private companion object {
-        const val POSITION_LOCK_TTL = 30L
+        const val POSITION_LOCK_TTL = RedisKeys.POSITION_LOCK_TTL_SECONDS
     }
 }

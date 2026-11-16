@@ -2,6 +2,7 @@ package com.quantfolio.broker
 
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
+import com.quantfolio.common.RELEASE_LOCK_SCRIPT
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.quant.pyRepr
 import org.slf4j.LoggerFactory
@@ -11,7 +12,12 @@ import tools.jackson.module.kotlin.readValue
 import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.OffsetDateTime
+import java.time.format.ResolverStyle
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** 증권사 클라이언트들이 공유하는 실행 환경. sleeper 는 테스트에서 실제 대기를 없애려고 주입한다. */
@@ -23,14 +29,15 @@ class BrokerSupport(
     val json: JsonMapper,
     val sleeper: (Long) -> Unit = { Thread.sleep(it) },
 ) {
-    /** Redis 토큰 캐시 + 분산 락(single-flight) — 여러 전략이 동시에 기동해도 발급은 한 번(KIS 분당 1회 제한). */
+    /** Redis 토큰 캐시 + 분산 락(single-flight) — 여러 전략이 동시에 기동해도 발급은 한 번(KIS 분당 1회 제한). 락 해제는 값이 내 토큰일 때만 — TTL 만료 뒤 남이 잡은 락을 지우지 않는다. */
     fun cachedToken(cacheKey: String, label: String, issue: () -> Pair<String, Int>): String {
         redis.opsForValue().get(cacheKey)?.let { return it }
         val lockKey = RedisKeys.tokenLock(cacheKey)
-        val gotLock = redis.opsForValue().setIfAbsent(lockKey, "1", Duration.ofSeconds(TOKEN_LOCK_TTL)) == true
+        val lockToken = UUID.randomUUID().toString()
+        val gotLock = redis.opsForValue().setIfAbsent(lockKey, lockToken, Duration.ofSeconds(TOKEN_LOCK_TTL)) == true
         if (!gotLock) {
             repeat(TOKEN_LOCK_WAIT) {
-                sleeper(500)
+                sleeper(TOKEN_LOCK_WAIT_STEP_MS)
                 redis.opsForValue().get(cacheKey)?.let { return it }
             }
         }
@@ -42,18 +49,35 @@ class BrokerSupport(
             log.info("{} 토큰 신규 발급 (ttl={}s)", label, ttl)
             return token
         } finally {
-            if (gotLock) redis.delete(lockKey)
+            if (gotLock) redis.execute(RELEASE_LOCK_SCRIPT, listOf(lockKey), lockToken)
         }
     }
 
     fun parse(body: String): Map<String, Any?> = json.readValue(body)
 
-    private companion object {
-        val log = LoggerFactory.getLogger(BrokerSupport::class.java)
-        const val TOKEN_TTL_SAFETY = 60L
-        const val TOKEN_LOCK_TTL = 10L
+    companion object {
+        private val log = LoggerFactory.getLogger(BrokerSupport::class.java)
+        private const val TOKEN_TTL_SAFETY = 60L
+        private const val TOKEN_LOCK_TTL = 10L
+
+        /** 남이 발급 중일 때 캐시를 기다리는 횟수×간격(ms) — 락 TTL 산식(`RedisKeys`)의 재료. */
         const val TOKEN_LOCK_WAIT = 8
+        const val TOKEN_LOCK_WAIT_STEP_MS = 500L
     }
+}
+
+/**
+ * 주문 POST 를 만들기 전 단계(토큰·hashkey)의 실패를 거절([BrokerError])로 올린다 — [block] 이 끝나기 전엔 주문 엔드포인트로
+ * 아무것도 나가지 않았다. 그대로 두면 접수불명(pending·critical·그 종목 주문 보류)이 된다.
+ * 인터럽트(틱 중단·엔진 종료)는 변환하지 않고 그대로 전파한다.
+ */
+private inline fun <T> beforeOrderPost(block: () -> T): T = try {
+    block()
+} catch (e: BrokerError) {
+    throw e
+} catch (e: Exception) {
+    if (e is InterruptedException || Thread.currentThread().isInterrupted) throw e
+    throw OrderNotSent("주문 전송 전 실패: $e")
 }
 
 /**
@@ -87,9 +111,10 @@ class KisClient(
 ) : BrokerClient {
     private val kis = s.props.kis
     private val baseUrl = kis.baseUrl
+    override val orderAccountKey = BrokerAccountKey.kis(accountNo, kis.isPaperTrading)
 
     private fun throttle() = LIMITERS.computeIfAbsent("${kis.env}:$appKey") {
-        RateLimiter(if (kis.isPaperTrading) 500_000_000L else 120_000_000L)
+        RateLimiter((if (kis.isPaperTrading) PAPER_MIN_INTERVAL_MS else PROD_MIN_INTERVAL_MS) * 1_000_000L)
     }.acquire(s.sleeper)
 
     fun accessToken(): String = s.cachedToken(RedisKeys.kisToken(kis.env, appKey), "KIS(env=${kis.env})") {
@@ -106,22 +131,38 @@ class KisClient(
         "appkey" to appKey, "appsecret" to appSecret, "tr_id" to trId, "custtype" to "P",
     )
 
-    /** 공통 호출 — HTTP·rt_cd 오류를 KisError 로, 유량제한(EGW00201)이면 0.6s×차수 백오프로 3회까지. 주문·체결·잔고에도 같은 재시도. */
-    private fun request(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null): Map<String, Any?> {
+    /**
+     * 공통 호출 — HTTP·rt_cd 오류를 KisError 로, 유량제한(EGW00201)이면 0.6s×차수 백오프로 3회까지. 주문·체결·잔고에도 같은 재시도.
+     * [orderSubmit] 이면 접수 여부를 알 수 없는 응답(5xx·408·결과 코드 없음)을 거절이 아니라 [OrderOutcomeUnknown] 으로 올린다.
+     */
+    private fun request(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, requireComplete: Boolean = false, orderSubmit: Boolean = false): Map<String, Any?> =
+        requestPage(method, url, headers, label, query, body, requireComplete, orderSubmit).first
+
+    /** [request] 와 같되 성공 응답의 `tr_cont` 헤더(앞뒤 공백 제거, 없으면 null)도 돌려준다 — 연속조회 호출부용. */
+    private fun requestPage(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, requireComplete: Boolean = false, orderSubmit: Boolean = false): Pair<Map<String, Any?>, String?> {
         var last: KisError? = null
         for (attempt in 0 until RATE_RETRY) {
             throttle()
             val r = s.http.send(method, url, query, headers, json = body?.let { s.json.writeValueAsString(it) })
+            if (orderSubmit && (r.status >= 500 || r.status == 408)) {
+                throw OrderOutcomeUnknown("KIS 주문 응답 불명: HTTP ${r.status}")
+            }
             val err = if (r.status != 200) {
                 KisError("$label 실패: HTTP ${r.status} ${r.body.take(200)}")
             } else {
                 val data = s.parse(r.body)
-                if (data["rt_cd"] == "0") return data
+                if (data["rt_cd"] == "0") {
+                    if (requireComplete && r.header("tr_cont")?.trim() !in setOf("D", "E")) {
+                        throw KisError("완전한 체결 조회 결과를 확인할 수 없습니다.")
+                    }
+                    return data to r.header("tr_cont")?.trim()
+                }
+                if (orderSubmit && data["rt_cd"] != "1") throw OrderOutcomeUnknown("KIS 주문 응답에 유효한 결과 코드 없음")
                 KisError("$label 오류: [${data["msg_cd"] ?: ""}] ${data["msg1"] ?: data}")
             }
             if ("EGW00201" in (err.message ?: "") && attempt < RATE_RETRY - 1) {
                 last = err
-                s.sleeper(600L * (attempt + 1))
+                s.sleeper(RATE_BACKOFF_MS * (attempt + 1))
                 continue
             }
             throw err
@@ -148,7 +189,7 @@ class KisClient(
 
     override fun getQuote(symbol: String): Quote {
         val o = currentPrice(symbol)
-        val volume = runCatching { (o["acml_vol"]?.toString()?.takeIf { it.isNotEmpty() } ?: "0").toDouble().toLong() }.getOrDefault(0L)
+        val volume = runCatching { o["acml_vol"].orZero().toDouble().toLong() }.getOrDefault(0L)
         val status = o["iscd_stat_cls_code"]?.toString()?.trim() ?: ""
         return Quote(
             symbol, price(o, symbol), dec(o, "prdy_vrss"), dec(o, "prdy_ctrt"), volume, dec(o, "stck_hgpr"), dec(o, "stck_lwpr"), dec(o, "stck_oprc"),
@@ -164,8 +205,7 @@ class KisClient(
     /** '50012345-01' → (CANO, ACNT_PRDT_CD). */
     private fun accountParts(): Pair<String, String> {
         val acc = accountNo?.takeIf { it.isNotEmpty() } ?: throw KisError("계좌번호가 등록되지 않았습니다.")
-        val raw = acc.replace("-", "").trim()
-        if (raw.length < 10) throw KisError("계좌번호 형식 오류: $acc")
+        val raw = BrokerAccountKey.kisNumber(acc) ?: throw KisError("계좌번호 형식 오류: $acc")
         return raw.substring(0, 8) to raw.substring(8, 10)
     }
 
@@ -182,59 +222,215 @@ class KisClient(
         return s.parse(r.body)["HASH"]?.toString() ?: throw IllegalStateException("hashkey 응답에 HASH 없음")
     }
 
+    /** KIS 거래 ID — 모의투자는 V, 실전은 T 접두(예: TTC0802U → VTTC0802U / TTTC0802U). */
+    private fun trId(suffix: String) = (if (kis.isPaperTrading) "V" else "T") + suffix
+
     override fun placeOrder(symbol: String, side: String, qty: Int, price: Int, orderType: String): OrderResult {
         val ordDvsn = ORD_DVSN[orderType] ?: orderType
         val (cano, prdt) = accountParts()
         val buy = side == "buy"
-        val trId = if (kis.isPaperTrading) (if (buy) "VTTC0802U" else "VTTC0801U") else (if (buy) "TTTC0802U" else "TTTC0801U")
+        val trId = trId(if (buy) "TTC0802U" else "TTC0801U")
         val body = linkedMapOf<String, Any?>("CANO" to cano, "ACNT_PRDT_CD" to prdt, "PDNO" to symbol, "ORD_DVSN" to ordDvsn, "ORD_QTY" to qty.toString(), "ORD_UNPR" to price.toString())
-        val hash = hashkey(body)
-        val headers = authHeaders(trId).apply { put("hashkey", hash) }
-        val data = request("POST", "$baseUrl/uapi/domestic-stock/v1/trading/order-cash", headers, "주문", body = body)
+        val headers = beforeOrderPost {
+            val hash = hashkey(body)
+            authHeaders(trId).apply { put("hashkey", hash) }
+        }
+        val data = request("POST", "$baseUrl/uapi/domestic-stock/v1/trading/order-cash", headers, "주문", body = body, orderSubmit = true)
         @Suppress("UNCHECKED_CAST")
         val out = data["output"] as? Map<String, Any?> ?: emptyMap()
         return OrderResult(out["ODNO"]?.toString(), out["KRX_FWDG_ORD_ORGNO"]?.toString(), data)
     }
 
-    /** 당일 주문체결 조회 → 이 주문의 누적 체결수량·평균체결가. */
+    override fun getOrderExecution(orderId: String, symbol: String?): Fill =
+        getOrderExecution(orderId, symbol, MarketClock.todayKst(s.clock))
+
+    /** 주문일 하루만 조회한다. 날짜가 다른 주문의 번호가 같아도 서로 섞지 않는다. */
     @Suppress("UNCHECKED_CAST")
-    override fun getOrderExecution(orderId: String, symbol: String?): Fill {
-        val (cano, prdt) = accountParts()
-        val today = MarketClock.todayKst(s.clock).format(DateTimeFormatter.BASIC_ISO_DATE)
-        val data = request(
-            "GET", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-daily-ccld", authHeaders(if (kis.isPaperTrading) "VTTC8001R" else "TTTC8001R"), "체결 조회",
-            linkedMapOf(
-                "CANO" to cano, "ACNT_PRDT_CD" to prdt, "INQR_STRT_DT" to today, "INQR_END_DT" to today, "SLL_BUY_DVSN_CD" to "00",
-                "INQR_DVSN" to "00", "PDNO" to (symbol ?: ""), "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to "", "ODNO" to orderId,
-                "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "",
-            ),
-        )
-        val row = (data["output1"] as? List<Map<String, Any?>>).orEmpty().firstOrNull { it["odno"] == orderId }
-            ?: return Fill(0, null, false, data)
-        val filled = (row["tot_ccld_qty"]?.toString()?.takeIf { it.isNotEmpty() } ?: "0").toInt()
-        val ordQty = (row["ord_qty"]?.toString()?.takeIf { it.isNotEmpty() } ?: "0").toInt()
+    override fun getOrderExecution(orderId: String, symbol: String?, orderDate: LocalDate): Fill {
+        val day = orderDate.format(DateTimeFormatter.BASIC_ISO_DATE)
+        val data = dailyExecutions(orderId, symbol, day)
+        val row = (data["output1"] as? List<Map<String, Any?>>).orEmpty().firstOrNull {
+            val reportedDay = it["ord_dt"]?.toString()?.trim()
+            it["odno"] == orderId && (reportedDay.isNullOrEmpty() || reportedDay == day)
+        } ?: return Fill(0, null, false, data)
+        val filled = row["tot_ccld_qty"].orZero().toInt()
+        val ordQty = row["ord_qty"].orZero().toInt()
         val avgRaw = listOf(row["avg_prvs"], row["ccld_prvs"]).firstOrNull { it != null && it.toString().isNotEmpty() }?.toString() ?: "0"
         val avg = if (filled > 0) runCatching { BigDecimal(avgRaw) }.getOrNull() else null
         return Fill(filled, avg, ordQty > 0 && filled >= ordQty, row)
     }
 
-    @Suppress("UNCHECKED_CAST")
-    override fun getBalance(): Balance {
+    private fun dailyExecutions(
+        orderId: String, symbol: String?, day: String, organizationNo: String = "",
+        requireComplete: Boolean = false, transactionId: String = trId("TTC8001R"),
+    ): Map<String, Any?> {
         val (cano, prdt) = accountParts()
-        val data = request(
-            "GET", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-balance", authHeaders(if (kis.isPaperTrading) "VTTC8434R" else "TTTC8434R"), "잔고 조회",
+        return request(
+            "GET", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-daily-ccld", authHeaders(transactionId), "체결 조회",
             linkedMapOf(
-                "CANO" to cano, "ACNT_PRDT_CD" to prdt, "AFHR_FLPR_YN" to "N", "OFL_YN" to "", "INQR_DVSN" to "02", "UNPR_DVSN" to "01",
-                "FUND_STTL_ICLD_YN" to "N", "FNCG_AMT_AUTO_RDPT_YN" to "N", "PRCS_DVSN" to "00", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "",
-            ),
+                "CANO" to cano, "ACNT_PRDT_CD" to prdt, "INQR_STRT_DT" to day, "INQR_END_DT" to day, "SLL_BUY_DVSN_CD" to "00",
+                "INQR_DVSN" to "00", "PDNO" to (symbol ?: ""), "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to organizationNo, "ODNO" to orderId,
+                "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "",
+            ).apply { if (requireComplete) put("EXCG_ID_DVSN_CD", "ALL") }, requireComplete = requireComplete,
         )
-        return Balance((data["output1"] as? List<Map<String, Any?>>).orEmpty(), data["output2"] ?: emptyList<Any>())
     }
 
-    private companion object {
-        val LIMITERS = ConcurrentHashMap<String, RateLimiter>()
-        val ORD_DVSN = mapOf("limit" to "00", "market" to "01")
+    @Suppress("UNCHECKED_CAST")
+    override fun legacyFillEvidence(orderId: String, organizationNo: String?, symbol: String, orderDate: LocalDate): LegacyFillEvidence? {
+        if (organizationNo.isNullOrBlank()) return null
+        val day = orderDate.format(DateTimeFormatter.BASIC_ISO_DATE)
+        val recent = !orderDate.isBefore(MarketClock.todayKst(s.clock).withDayOfMonth(1).minusMonths(3))
+        val transactionId = when {
+            recent -> trId("TTC0081R")
+            kis.isPaperTrading -> "VTSC9215R"
+            else -> "CTSC9215R"
+        }
+        val data = dailyExecutions(orderId, symbol, day, organizationNo, requireComplete = true, transactionId = transactionId)
+        val rows = data["output1"] as? List<Map<String, Any?>> ?: return null
+        val row = rows.singleOrNull { it["odno"] == orderId } ?: return null
+        if (row["ord_dt"] != day || row["ord_gno_brno"] != organizationNo || row["pdno"] != symbol) return null
+        val side = when (row["sll_buy_dvsn_cd"]) { "01" -> "sell"; "02" -> "buy"; else -> return null }
+        val time = runCatching { LocalTime.parse(row["ord_tmd"].toString(), ORDER_TIME) }.getOrNull() ?: return null
+        val qty = row["ord_qty"].decimal() ?: return null
+        val filled = row["tot_ccld_qty"].decimal() ?: return null
+        val amount = row["tot_ccld_amt"].decimal() ?: return null
+        if (filled.signum() <= 0 || filled.compareTo(qty) != 0) return null
+        return LegacyFillEvidence(orderId, symbol, side, orderDate.atTime(time).atZone(MarketClock.KST).toInstant(), qty, filled, amount)
+    }
+
+    override fun getBalance(): Balance = balance(requireComplete = false)
+
+    override fun legacyBalanceEvidence(): Balance = balance(requireComplete = true)
+
+    /**
+     * 공식 예제(`koreainvestment/open-trading-api` `inquire_balance.py`)의 연속조회 규약: 응답 헤더 tr_cont 가 F/M 이면 응답 본문의
+     * ctx_area_fk100·nk100 을 CTX_AREA_FK100·NK100 으로, 요청 헤더 tr_cont 를 N 으로 실어 다음 페이지를 받고 D/E 에서 끝난다.
+     * 보유 종목(output1)은 합치고 계좌 요약(output2)은 예제처럼 이어 붙인다. 원본 Python 은 첫 페이지만 읽는다(`kis/client.py` get_balance).
+     * 일부 페이지만 있는 잔고는 "보유 없음"으로 오독되므로 상한·규약 위반은 부분 잔고가 아니라 [KisError]. tr_cont 헤더가 없거나 빈 값이면 한 페이지로 끝난 것.
+     * [requireComplete] 면 마지막 응답이 D/E 여야 한다(헤더 없음도 실패).
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun balance(requireComplete: Boolean): Balance {
+        val (cano, prdt) = accountParts()
+        val positions = mutableListOf<Map<String, Any?>>()
+        val summary = mutableListOf<Any?>()
+        fetchPages(
+            "잔고 조회", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-balance", trId("TTC8434R"),
+            linkedMapOf(
+                "CANO" to cano, "ACNT_PRDT_CD" to prdt, "AFHR_FLPR_YN" to "N", "OFL_YN" to "", "INQR_DVSN" to "02", "UNPR_DVSN" to "01",
+                "FUND_STTL_ICLD_YN" to "N", "FNCG_AMT_AUTO_RDPT_YN" to "N", "PRCS_DVSN" to "00",
+            ),
+            BALANCE_MAX_PAGES, requireEnd = requireComplete,
+        ) { data ->
+            positions.addAll((data["output1"] as? List<Map<String, Any?>>).orEmpty())
+            data["output2"]?.let { summary.addAll(it as? List<*> ?: listOf(it)) }
+        }
+        return Balance(positions, summary)
+    }
+
+    /**
+     * 연속조회 공통 루프(잔고·주문 목록): [baseQuery] 에 연속 키(CTX_AREA_FK100·NK100)를 얹어 페이지마다 [onPage] 로 넘긴다.
+     * 응답 tr_cont 가 F/M 이면 본문의 ctx_area_fk100·nk100 을 다음 요청에 싣고 요청 헤더 tr_cont=N, D/E 에서 끝. 헤더가 없거나 빈 값이면 거기서 끝난 것으로
+     * 보되, [requireEnd] 면 마지막 응답이 D/E 여야 한다(없음도 실패). 해석 못 하는 tr_cont·연속 키 없음·[maxPages] 초과는 부분 결과가 아니라 [KisError].
+     */
+    private fun fetchPages(
+        label: String, url: String, trId: String, baseQuery: Map<String, String>, maxPages: Int, requireEnd: Boolean, onPage: (Map<String, Any?>) -> Unit,
+    ) {
+        var fk = ""
+        var nk = ""
+        for (page in 1..maxPages) {
+            val headers = authHeaders(trId).apply { if (page > 1) put("tr_cont", "N") }
+            val (data, trCont) = requestPage("GET", url, headers, label, baseQuery + mapOf("CTX_AREA_FK100" to fk, "CTX_AREA_NK100" to nk))
+            onPage(data)
+            val more = when (trCont) {
+                "M", "F" -> true
+                null, "", "D", "E" -> false
+                else -> throw KisError("$label 응답의 tr_cont 를 해석할 수 없습니다: ${pyRepr(trCont)}")
+            }
+            if (!more) {
+                if (requireEnd && trCont !in setOf("D", "E")) throw KisError("완전한 체결 조회 결과를 확인할 수 없습니다.")
+                return
+            }
+            fk = data["ctx_area_fk100"]?.toString().orEmpty()
+            nk = data["ctx_area_nk100"]?.toString().orEmpty()
+            if (fk.isBlank() && nk.isBlank()) throw KisError("$label 응답이 다음 페이지가 있다고 하는데 연속 키(ctx_area_fk100·nk100)가 없습니다.")
+        }
+        throw KisError("${label}가 ${maxPages}페이지를 넘어 끝나지 않습니다.")
+    }
+
+    /**
+     * 주문일의 주문 목록 — 원본 Python 에는 없는 조회. 일별주문체결조회(공식 예제 `inquire_daily_ccld`)를 주문번호·종목 조건 없이 그 하루로 받는다.
+     * "없음"이 근거로 쓰일 수 있어 잔고보다 엄격하다: 마지막 응답이 D/E 가 아니면(헤더 없음 포함) 완결 미확인 → [KisError].
+     * 행 규칙: 주문일(ord_dt)이 있고 [day] 와 다르면 제외, 주문번호(odno)가 빈 행은 제외(어떤 주문에도 붙일 수 없다),
+     * 원주문번호(orgn_odno)가 있는(공백·전부 0 이 아닌) 행은 정정·취소 주문 — 빼지 않고 [BrokerOrderRow.originalOrderNo] 에 trim 한 원문을 담는다.
+     * 종목·매도매수구분·수량을 읽지 못하면(정정·취소 행 포함) 목록을 믿을 수 없으므로 [KisError].
+     * 확인 못 한 것(실응답 미확인): orgn_odno 가 odno 와 같은 자릿수·0 채움으로 오는지 — 그래서 0 을 떼거나 붙이지 않는다(orderNo 도 odno 원문).
+     * 취소 행의 ord_qty·tot_ccld_qty 가 어떤 값인지(취소 수량인지 0 인지)도 공식 예제(`inquire_daily_ccld`)에 설명이 없다.
+     */
+    override fun dailyOrders(day: LocalDate): List<BrokerOrderRow>? {
+        val (cano, prdt) = accountParts()
+        val ymd = day.format(DateTimeFormatter.BASIC_ISO_DATE)
+        val rows = mutableListOf<BrokerOrderRow>()
+        fetchPages(
+            "주문 목록 조회", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-daily-ccld", trId("TTC0081R"),
+            linkedMapOf(
+                "CANO" to cano, "ACNT_PRDT_CD" to prdt, "INQR_STRT_DT" to ymd, "INQR_END_DT" to ymd, "SLL_BUY_DVSN_CD" to "00",
+                "INQR_DVSN" to "00", "PDNO" to "", "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to "", "ODNO" to "",
+                "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "EXCG_ID_DVSN_CD" to "ALL",
+            ),
+            DAILY_ORDERS_MAX_PAGES, requireEnd = true,
+        ) { data ->
+            val output = data["output1"] as? List<*> ?: throw KisError("주문 목록 조회 응답에 output1 목록이 없습니다.")
+            output.forEach { orderRow(it, ymd)?.let(rows::add) }
+        }
+        return rows
+    }
+
+    /** [dailyOrders] 의 행 하나 — 목록에서 뺄 행이면 null, 읽을 수 없으면 [KisError]. */
+    @Suppress("UNCHECKED_CAST")
+    private fun orderRow(raw: Any?, ymd: String): BrokerOrderRow? {
+        val row = raw as? Map<String, Any?> ?: throw KisError("주문 목록 조회 행이 객체가 아닙니다: ${pyRepr(raw.toString())}")
+        val reportedDay = row["ord_dt"]?.toString()?.trim()
+        if (!reportedDay.isNullOrEmpty() && reportedDay != ymd) return null
+        val orderNo = row["odno"]?.toString()
+        if (orderNo.isNullOrBlank()) return null
+        val originalNo = row["orgn_odno"]?.toString()?.trim()?.takeIf { no -> no.any { it != '0' } }
+        val symbol = row["pdno"]?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: throw KisError("주문 목록 행에 종목(pdno)이 없습니다: odno=$orderNo")
+        val side = when (row["sll_buy_dvsn_cd"]?.toString()?.trim()) {
+            "01" -> "sell"
+            "02" -> "buy"
+            else -> throw KisError("주문 목록 행의 매도매수구분을 해석할 수 없습니다: odno=$orderNo ${pyRepr(row["sll_buy_dvsn_cd"].toString())}")
+        }
+        val avg = listOf(row["avg_prvs"], row["ccld_prvs"]).firstOrNull { it != null && it.toString().isNotEmpty() }
+            ?.toString()?.trim()?.toBigDecimalOrNull()?.takeIf { it.signum() > 0 }
+        val time = row["ord_tmd"]?.toString()?.trim()?.let { runCatching { LocalTime.parse(it, ORDER_TIME) }.getOrNull() }
+        return BrokerOrderRow(orderNo, symbol, side, orderQuantity(row, "ord_qty", orderNo), orderQuantity(row, "tot_ccld_qty", orderNo), avg, time, originalNo)
+    }
+
+    /** 수량은 비어 있어도(원본 `or 0` 처럼 0 으로 두지 않고) 읽지 못한 것 — 0 이상의 정수가 아니면 [KisError]. */
+    private fun orderQuantity(row: Map<String, Any?>, key: String, orderNo: String): Int =
+        runCatching { row[key].toString().trim().toBigDecimal().intValueExact() }.getOrNull()?.takeIf { it >= 0 }
+            ?: throw KisError("주문 목록 행의 $key 를 읽을 수 없습니다: odno=$orderNo ${pyRepr(row[key].toString())}")
+
+    companion object {
+        private val LIMITERS = ConcurrentHashMap<String, RateLimiter>()
+        private val ORD_DVSN = mapOf("limit" to "00", "market" to "01")
+
+        /** 유량제한(EGW00201) 재시도 시도 횟수·백오프 기본 간격(ms)·계좌 단위 호출 최소 간격(ms) — 락 TTL 산식(`RedisKeys`)의 재료. */
         const val RATE_RETRY = 3
+        const val RATE_BACKOFF_MS = 600L
+        const val PAPER_MIN_INTERVAL_MS = 500L
+        const val PROD_MIN_INTERVAL_MS = 120L
+
+        /** 잔고 연속조회 최대 페이지 수. 공식 예제 `inquire_balance.py` 의 `max_depth=10` 과 같은 값(모의 20건·실전 50건/페이지 — 그 예제 docstring). */
+        const val BALANCE_MAX_PAGES = 10
+
+        /**
+         * 주문 목록 연속조회 최대 페이지 수 — 같은 예제 `inquire_daily_ccld.py` 의 `max_depth=10`. 한 페이지는 실전 100건·모의 15건(그 예제 docstring)이라
+         * 모의는 하루 150건을 넘으면 [KisError]. 유량제한 재시도(`RATE_RETRY`)까지 치면 한 조회의 HTTP 호출은 페이지 × 최대 3회.
+         */
+        const val DAILY_ORDERS_MAX_PAGES = 10
+        private val ORDER_TIME = DateTimeFormatter.ofPattern("HHmmss").withResolverStyle(ResolverStyle.STRICT)
     }
 }
 
@@ -249,6 +445,7 @@ class TossClient(
     private val s: BrokerSupport,
 ) : BrokerClient {
     private val baseUrl = s.props.toss.baseUrl.trimEnd('/')
+    override val orderAccountKey = BrokerAccountKey.toss(clientId, account)
 
     fun accessToken(): String = s.cachedToken(RedisKeys.tossToken(clientId), "토스") {
         val r = s.http.send("POST", "$baseUrl/oauth2/token", form = linkedMapOf("grant_type" to "client_credentials", "client_id" to clientId, "client_secret" to clientSecret))
@@ -265,15 +462,18 @@ class TossClient(
         return h
     }
 
-    /** 429 면 Retry-After(0.5~5초)만큼 기다려 1회 재시도. */
-    private fun request(method: String, path: String, withAccount: Boolean = false, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null): Any {
-        for (attempt in 0..1) {
+    /** 429 면 Retry-After(0.5~5초)만큼 기다려 1회 재시도. [orderSubmit] 이면 접수 여부를 알 수 없는 응답(5xx·408)을 거절이 아니라 [OrderOutcomeUnknown] 으로 올린다. */
+    private fun request(method: String, path: String, withAccount: Boolean = false, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, orderSubmit: Boolean = false): Any {
+        for (attempt in 0 until REQUEST_ATTEMPTS) {
             val r = s.http.send(method, "$baseUrl$path", query, headers(withAccount), json = body?.let { s.json.writeValueAsString(it) })
-            if (r.status == 429 && attempt == 0) {
+            if (r.status == 429 && attempt < REQUEST_ATTEMPTS - 1) {
                 val wait = ((r.header("Retry-After")?.takeIf { it.isNotBlank() } ?: r.header("X-RateLimit-Reset"))?.toDoubleOrNull() ?: 1.0).coerceIn(0.5, MAX_RETRY_AFTER)
                 LoggerFactory.getLogger(javaClass).warn("토스 rate limit(429) — {}s 후 재시도 {}", wait, path)
                 s.sleeper((wait * 1000).toLong())
                 continue
+            }
+            if (orderSubmit && (r.status >= 500 || r.status == 408)) {
+                throw OrderOutcomeUnknown("토스 주문 응답 불명: HTTP ${r.status}")
             }
             if (r.status != 200 && r.status != 201) throw TossError("$method $path 실패: HTTP ${r.status} ${r.body.take(200)}")
             return if (r.body.isEmpty()) emptyMap<String, Any?>() else s.json.readValue<Any>(r.body)
@@ -306,33 +506,80 @@ class TossClient(
         val tossType = mapOf("market" to "MARKET", "limit" to "LIMIT")[orderType] ?: throw TossError("알 수 없는 주문 유형: $orderType")
         val body = linkedMapOf<String, Any?>("symbol" to symbol, "side" to tossSide, "orderType" to tossType, "quantity" to qty)
         if (tossType == "LIMIT") body["price"] = price
-        val data = request("POST", "/api/v1/orders", withAccount = true, body = body) as Map<String, Any?>
+        // 계좌 검사·토큰 확보를 주문 POST 앞에서 먼저 — request() 는 재시도(429)마다 헤더를 다시 만들어 그 안의 실패는 전송 전/후를 구분할 수 없다
+        beforeOrderPost { headers(withAccount = true) }
+        val data = request("POST", "/api/v1/orders", withAccount = true, body = body, orderSubmit = true).unwrapResult()
         // 원본 `a or b` + `if not order_id` — 빈 문자열도 없음으로 본다(빈 주문번호로는 정합이 체결을 못 찾는다)
-        val id = listOf(data["orderId"], data["order_id"]).firstOrNull { it != null && it.toString().isNotEmpty() }
-            ?: throw TossError("주문 응답에 orderId 없음: $data")
+        val id = listOf(data["orderId"], data["order_id"]).firstOrNull { it != null && it.toString().isNotBlank() }
+            ?: throw OrderOutcomeUnknown("토스 주문 응답에 orderId 없음")
         return OrderResult(id.toString(), raw = data)
     }
 
     @Suppress("UNCHECKED_CAST")
     override fun getOrderExecution(orderId: String, symbol: String?): Fill {
-        val data = request("GET", "/api/v1/orders/$orderId", withAccount = true) as Map<String, Any?>
+        val data = request("GET", "/api/v1/orders/$orderId", withAccount = true).unwrapResult()
         val ex = data["execution"] as? Map<String, Any?> ?: emptyMap()
-        val filled = runCatching { (ex["filledQuantity"]?.toString()?.takeIf { it.isNotEmpty() } ?: "0").toDouble().toInt() }.getOrDefault(0)
+        val filled = runCatching { ex["filledQuantity"].orZero().toDouble().toInt() }.getOrDefault(0)
         val avgRaw = ex["averageFilledPrice"]?.toString()?.takeIf { it.isNotEmpty() }
         val avg = if (filled > 0 && avgRaw != null) runCatching { BigDecimal(avgRaw) }.getOrNull() else null
-        return Fill(filled, avg, data["status"]?.toString()?.uppercase() == "FILLED", data)
+        val status = data["status"]?.toString()?.uppercase()
+        // filled 는 원본대로 못 읽어도 0 — 종료 판단에는 실제로 읽은 0 이상의 정수만(못 읽은 것을 "체결 0 으로 종료"로 오독하지 않게)
+        val readQty = ex["filledQuantity"]?.toString()?.trim()?.toBigDecimalOrNull()
+            ?.let { runCatching { it.intValueExact() }.getOrNull() }?.takeIf { it >= 0 && it == filled }
+        return Fill(filled, avg, status == "FILLED", data, terminal = status in TERMINAL_STATUSES && readQty != null)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    override fun legacyFillEvidence(orderId: String, organizationNo: String?, symbol: String, orderDate: LocalDate): LegacyFillEvidence? {
+        if (!ORDER_ID.matches(orderId) || organizationNo != null) return null
+        val data = (request("GET", "/api/v1/orders/$orderId", withAccount = true) as? Map<String, Any?>)?.unwrapResult() ?: return null
+        if (data["orderId"] != orderId || data["symbol"] != symbol || !"FILLED".equals(data["status"]?.toString(), ignoreCase = true)) return null
+        val side = data["side"]?.toString()?.lowercase()?.takeIf { it == "buy" || it == "sell" } ?: return null
+        val time = runCatching { OffsetDateTime.parse(data["orderedAt"].toString()).toInstant() }.getOrNull() ?: return null
+        if (MarketClock.kstDate(time) != orderDate) return null
+        val qty = data["quantity"].decimal() ?: return null
+        val ex = data["execution"] as? Map<String, Any?> ?: return null
+        val filled = ex["filledQuantity"].decimal() ?: return null
+        val amount = ex["filledAmount"].decimal() ?: return null
+        if (filled.signum() <= 0 || filled.compareTo(qty) != 0) return null
+        return LegacyFillEvidence(orderId, symbol, side, time, qty, filled, amount)
     }
 
     @Suppress("UNCHECKED_CAST")
     override fun getBalance(): Balance {
-        val data = request("GET", "/api/v1/holdings", withAccount = true) as Map<String, Any?>
+        val data = request("GET", "/api/v1/holdings", withAccount = true).unwrapResult()
         return Balance((data["items"] as? List<Map<String, Any?>>).orEmpty(), data.filterKeys { it != "items" })
     }
 
-    private companion object {
+    /**
+     * 공식 스펙상 토큰 발급 외 성공 응답은 `{"result": ...}` 봉투(`ApiResponse`)다. 실응답을 확인하지 못했으므로 두 모양을 모두 받는다 —
+     * 최상위 `result` 가 객체면 그 안을, 아니면 최상위를 본문으로 본다(원본 `toss.py` 는 주문·체결·잔고를 최상위에서 읽는다). 객체 응답용(시세 목록은 [getQuote]).
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun Any.unwrapResult(): Map<String, Any?> {
+        val top = this as Map<String, Any?>
+        return top["result"] as? Map<String, Any?> ?: top
+    }
+
+    companion object {
+        private val ORDER_ID = Regex("[A-Za-z0-9_-]{1,128}")
+
+        /**
+         * 이 주문이 더 체결되지 않는 상태 — 공식 스펙(openapi.json `OrderStatus`) 설명: FILLED 전량 체결, CANCELED 취소 완료·REJECTED 거부
+         * (둘 다 "execution.filledQuantity 로 부분 체결 여부 확인"). 제외: PENDING·PENDING_CANCEL·PENDING_REPLACE·PARTIAL_FILLED(진행 중),
+         * REPLACED(정정됨 — 정정은 새 orderId 를 발급해 이후 체결은 그 주문에 잡힌다), CANCEL_REJECTED·REPLACE_REJECTED(거부된 요청의 별도
+         * 레코드, 원주문은 이전 상태로 복귀). 스펙의 CLOSED 그룹 설명은 PARTIAL_FILLED 도 넣지만 같은 스펙의 다른 설명과 어긋나 종료로 보지 않는다.
+         * 스펙에 없는 값(스펙: "unknown code 허용")은 종료 근거가 아니다.
+         */
+        private val TERMINAL_STATUSES = setOf("FILLED", "CANCELED", "REJECTED")
+
+        /** 429 재시도: 최대 시도 횟수와 Retry-After 대기 상한(초) — 락 TTL 산식(`RedisKeys`)의 재료. */
+        const val REQUEST_ATTEMPTS = 2
         const val MAX_RETRY_AFTER = 5.0
     }
 }
+
+private fun Any?.decimal(): BigDecimal? = this?.toString()?.toBigDecimalOrNull()
 
 /** 원본 `int(body.get("expires_in", 86400))` — 숫자 문자열도 받는다. */
 internal fun expiresIn(data: Map<String, Any?>): Int =

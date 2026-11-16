@@ -47,6 +47,13 @@ class RealtimeTest {
     }
 
     @Test
+    fun priceFramesAcceptPaddedNumbers() {
+        assertEquals("005930" to BigDecimal("70100"), KisFrames.parsePrice("0|H0STCNT0|001|005930^093000^ 70100 ^5^100"))
+        assertNull(KisFrames.parsePrice("0|H0STCNT0|001|005930^093000^ 0 "))
+        assertNull(KisFrames.parsePrice("0|H0STCNT0|001|005930^093000^   "))
+    }
+
+    @Test
     fun fillNoticeDecryptAndParseMatchPython() {
         val o = Oracle.load("kis_ws")
         val key = o.get("key").asString()
@@ -54,12 +61,13 @@ class RealtimeTest {
         for (c in o.get("cases")) {
             val plain = KisFrames.aesDecrypt(key, iv, c.get("cipher").asString())
             assertEquals(c.get("decrypted").asString(), plain)
-            val n = KisFrames.parseFillNotice(plain)
+            // 원본 정답지 프레임은 CNTG_YN(13)이 "x" — Kotlin 은 체결 통보(13="2")만 체결로 쓰므로 체결 통보로 바꿔 나머지 파싱을 대조한다.
+            val n = KisFrames.parseFillNotice(plain.split("^").toMutableList().apply { if (size > 13) set(13, "2") }.joinToString("^"))
             val e = c.get("notice")
             if (e.isNull) {
                 assertNull(n, plain)
             } else {
-                assertEquals(FillNotice(e.get("odno").asString(), e.get("symbol").asString(), e.get("qty").asInt(), BigDecimal(e.get("price").asString()), e.get("side").asString()), n)
+                assertEquals(FillNotice(e.get("odno").asString(), e.get("symbol").asString(), e.get("qty").asInt(), BigDecimal(e.get("price").asString()), e.get("side").asString(), plain.split("^")[1].trim().ifEmpty { null }), n)
             }
         }
     }
@@ -68,7 +76,20 @@ class RealtimeTest {
     @Test
     fun fillNoticeAcceptsPaddedNumbers() {
         val f = MutableList(23) { "" }
-        f[2] = "0000123"; f[4] = "02"; f[8] = "005930"; f[9] = " 10"; f[10] = " 70000 "
+        f[2] = "0000123"; f[4] = "02"; f[8] = "005930"; f[9] = " 10"; f[10] = " 70000 "; f[13] = "2"
         assertEquals(FillNotice("0000123", "005930", 10, BigDecimal("70000"), "buy"), KisFrames.parseFillNotice(f.joinToString("^")))
+    }
+
+    /** CNTG_YN(13)=2 만 체결 통보. 1 은 주문·정정·취소·거부 접수 통보로 CNTG_QTY 가 주문수량이다. RFUS_YN(12)=1 은 거부. */
+    @Test
+    fun onlyExecutionNoticesAreFills() {
+        fun frame(rfus: String, cntg: String) = MutableList(26) { "" }.apply {
+            this[2] = "0000123"; this[4] = "02"; this[8] = "005930"; this[9] = "10"; this[10] = "0"; this[12] = rfus; this[13] = cntg; this[16] = "10"
+        }.joinToString("^")
+        assertNull(KisFrames.parseFillNotice(frame("0", "1"))) // 접수 통보
+        assertNull(KisFrames.parseFillNotice(frame("1", "1"))) // 거부 접수 통보
+        assertNull(KisFrames.parseFillNotice(frame("1", "2"))) // 거부 표시가 있으면 체결로 쓰지 않는다
+        assertNull(KisFrames.parseFillNotice(frame("0", ""))) // 판별 불가는 체결이 아니다
+        assertEquals(FillNotice("0000123", "005930", 10, BigDecimal("0"), "buy"), KisFrames.parseFillNotice(frame("0", " 2 ")))
     }
 }

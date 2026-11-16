@@ -4,6 +4,7 @@ import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.TestApp
 import com.quantfolio.domain.alert.AlertRepository
+import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.test.ContainersConfig
@@ -67,7 +68,7 @@ class AlertPublisherTest(
         val (c, q) = listen(RedisKeys.engineEvents(uid))
         try {
             val code = "t-" + UUID.randomUUID()
-            publisher(telegram = true).publish(uid, 7, "critical", "러너 연속 실패", code)
+            publisher(telegram = true).publish(uid, 7, AlertSeverity.critical, "러너 연속 실패", code)
             assertEquals(
                 """{"type": "alert", "user_id": $uid, "strategy_id": 7, "severity": "critical", "message": "${esc("러너 연속 실패")}", "ts": "2026-10-19T10:02:03.456789+09:00", "code": "$code"}""",
                 q.poll(5, TimeUnit.SECONDS),
@@ -86,12 +87,12 @@ class AlertPublisherTest(
     fun dedupWindowSkipsDbAndTelegramButGlobalAlertsNeverHitUserChannel() {
         val code = "d-" + UUID.randomUUID()
         val p = publisher(telegram = true)
-        p.publish(null, 0, "critical", "백업 오래됨", code, dedupWindowHours = 20.0)
-        p.publish(null, 0, "critical", "백업 오래됨", code, dedupWindowHours = 20.0)
+        p.publish(null, 0, AlertSeverity.critical, "백업 오래됨", code, dedupWindowHours = 20.0)
+        p.publish(null, 0, AlertSeverity.critical, "백업 오래됨", code, dedupWindowHours = 20.0)
         assertEquals(1, alerts.findAll().count { it.code == code })
         assertEquals(1, http.calls.count { "api.telegram.org" in it.url })
         alerts.findAll().filter { it.code == code }.forEach { it.isRead = true; alerts.save(it) }
-        p.publish(null, 0, "warning", "다시", code, dedupWindowHours = 20.0) // 읽음 처리 후엔 다시 적재
+        p.publish(null, 0, AlertSeverity.warning, "다시", code, dedupWindowHours = 20.0) // 읽음 처리 후엔 다시 적재
         assertEquals(2, alerts.findAll().count { it.code == code })
         assertEquals(1, http.calls.count { "api.telegram.org" in it.url }) // warning 은 텔레그램 없음
         assertTrue(alerts.findAll().filter { it.code == code }.all { it.userId == null })
@@ -102,7 +103,7 @@ class AlertPublisherTest(
     fun alertSurvivesCallerRollback() {
         val code = "rollback_" + java.util.UUID.randomUUID()
         org.springframework.transaction.support.TransactionTemplate(txManager).executeWithoutResult {
-            publisher(false).publish(null, 0, "critical", "롤백 시험", code)
+            publisher(false).publish(null, 0, AlertSeverity.critical, "롤백 시험", code)
             it.setRollbackOnly()
         }
         kotlin.test.assertEquals(1, alerts.findAll().count { a -> a.code == code })

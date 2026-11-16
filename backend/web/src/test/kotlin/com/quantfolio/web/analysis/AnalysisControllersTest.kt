@@ -7,6 +7,7 @@ import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.trading.Execution
 import com.quantfolio.domain.trading.ExecutionRepository
 import com.quantfolio.domain.trading.Order
+import com.quantfolio.domain.trading.OrderStatus
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
@@ -71,7 +72,7 @@ class AnalysisControllersTest(
     private fun sym() = "9" + Random.nextInt(10_000, 99_999)
 
     /** 체결 1건짜리 주문. executedAt 은 KST 날짜 기준이 되도록 UTC 01:00(KST 10:00). */
-    private fun fill(me: Me, s: Strategy, symbol: String, side: String, day: LocalDate, qty: Int, price: Double, decision: Double? = null, status: String = "filled"): Order {
+    private fun fill(me: Me, s: Strategy, symbol: String, side: String, day: LocalDate, qty: Int, price: Double, decision: Double? = null, status: OrderStatus = OrderStatus.filled): Order {
         val at = day.atTime(1, 0).toInstant(ZoneOffset.UTC)
         val o = orders.save(Order(me.user.id!!, s.id, symbol, side, BigDecimal(qty), decision?.let { BigDecimal.valueOf(it) }, status = status, idempotencyKey = UUID.randomUUID().toString(), createdAt = at))
         executions.save(Execution(o.id!!, s.id, BigDecimal(qty), BigDecimal.valueOf(price), BigDecimal("10"), at))
@@ -92,7 +93,7 @@ class AnalysisControllersTest(
         closes(code, days) { 1000.0 + 10 * it }
         fill(me, s, code, "buy", days[0], 100, 1000.0)
         fill(me, s, code, "sell", days[5], 50, 1050.0)
-        fill(me, s, code, "buy", days[6], 1, 1.0, status = "rejected") // 미체결 상태는 제외
+        fill(me, s, code, "buy", days[6], 1, 1.0, status = OrderStatus.rejected) // 미체결 상태는 제외
         backtests.save(Backtest(s.id!!, Instant.parse("2026-08-31T15:00:00Z"), Instant.parse("2026-09-14T14:59:59Z"), result = mapOf("equity_curve" to listOf(mapOf("t" to "2026-09-01T00:00:00", "v" to 1e6)))))
         val latest = backtests.save(Backtest(s.id!!, Instant.parse("2026-08-31T15:00:00Z"), Instant.parse("2026-09-14T14:59:59Z"),
             result = mapOf("equity_curve" to days.mapIndexed { i, d -> mapOf("t" to "${d}T00:00:00", "v" to 1e6 * (1 + 0.001 * i)) })))

@@ -12,6 +12,9 @@ class BrokerResponse(val status: Int, val body: String, val headers: Map<String,
     fun header(name: String): String? = headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 }
 
+/** 증권사 REST 1회 전송의 연결·응답 헤더 수신 한도(초). 락 TTL 산식(`RedisKeys`)의 재료 — 본문 수신은 이 한도 밖이다. */
+const val BROKER_HTTP_TIMEOUT_SEC = 10L
+
 /** 증권사 REST 전송(응답 헤더까지 필요 — 토스 Retry-After). 테스트에서 교체 가능. */
 interface BrokerHttp {
     /** body: JSON 문자열 또는 form(application/x-www-form-urlencoded) 중 하나. */
@@ -20,11 +23,11 @@ interface BrokerHttp {
 
 @Component
 class JdkBrokerHttp : BrokerHttp {
-    private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+    private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(BROKER_HTTP_TIMEOUT_SEC)).build()
 
     override fun send(method: String, url: String, query: Map<String, String>, headers: Map<String, String>, json: String?, form: Map<String, String>?): BrokerResponse {
         val qs = query.entries.joinToString("&") { (k, v) -> enc(k) + "=" + enc(v) }
-        val req = HttpRequest.newBuilder(URI.create(if (qs.isEmpty()) url else "$url?$qs")).timeout(Duration.ofSeconds(10))
+        val req = HttpRequest.newBuilder(URI.create(if (qs.isEmpty()) url else "$url?$qs")).timeout(Duration.ofSeconds(BROKER_HTTP_TIMEOUT_SEC))
         headers.forEach { (k, v) -> req.header(k, v) }
         val body = when {
             json != null -> {

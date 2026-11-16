@@ -2,6 +2,8 @@ package com.quantfolio.domain.strategy
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
@@ -12,6 +14,10 @@ import org.hibernate.type.SqlTypes
 import org.springframework.data.jpa.repository.JpaRepository
 import java.time.Instant
 
+/** 전략 상태. 이름이 곧 DB·API 문자열(원본 `StrategyStatus` 값)이라 소문자다. */
+@Suppress("EnumEntryName")
+enum class StrategyStatus { draft, backtested, live }
+
 @Entity
 @Table(name = "strategies")
 class Strategy(
@@ -19,8 +25,7 @@ class Strategy(
     @Column(nullable = false) var name: String,
     var description: String? = null,
     @JdbcTypeCode(SqlTypes.JSON) @Column(nullable = false) var config: Map<String, Any?> = emptyMap(),
-    /** "draft" | "backtested" | "live" */
-    @Column(nullable = false) var status: String = "draft",
+    @Enumerated(EnumType.STRING) @Column(nullable = false) var status: StrategyStatus = StrategyStatus.draft,
     var featuredBacktestId: Int? = null,
     @Column(nullable = false) var isShared: Boolean = false,
     var sharedAt: Instant? = null,
