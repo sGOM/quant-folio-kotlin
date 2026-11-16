@@ -132,8 +132,10 @@ class KisClient(
     )
 
     /**
-     * 공통 호출 — HTTP·rt_cd 오류를 KisError 로, 유량제한(EGW00201)이면 0.6s×차수 백오프로 3회까지. 주문·체결·잔고에도 같은 재시도.
-     * [orderSubmit] 이면 접수 여부를 알 수 없는 응답(5xx·408·결과 코드 없음)을 거절이 아니라 [OrderOutcomeUnknown] 으로 올린다.
+     * 공통 호출 — HTTP·rt_cd 오류를 KisError 로, 유량제한(본문 `msg_cd` EGW00201)이면 0.6s×차수 백오프로 3회까지. 주문·체결·잔고에도 같은 재시도.
+     * EGW00215(원장 초당 거래건수 초과)는 주문 전송이 아닌 요청만 같은 재시도 대상이다.
+     * [orderSubmit] 이면 접수 여부를 알 수 없는 응답(5xx·408·결과 코드 없음)을 거절이 아니라 [OrderOutcomeUnknown] 으로 올린다 —
+     * 예외는 5xx 본문이 JSON 이고 `rt_cd`="1"·`msg_cd` ∈ [ORDER_REJECTED_ON_5XX] 일 때뿐(명시적 거절 [KisError]).
      */
     private fun request(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, requireComplete: Boolean = false, orderSubmit: Boolean = false): Map<String, Any?> =
         requestPage(method, url, headers, label, query, body, requireComplete, orderSubmit).first
@@ -144,7 +146,13 @@ class KisClient(
         for (attempt in 0 until RATE_RETRY) {
             throttle()
             val r = s.http.send(method, url, query, headers, json = body?.let { s.json.writeValueAsString(it) })
+            // 200 이 아니어도 본문이 KIS JSON 일 수 있다(2026-11-16 실측: HTTP 500 + rt_cd="1"). JSON 객체가 아니면 null.
+            val errorBody = if (r.status != 200) runCatching { s.parse(r.body) }.getOrNull() else null
+            var code = errorBody?.get("msg_cd") as? String
             if (orderSubmit && (r.status >= 500 || r.status == 408)) {
+                if (r.status >= 500 && errorBody?.get("rt_cd") == "1" && code in ORDER_REJECTED_ON_5XX) {
+                    throw KisError("$label 오류: HTTP ${r.status} [$code] ${errorBody["msg1"] ?: ""}")
+                }
                 throw OrderOutcomeUnknown("KIS 주문 응답 불명: HTTP ${r.status}")
             }
             val err = if (r.status != 200) {
@@ -158,9 +166,10 @@ class KisClient(
                     return data to r.header("tr_cont")?.trim()
                 }
                 if (orderSubmit && data["rt_cd"] != "1") throw OrderOutcomeUnknown("KIS 주문 응답에 유효한 결과 코드 없음")
+                code = data["msg_cd"] as? String
                 KisError("$label 오류: [${data["msg_cd"] ?: ""}] ${data["msg1"] ?: data}")
             }
-            if ("EGW00201" in (err.message ?: "") && attempt < RATE_RETRY - 1) {
+            if ((code == "EGW00201" || (!orderSubmit && code == "EGW00215")) && attempt < RATE_RETRY - 1) {
                 last = err
                 s.sleeper(RATE_BACKOFF_MS * (attempt + 1))
                 continue
@@ -420,7 +429,13 @@ class KisClient(
         private val LIMITERS = ConcurrentHashMap<String, RateLimiter>()
         private val ORD_DVSN = mapOf("limit" to "00", "market" to "01")
 
-        /** 유량제한(EGW00201) 재시도 시도 횟수·백오프 기본 간격(ms)·계좌 단위 호출 최소 간격(ms) — 락 TTL 산식(`RedisKeys`)의 재료. */
+        /**
+         * 주문 POST 의 HTTP 5xx 라도 명시적 거절(접수 안 됨)로 보는 `msg_cd`(본문 `rt_cd`="1" 일 때만). **주문 POST 에서 실측한 코드만 넣는다** —
+         * 조회에서 본 코드나 문서상 의미만으로 넣으면 접수됐을 주문을 거절로 확정할 수 있다. 실측(2026-11-16 모의): IGW00002 "인증 시점의 계좌번호와 요청 계좌번호가 일치하지 않습니다."(HTTP 500).
+         */
+        val ORDER_REJECTED_ON_5XX = setOf("IGW00002")
+
+        /** 유량제한(EGW00201·EGW00215) 재시도 시도 횟수·백오프 기본 간격(ms)·계좌 단위 호출 최소 간격(ms) — 락 TTL 산식(`RedisKeys`)의 재료. */
         const val RATE_RETRY = 3
         const val RATE_BACKOFF_MS = 600L
         const val PAPER_MIN_INTERVAL_MS = 500L

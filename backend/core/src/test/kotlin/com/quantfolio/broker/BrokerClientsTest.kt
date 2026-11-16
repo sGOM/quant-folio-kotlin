@@ -353,6 +353,68 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         }
     }
 
+    /**
+     * 주문 POST 의 5xx 는 접수불명이되, 본문이 JSON 이고 rt_cd=1·msg_cd=IGW00002(인증 시점 계좌 ≠ 요청 계좌 — 2026-11-16 모의 주문 POST 에서 HTTP 500 으로 실측)일 때만 거절.
+     * 다른 코드·rt_cd 없음·JSON 아님·408 은 그대로 접수불명. 어느 쪽이든 주문 POST 는 한 번만 나간다.
+     */
+    @Test
+    fun orderSubmit5xxIsRejectionOnlyForMeasuredAccountMismatchCode() {
+        val http = FakeHttp()
+        val kis = kisWithToken(http)
+        http.on({ it.url.endsWith("/uapi/hashkey") }) { BrokerResponse(200, """{"HASH":"h"}""") }
+        fun posts() = http.calls.count { it.url.endsWith("/order-cash") }
+        val mismatch = """{"rt_cd":"1","msg_cd":"IGW00002","msg1":"인증 시점의 계좌번호와 요청 계좌번호가 일치하지 않습니다."}"""
+        http.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(500, mismatch) }
+        assertEquals("주문 오류: HTTP 500 [IGW00002] 인증 시점의 계좌번호와 요청 계좌번호가 일치하지 않습니다.", assertThrows<KisError> { kis.placeOrder("005930", "buy", 1) }.message)
+        assertEquals(1, posts())
+        for (body in listOf(
+            """{"rt_cd":"1","msg_cd":"EGW00215","msg1":"원장에서 허용 가능한 초당 거래건수를 초과하였습니다."}""",
+            """{"rt_cd":"1","msg_cd":"EGW00201","msg1":"초당 거래건수를 초과하였습니다."}""",
+            """{"rt_cd":"1","msg_cd":"IGW00001","msg1":"?"}""",
+            """{"msg_cd":"IGW00002","msg1":"?"}""",
+            """{"rt_cd":"2","msg_cd":"IGW00002","msg1":"?"}""",
+            """{"rt_cd":"0","msg_cd":"IGW00002","msg1":"?"}""",
+            """["IGW00002"]""",
+            "IGW00002",
+        )) {
+            val before = posts()
+            http.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(500, body) }
+            assertThrows<OrderOutcomeUnknown>(body) { kis.placeOrder("005930", "buy", 1) }
+            assertEquals(before + 1, posts(), body)
+        }
+        http.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(408, mismatch) }
+        assertThrows<OrderOutcomeUnknown> { kis.placeOrder("005930", "buy", 1) }
+        // 같은 본문이라도 조회(GET)는 원래대로 조회 실패
+        http.on({ it.url.endsWith("/inquire-balance") }) { BrokerResponse(500, mismatch) }
+        assertThrows<KisError> { kis.getBalance() }
+    }
+
+    /** EGW00215(원장 초당 거래건수 초과 — 2026-11-16 잔고 GET 에서 HTTP 500 으로 1회 실측)는 조회에서만 EGW00201 처럼 재시도. 주문 POST 는 재시도하지 않는다. */
+    @Test
+    fun ledgerRateLimitIsRetriedForQueriesButNotForOrderSubmit() {
+        val http = FakeHttp()
+        val kis = kisWithToken(http)
+        val limited = """{"rt_cd":"1","msg1":"원장에서 허용 가능한 초당 거래건수를 초과하였습니다.","msg_cd":"EGW00215"}"""
+        val ok = """{"rt_cd":"0","output1":[{"pdno":"005930","hldg_qty":"10","pchs_avg_pric":"70000.5"}],"output2":[{}]}"""
+        for (status in listOf(500, 200)) {
+            var n = 0
+            http.on({ it.url.endsWith("/inquire-balance") }) { if (++n < 3) BrokerResponse(status, limited) else BrokerResponse(200, ok) }
+            sleeps.clear()
+            assertEquals(listOf(NormalizedPosition("005930", 10, BigDecimal("70000.5"))), kis.getBalance().positionsNormalized(), "HTTP $status")
+            assertEquals(3, n, "HTTP $status")
+            assertTrue(sleeps.containsAll(listOf(600L, 1200L)), "HTTP $status $sleeps")
+        }
+        http.on({ it.url.endsWith("/inquire-balance") }) { BrokerResponse(500, limited) }
+        assertThrows<KisError> { kis.getBalance() } // 3회 모두 제한이면 조회 실패
+
+        http.on({ it.url.endsWith("/uapi/hashkey") }) { BrokerResponse(200, """{"HASH":"h"}""") }
+        http.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(500, limited) }
+        assertThrows<OrderOutcomeUnknown> { kis.placeOrder("005930", "buy", 1) }
+        http.on({ it.url.endsWith("/order-cash") }) { BrokerResponse(200, limited) }
+        assertThrows<KisError> { kis.placeOrder("005930", "buy", 1) }
+        assertEquals(2, http.calls.count { it.url.endsWith("/order-cash") })
+    }
+
     /** KIS 주문: 결과 코드 없음·알 수 없는 값은 접수불명, 명시적 거절(rt_cd=1)만 KisError. */
     @Test
     fun kisOrderResultCodeDistinguishesUnknownFromRejection() {
