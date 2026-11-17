@@ -23,7 +23,6 @@ spring:
 
 quantfolio:
   app-env: ${APP_ENV:dev}
-  secret-key: ${secret_key:${SECRET_KEY:}}
   trading-owner-user-id: ${TRADING_OWNER_USER_ID:}
   session-ttl-minutes: ${SESSION_TTL_MINUTES:20160}
   cookie:

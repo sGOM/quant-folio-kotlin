@@ -12,7 +12,4 @@ object Num {
         is String -> v.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
         else -> null
     }
-
-    /** 원본 `is_nan` = `safe_float(v) is None`. 주의: 숫자가 아닌 문자열이면 무조건 true. */
-    fun isNan(v: Any?): Boolean = safeAny(v) == null
 }

@@ -31,7 +31,6 @@ for name, s in walks().items():
     case(name, "ffill", {"limit": None}, s.ffill())
     case(name, "ffill", {"limit": 1}, s.ffill(limit=1))
     case(name, "cumsum", {}, s.cumsum())
-    case(name, "cumprod_ret", {}, (1 + s.pct_change(fill_method=None).fillna(0)).cumprod())
     case(name, "expanding_max", {}, s.expanding().max())
     for m in ["average", "min", "max", "first", "dense"]:
         case(name, "rank", {"method": m, "pct": False}, s.rank(method=m))

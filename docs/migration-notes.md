@@ -13,7 +13,7 @@
 소유자가 아닌 사용자의 기존 세션은 HTTP 401 / WS 4401 로 거부된다(소유자 미설정이면 모든 세션). 해당 사용자 행과 데이터는 삭제하지 않는다. 빈 DB 에서 최초 사용자를 만드는 수단은 앱에 없다(CI 는 SQL 시드).
 자격증명 등록 API(원본 `PUT /api/kis/credentials`·`/toss-quote`)는 삭제돼 404 다. 화면은 서버 관리 상태를 안내한다(등록 폼은 1단계에서 제거).
 2026-11-17 Flyway V6 가 `users` 의 자격증명 컬럼 6개(`kis_app_key`·`kis_app_secret`·`kis_account_no`·`toss_app_key`·`toss_app_secret`·`toss_account_no`)와 V2 트리거·함수를 지웠다. 원본 Python 스택은 더 쓰지 않으므로(같은 날 소유자 결정) 원본 DB 호환을 위해 남길 이유가 없다.
-원본의 Fernet 암호화(`CREDENTIAL_ENC_KEY`, `core/security.py`)도 Kotlin 에서 삭제했다 — 시크릿 `credential_enc_key` 없이 기동하고 prod 부팅 검증은 `SECRET_KEY` 만 본다(문구 `운영(prod) 환경에서 SECRET_KEY 가 필요합니다.`).
+원본의 Fernet 암호화(`CREDENTIAL_ENC_KEY`, `core/security.py`)도 Kotlin 에서 삭제했다 — 시크릿 `credential_enc_key` 없이 기동한다. `SECRET_KEY`(시크릿 `secret_key`)도 2026-11-17 삭제했다 — 세션이 Redis 저장이라 어디에도 쓰이지 않았고, prod 부팅 검증은 이제 `COOKIE_SECURE` 만 본다.
 기존 주문·포지션 계좌 키와 잔고 추정 차단은 보존한다. 과거 계좌의 장부를 새 시크릿 계좌에 자동 연결하지 않는다.
 엔진 정합(주기·체결통보 트리거)은 비소유자 주문을 조회·통계·알림 없이 건너뛰고, 주문 실행은 전략이 그 사용자 것이 아니면 예약 없이 보류한다(원본은 둘 다 사용자 구분이 없다).
 계좌는 이제 시크릿 교체로 바뀌므로 V2 트리거는 V6 이전에도 발화하지 않았다. V6 는 트리거만 지우고 이미 선 `kis_balance_reconcile_blocked` 는 남겨 계속 잔고 추정을 막는다(새로 서지는 않는다). 이전 장부와 새 계좌 잔고의 혼합은 기존 계좌 키 조건이 막는다 —

@@ -37,7 +37,6 @@ class SeriesOracleTest {
                 "pct_change" -> s.pctChange(p.get("n").asInt()).values
                 "ffill" -> s.ffill(if (p.get("limit").isNull) null else p.get("limit").asInt()).values
                 "cumsum" -> s.cumSum().values
-                "cumprod_ret" -> (s.pctChange(1, fillMethodPad = false).fillNa(0.0) + 1.0).cumProd().values
                 "expanding_max" -> s.expandingMax().values
                 "rank" -> s.rank(RankMethod.valueOf(p.get("method").asString().uppercase()), p.get("pct").asBoolean()).values
                 "quantile" -> doubleArrayOf(s.quantile(p.get("q").asDouble()))
@@ -46,8 +45,8 @@ class SeriesOracleTest {
                 "sum" -> doubleArrayOf(s.sum())
                 else -> error("unknown op $op")
             }
-            // 누적 연산(cumsum·cumprod·ewm)은 합산 순서 차이로 상대 1e-9 를 넘을 수 있어 1e-6 까지 허용(설계 §8.1).
-            val rel = if (op in setOf("cumsum", "cumprod_ret", "ewm_mean", "ewm_mean_alpha", "rolling_std", "rolling_sum", "rolling_mean")) 1e-6 else 1e-9
+            // 누적 연산(cumsum·ewm)은 합산 순서 차이로 상대 1e-9 를 넘을 수 있어 1e-6 까지 허용(설계 §8.1).
+            val rel = if (op in setOf("cumsum", "ewm_mean", "ewm_mean_alpha", "rolling_std", "rolling_sum", "rolling_mean")) 1e-6 else 1e-9
             Oracle.assertClose(Oracle.doubles(c.get("out")), actual, rel, "$op $p")
         }
     }

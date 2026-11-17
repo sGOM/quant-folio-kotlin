@@ -53,7 +53,7 @@ class QuantfolioPropertiesTest {
     @Test
     fun prodAppRequiresSecureCookie() {
         assertThrows<IllegalStateException> {
-            QuantfolioProperties(appEnv = "prod", secretKey = "s").validate()
+            QuantfolioProperties(appEnv = "prod").validate()
         }
     }
 }

@@ -24,6 +24,4 @@ class User(
     @UpdateTimestamp @Column(nullable = false) var updatedAt: Instant? = null
 }
 
-interface UserRepository : JpaRepository<User, Int> {
-    fun findByEmail(email: String): User?
-}
+interface UserRepository : JpaRepository<User, Int>

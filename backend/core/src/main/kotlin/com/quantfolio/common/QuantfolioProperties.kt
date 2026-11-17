@@ -13,7 +13,6 @@ import java.math.BigDecimal
 data class QuantfolioProperties(
     /** "dev" | "prod" */
     val appEnv: String = "dev",
-    val secretKey: String = "",
     val tradingOwnerUserId: Int? = null,
     val sessionTtlMinutes: Long = 60L * 24 * 14,
     val cookie: Cookie = Cookie(),
@@ -38,7 +37,6 @@ data class QuantfolioProperties(
             "KIS_ENV=prod(실전)인데 KIS_PROD_APPROVED 가 승인(true)되지 않았습니다. 실전 전환은 명시적 2단계 승인이 필요합니다."
         }
         if (appEnv == "prod") {
-            check(secretKey.isNotBlank()) { "운영(prod) 환경에서 SECRET_KEY 가 필요합니다." }
             check(cookie.secure) { "운영 환경에서는 COOKIE_SECURE=true 여야 합니다." }
         }
     }

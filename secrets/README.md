@@ -1,6 +1,6 @@
 # secrets/
 
-비밀(마스터 키·증권사 API 키)을 **평문 `.env` 대신 파일**로 보관하는 디렉터리입니다.
+비밀(증권사·외부 API 키)을 **평문 `.env` 대신 파일**로 보관하는 디렉터리입니다.
 docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운트하고, Spring
 `configtree` 가 같은 이름의 속성으로 읽습니다(앞뒤 공백·개행은 떼어 냄 — 원본 `strip()` 과 같음). 따라서 비밀이 `docker inspect`·이미지 레이어·
 프로세스 환경(`/proc`)에 남지 않습니다.
@@ -11,7 +11,6 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 
 | 파일 | 내용 | 비고 |
 |------|------|------|
-| `secret_key.txt` | 앱 마스터 키(`SECRET_KEY`) — prod 부팅 필수. 인증은 JWT 가 아닌 서버측 세션이라 현재 서명에 쓰이지 않는다 | `openssl rand -hex 32` |
 | `kis_app_key.txt` | KIS app_key (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `kis_app_secret.txt` | KIS app_secret (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `account_num` | KIS 계좌번호 `CANO-PRDT`(예: 50012345-01). 확장자 없음 | 미사용 시 빈 파일 |
@@ -34,7 +33,6 @@ KIS 계좌번호(`account_num`)와 HTS ID(`hts_id.txt`)도 같은 방식으로 �
 
 ```bash
 mkdir -p secrets
-openssl rand -hex 32 > secrets/secret_key.txt
 # 미사용 브로커 키는 빈 파일로 생성
 : > secrets/kis_app_key.txt;  : > secrets/kis_app_secret.txt
 : > secrets/account_num;       : > secrets/hts_id.txt

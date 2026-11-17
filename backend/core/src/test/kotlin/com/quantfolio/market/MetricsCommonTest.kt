@@ -6,9 +6,7 @@ import com.quantfolio.test.Oracle
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /** 원본 metrics/common.py 정답지(tools/oracle/gen_common.py) 대조. */
 class MetricsCommonTest {
@@ -59,8 +57,5 @@ class MetricsCommonTest {
         assertNull(Num.safe(Double.POSITIVE_INFINITY))
         assertNull(Num.safe(null))
         assertEquals(1.5, Num.safe(1.5))
-        assertTrue(Num.isNan("문자열")) // 원본: safe_float 변환 불가면 True
-        assertFalse(Num.isNan(3))
-        assertTrue(Num.isNan(Double.NaN))
     }
 }

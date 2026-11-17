@@ -5,7 +5,6 @@ name: quantfolio
 # 백엔드 3개 앱이 공유하는 시크릿. /run/secrets/<이름> 으로 마운트되고 Spring configtree 가 같은 이름의 속성으로 읽는다
 # (quantfolio-core.yml) — 평문 env 보다 우선, docker inspect·이미지 레이어에 남지 않는다.
 x-backend-secrets: &backend-secrets
-  - secret_key
   - kis_app_key
   - kis_app_secret
   - kis_account_no
@@ -135,8 +134,6 @@ services:
 
 # 시크릿 파일 소스(secrets/*.txt 는 커밋 제외). 안 쓰는 항목도 빈 파일은 있어야 기동된다 — secrets/README.md.
 secrets:
-  secret_key:
-    file: ./secrets/secret_key.txt
   kis_app_key:
     file: ./secrets/kis_app_key.txt
   kis_app_secret:

@@ -3,7 +3,6 @@ package com.quantfolio.market.krx
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.market.SectorMapSnapshot
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
-import com.quantfolio.market.MarketCalendar
 import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
@@ -28,19 +27,8 @@ fun interface ListedStocks {
     fun allListedStocks(): List<ListedStock>
 }
 
-data class EtfLeverage(
-    val asOf: LocalDate,
-    val totalMktcap: Double,
-    val leveragedMktcap: Double,
-    val singleStockMktcap: Double,
-    val leveragedRatio: Double?,
-    val singleStockRatio: Double?,
-    val leveragedCount: Int,
-    val singleStockCount: Int,
-)
-
 /**
- * KRX 직접 조회(원본 `services/data/krx_index.py`) — 지수 구성종목(PIT 유니버스), 전종목 목록, 시가총액, 업종분류, ETF 레버리지.
+ * KRX 직접 조회(원본 `services/data/krx_index.py`) — 지수 구성종목(PIT 유니버스), 전종목 목록, 시가총액, 업종분류.
  *
  * 공통 규칙: KRX 미인증(자격증명 없음)은 실패가 아니라 빈 결과. 날짜를 며칠 거슬러 휴장일을 건너뛰되,
  * 실패가 있고 쿨다운이 걸렸으면 더 시도하지 않는다. 한 번도 응답을 못 받고 실패만 있으면 대표 예외.
@@ -55,7 +43,6 @@ class KrxIndexService(
     private val ledger: FetchLedger,
     private val cache: StoreCache,
     private val sectors: SectorMapSnapshotRepository,
-    private val calendar: MarketCalendar,
     private val clock: Clock,
 ) : IndexMembers, ListedStocks {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -100,8 +87,6 @@ class KrxIndexService(
         }
         return codes
     }
-
-    fun indexMembers(asOf: LocalDate): List<String> = indexMembers(asOf, "KOSPI200")
 
     override fun allListedStocks(): List<ListedStock> {
         stocksCache?.let { return it }
@@ -211,50 +196,6 @@ class KrxIndexService(
         return mapping.size
     }
 
-    /** ETF 시장의 레버리지·단일종목 레버리지 시가총액 비중(과열 지표). 미인증·무자료면 null. */
-    fun etfLeverageExposure(asOf: LocalDate): EtfLeverage? {
-        if (session.current() == null) return null
-        var snapped = asOf
-        repeat(10) { if (!calendar.isBusinessDay(snapped)) snapped = snapped.minusDays(1) }
-        var rows = emptyList<Map<String, Any?>>()
-        val att = Attempts()
-        var used = snapped
-        for (back in 0L until 7L) {
-            if (att.cooling()) break
-            used = snapped.minusDays(back)
-            val payload = mapOf("bld" to BLD_ETF_ALL, "locale" to "ko_KR", "trdDd" to used.format(YMD), "share" to "1", "money" to "1", "csvxls_isNo" to "false")
-            rows = att.rows(payload, "output", "ETF 잔고") { e ->
-                log.warn("KRX ETF 조회 실패({}): {}", used, e.message)
-            } ?: continue
-            if (rows.isNotEmpty()) break
-        }
-        att.throwIfAllFailed()
-        if (rows.isEmpty()) return null
-        var total = 0.0
-        var lev = 0.0
-        var single = 0.0
-        var levN = 0
-        var singleN = 0
-        for (r in rows) {
-            val name = r["ISU_ABBRV"]?.toString().orEmpty()
-            val cap = r["MKTCAP"]?.toString().orEmpty().replace(",", "").trim().toDoubleOrNull() ?: 0.0
-            total += cap
-            if ("레버리지" !in name) continue
-            lev += cap
-            levN++
-            if ("단일종목" in name) {
-                single += cap
-                singleN++
-            }
-        }
-        return EtfLeverage(
-            used, total, lev, single,
-            leveragedRatio = if (total != 0.0) lev / total else null,
-            singleStockRatio = if (total != 0.0) single / total else null,
-            leveragedCount = levN, singleStockCount = singleN,
-        )
-    }
-
     /**
      * 날짜(·시장)를 거슬러 가며 여러 번 조회할 때의 실패 누적. 실패가 쌓인 채 쿨다운이 걸리면 단락([cooling]),
      * 한 번도 성공 못 했으면 대표 예외([throwIfAllFailed]). 빈 응답도 성공으로 센다.
@@ -300,7 +241,6 @@ class KrxIndexService(
         private const val BLD_STOCK_FINDER = "dbms/comm/finder/finder_stkisu"
         private const val BLD_MARKET_CAP = "dbms/MDC/STAT/standard/MDCSTAT01501"
         private const val BLD_SECTOR = "dbms/MDC/STAT/standard/MDCSTAT03901"
-        private const val BLD_ETF_ALL = "dbms/MDC/STAT/standard/MDCSTAT04301"
         private val YMD: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
     }
 }

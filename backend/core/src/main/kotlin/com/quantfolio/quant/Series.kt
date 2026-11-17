@@ -122,11 +122,6 @@ class Series(val index: List<LocalDate>, val values: DoubleArray) {
         return with(DoubleArray(size) { i -> if (values[i].isNaN()) Double.NaN else { acc += values[i]; acc } })
     }
 
-    fun cumProd(): Series {
-        var acc = 1.0
-        return with(DoubleArray(size) { i -> if (values[i].isNaN()) Double.NaN else { acc *= values[i]; acc } })
-    }
-
     /** expanding().max() — 첫 유효값 이후로는 NaN 위치도 그때까지의 최대. */
     fun expandingMax(): Series {
         var best = Double.NaN
