@@ -5,6 +5,7 @@ paths:
   - "frontend/app/dashboard/**"
   - "frontend/app/login/**"
   - "frontend/lib/api.ts"
+  - "backend/core/src/main/kotlin/com/quantfolio/security/**"
 ---
 
 # API — 응답 계약·인증

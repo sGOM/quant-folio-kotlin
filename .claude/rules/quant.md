@@ -42,3 +42,7 @@ paths:
 
 `factor/`·`metrics/` 는 순수 계산(`FactorScores`·`MetricsPure`)을 정답지로, 조회 조립(`*Service`·`UniverseScores`)을
 `SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터가 **전량** 실패하면 예외 — 중립 처리 금지.
+
+## 함정
+
+- 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다 — 2026-11-17 실측에서 시험 전략이 이 때문에 주문을 내지 않았다.

@@ -27,10 +27,11 @@ paths:
 
 ## 함정
 
-- **원본 스택이 이 PC 에서 가동 중이다(`quantfolio` 프로젝트).** 로컬 시험은 반드시 다른 프로젝트명·포트로:
-  저장소 밖 사본에서 `docker compose -p qf-smoke up`(포트는 `.env` 의 `DB_PORT`·`WEB_PORT`·`APP_PORT` 등).
-  이 PC 의 `.env`(git 무시)는 `COMPOSE_PROJECT_NAME=qf-paper`·`COMPOSE_FILE`(local override `docker-compose.*.local.yml`, git 무시)로 격리 스택을 고정한다.
-  `-p quantfolio` 로 띄우면 Kotlin 엔진이 live 전략을 복구해 원본과 **이중 매매**하고 실 DB 를 baseline 한다.
+- **이 PC 의 운영은 로컬 스택 `qf-paper`(복제 DB)다.** 원본 Python 스택(`quantfolio-*`)은 정지(`docker stop`)·볼륨 보존 상태이고 더 쓰지 않는다(2026-11-17 소유자 결정, 원격 배포·S3 반출 없음).
+  기동: `docker compose -p qf-paper -f docker-compose.yml -f docker-compose.paper.local.yml up -d`(`.env`(git 무시)의 `COMPOSE_PROJECT_NAME=qf-paper`·`COMPOSE_FILE` 이 자동 적용, 포트 DB 15432·Redis 16379·web 18000·화면 13000).
+  시험 스택은 저장소 밖 사본에서 `-p qf-smoke`(포트는 `.env` 의 `DB_PORT`·`WEB_PORT`·`APP_PORT` 등).
+  `.env` 없는 곳에서 `-p` 없이 띄우거나 `-p quantfolio`(compose 기본 `name`)를 주면 보존된 원본 볼륨 `quantfolio_pgdata` 를 물고 Flyway 가 원본 DB 를 마이그레이션(V6 은 되돌릴 수 없음)하며 live 전략을 복구한다 — `.env` 의 `COMPOSE_PROJECT_NAME` 은 `-p` 를 생략한 경우만 막는다(우선순위 `-p` > 환경변수 > `name:`). `-p quantfolio` 는 쓰지 않는다.
+- Git Bash 에서 `docker exec <c> cat /run/secrets/x` 는 경로가 `C:/Program Files/Git/run/...` 로 바뀐다 — `MSYS_NO_PATHCONV=1` 을 붙인다.
 - 저장소 `secrets/` 에 더미 키를 두지 않는다 — 컷오버 때 실제 증권사·외부 API 키 대신 쓰인다.
 - 이미지 빌드는 테스트를 안 돈다(Testcontainers 불가). 검증은 CI `./gradlew build` + e2e-smoke.
   e2e-smoke 는 회원가입이 없어 빈 DB 에 소유자(id 1) 행을 SQL 로 시드하고 `TRADING_OWNER_USER_ID=1` 로 맞춘다.
