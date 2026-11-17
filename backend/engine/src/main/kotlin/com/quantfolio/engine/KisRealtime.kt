@@ -395,12 +395,12 @@ class KisRealtime(
 
     fun noticeUsers(): Set<Int> = noticeFeeds.keys.toSet()
 
-    /** 체결통보 구독(계좌 전체 1구독). KIS_HTS_ID 미설정이면 no-op. */
+    /** 체결통보 구독(계좌 전체 1구독). HTS ID(secrets/hts_id.txt) 미설정이면 no-op. */
     @Synchronized
     fun ensureNotices(userId: Int, appKey: String, appSecret: String) {
         val hts = props.kis.htsId
         if (hts.isNullOrEmpty()) {
-            log.info("KIS_HTS_ID 미설정 — 체결통보 리스너 비활성(user={}). 실계정 전환 전 설정 필요.", userId)
+            log.info("HTS ID 미설정(secrets/hts_id.txt) — 체결통보 리스너 비활성(user={}). 실계정 전환 전 설정 필요.", userId)
             return
         }
         if (noticeFeeds.containsKey(userId)) return

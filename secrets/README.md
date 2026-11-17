@@ -15,6 +15,8 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 | `credential_enc_key.txt` | DB 에 남은 과거 자격증명 암호문(Fernet) 보존용 키. 현재 코드는 복호화에 쓰지 않음 | 아래 생성 명령 |
 | `kis_app_key.txt` | KIS app_key (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `kis_app_secret.txt` | KIS app_secret (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
+| `account_num` | KIS 계좌번호 `CANO-PRDT`(예: 50012345-01). 확장자 없음 | 미사용 시 빈 파일 |
+| `hts_id.txt` | KIS HTS ID(실시간 체결통보 구독용) | 미사용 시 빈 파일 |
 | `toss_app_key.txt` | 토스 client_id (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `toss_app_secret.txt` | 토스 client_secret (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `krx_id.txt` | (선택) KRX 데이터 포털 로그인 ID | 지표 화면용. 미사용 시 빈 파일 |
@@ -28,7 +30,7 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 혼자 쓰는 서비스라 증권사 키·시크릿·계좌는 **서버 설정(이 디렉터리의 시크릿 파일 우선, 환경변수 호환)에서만** 읽습니다.
 웹 화면·API 로 등록하는 기능은 거부되며(403) 사용자 DB 에 남은 과거 자격증명은 읽지 않습니다.
 거래·로그인은 `.env` 의 `TRADING_OWNER_USER_ID` 로 지정한 사용자만 가능합니다.
-KIS 계좌번호(`KIS_ACCOUNT_NO`)와 HTS ID(`KIS_HTS_ID`)는 시크릿 파일이 아니라 `.env` 로 줍니다.
+KIS 계좌번호(`account_num`)와 HTS ID(`hts_id.txt`)도 같은 방식으로 이 디렉터리에서만 읽습니다(파일 끝 개행 없이 저장).
 브로커 키를 쓰지 않는다면 브로커 파일들은 빈 파일로 두면 됩니다(파일 자체는 존재해야 compose 가 기동됩니다).
 
 ## 생성 예시
@@ -40,6 +42,7 @@ openssl rand -hex 32 > secrets/secret_key.txt
 openssl rand -base64 32 | tr '+/' '-_' > secrets/credential_enc_key.txt
 # 미사용 브로커 키는 빈 파일로 생성
 : > secrets/kis_app_key.txt;  : > secrets/kis_app_secret.txt
+: > secrets/account_num;       : > secrets/hts_id.txt
 : > secrets/toss_app_key.txt; : > secrets/toss_app_secret.txt
 # KRX 데이터 포털(지표 화면용). 무료 가입 https://data.krx.co.kr — 미사용 시 빈 파일
 : > secrets/krx_id.txt; : > secrets/krx_pw.txt

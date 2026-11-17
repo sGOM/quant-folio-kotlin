@@ -109,3 +109,4 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - Caddy 의 `/docs`·`/openapi.json`·`/redoc` 라우트는 남겼지만 Kotlin web 은 해당 문서를 제공하지 않는다(404).
 - 요청 DTO 의 `@Size`(전략 이름 255·설명 2000·닉네임 50·비밀번호 8~128)는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
 - KIS WS 종료: 원본은 `async with websockets.connect()` 종료 시 closing handshake 를 close_timeout(기본 10초)까지 기다린 뒤 TCP 를 닫는다. Kotlin `KisSocket.close()` 는 close 프레임 전송과 서버 close 대기에 각 2초 상한(측정값 아님)을 두고, 그 뒤 `abort` 와 HttpClient `shutdownNow` 로 소켓을 닫는다. 인터럽트되면 대기 없이 즉시 닫는다. JDK HttpClient 는 핸드셰이크 응답 없이 끊기면 한 번 재시도해 시도당 TCP 연결을 2개 만든다(원본 websockets 는 재시도 없음 — 바꾸지 않음).
+- KIS 계좌번호·HTS ID: 원본은 환경변수(`KIS_ACCOUNT_NO`·`KIS_HTS_ID`)로 받았다. Kotlin 은 compose secret `kis_account_no`(`secrets/account_num`)·`kis_hts_id`(`secrets/hts_id.txt`)를 우선 읽고 환경변수는 로컬 실행용 폴백이다(2026-11-17 소유자 결정: 시크릿은 `secrets/` 한 곳에서만 관리).

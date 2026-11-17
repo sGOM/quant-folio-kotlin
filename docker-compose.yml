@@ -9,6 +9,8 @@ x-backend-secrets: &backend-secrets
   - credential_enc_key
   - kis_app_key
   - kis_app_secret
+  - kis_account_no
+  - kis_hts_id
   - toss_app_key
   - toss_app_secret
   - krx_id
@@ -144,6 +146,10 @@ secrets:
     file: ./secrets/kis_app_key.txt
   kis_app_secret:
     file: ./secrets/kis_app_secret.txt
+  kis_account_no:
+    file: ./secrets/account_num
+  kis_hts_id:
+    file: ./secrets/hts_id.txt
   toss_app_key:
     file: ./secrets/toss_app_key.txt
   toss_app_secret:
