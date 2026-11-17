@@ -1,6 +1,7 @@
 package com.quantfolio.web.backtest
 
 import com.quantfolio.backtest.BacktestRunner
+import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
@@ -10,8 +11,10 @@ import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
+import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.source.SourceUnavailableError
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.security.Passwords
@@ -20,7 +23,12 @@ import com.quantfolio.web.auth.SESSION_COOKIE
 import com.quantfolio.web.auth.SessionStore
 import jakarta.servlet.http.Cookie
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.argThat
+import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willReturn
+import org.mockito.Mockito.never
+import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -32,6 +40,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import tools.jackson.databind.json.JsonMapper
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -52,10 +61,12 @@ class BacktestsControllerTest(
     @Autowired private val strategies: StrategyRepository,
     @Autowired private val backtests: BacktestRepository,
     @Autowired private val ticks: PriceTickStore,
+    @Autowired private val clock: Clock,
 ) {
     @MockitoBean lateinit var loader: OhlcvLoader
     @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
+    @MockitoBean lateinit var krx: KrxIndexService
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
@@ -141,6 +152,35 @@ class BacktestsControllerTest(
             status { isUnprocessableContent() }
             jsonPath("$.detail") { value("universe 종목의 시세를 확보하지 못했습니다.") }
         }
+    }
+
+    /** 원본 `_with_sector_map`: max_sector_pct 가 있을 때만 업종 매핑을 조회해 섹터 캡을 건다. 조회 실패는 캡 없이 진행. */
+    @Test
+    fun sectorCapLooksUpSectorMapOnlyWhenLimitSet() {
+        val me = Me()
+        val codes = (1..4).map { sym() }
+        codes.forEachIndexed { k, c -> seed(c, LocalDate.of(2022, 1, 3), 520, 20 + k) }
+        val base = mapOf("type" to "rebalance", "universe" to codes, "selection" to mapOf("method" to "momentum", "lookback" to 40, "top_n" to 2))
+        val capped = base + ("risk_layer" to mapOf("max_sector_pct" to 0.3))
+        fun invested(cfg: Map<String, Any?>): Double {
+            val r = run(me, me.strategy(cfg), "2023-01-02", "2023-12-29").andExpect { status { isCreated() } }
+            val holdings = json.readTree(r.andReturn().response.contentAsString).get("result").get("holdings")
+            return holdings.properties().sumOf { it.value.asDouble() }
+        }
+
+        val uncapped = invested(base)
+        verify(krx, never()).sectorMap(any())
+        assertTrue(uncapped > 0.9, "캡 없으면 거의 전액 투자: $uncapped")
+
+        given(krx.sectorMap(any())).willReturn(codes.associateWith { "전기전자" })
+        val before = MarketClock.todayUtcLegacy(clock)
+        val withCap = invested(capped)
+        val after = MarketClock.todayUtcLegacy(clock)
+        verify(krx).sectorMap(argThat { it == before || it == after }) // 원본 date.today()(UTC)
+        assertTrue(withCap < 0.5, "한 업종 30% 상한이면 나머지는 현금: $withCap")
+
+        given(krx.sectorMap(any())).willThrow(SourceUnavailableError("krx", "down"))
+        assertEquals(uncapped, invested(capped), 1e-9)
     }
 
     @Test

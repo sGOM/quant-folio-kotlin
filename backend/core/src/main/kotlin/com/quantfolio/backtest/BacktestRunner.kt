@@ -21,6 +21,7 @@ import com.quantfolio.rebalance.Cfg
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.security.MessageDigest
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -46,6 +47,7 @@ class BacktestRunner(
     private val session: KrxSession,
     private val panic: PanicService,
     private val scores: UniverseScores,
+    private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -133,10 +135,30 @@ class BacktestRunner(
             null
         }
 
-        val result = LinkedHashMap(engine { PortfolioBacktest.run(panel, config, start, end, provider, regime, pool, benchmark, panicDays, volume) })
+        val result = LinkedHashMap(engine { PortfolioBacktest.run(panel, withSectorMap(config), start, end, provider, regime, pool, benchmark, panicDays, volume) })
         factorCoverageWarnings(config, universe, end).takeIf { it.isNotEmpty() }?.let { result["factor_warnings"] = it }
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
         return result
+    }
+
+    /**
+     * 원본 `portfolio._with_sector_map` — 섹터 한도(max_sector_pct)용 종목→업종 매핑을 백테스트 전체에 1회 조회해 config 에 싣는다.
+     * 기준일은 원본 `date.today()`(컨테이너 UTC 날짜, migration-notes #8·#12). 실패(ERROR)와 매핑 없음(WARNING)은 로그를 나누고 둘 다 캡 미적용.
+     */
+    private fun withSectorMap(config: Map<String, Any?>): Map<String, Any?> {
+        if (!Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) || Cfg.truthy(config["_sector_map"])) return config
+        val smap = try {
+            krx.sectorMap(MarketClock.todayUtcLegacy(clock))
+        } catch (e: DataSourceError) {
+            log.error("섹터 집중 한도용 업종 매핑 조회 실패 — 섹터 캡 미적용: {}", e.message)
+            return config
+        }
+        if (smap.isEmpty()) {
+            log.warn("섹터 한도 설정됨(max_sector_pct)이나 업종 매핑 미확보 — 섹터 캡 미적용.")
+            return config
+        }
+        log.info("섹터 집중 한도용 업종 매핑 로드: {}종목", smap.size)
+        return config + ("_sector_map" to smap)
     }
 
     private fun indexClose(ticker: String, from: LocalDate, to: LocalDate, failLog: String): Series? = try {
