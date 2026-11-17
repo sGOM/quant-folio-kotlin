@@ -18,13 +18,6 @@ class User(
     var displayName: String? = null,
     /** "kis" | "toss" */
     @Column(nullable = false) var broker: String = "kis",
-    /** 이전 DB 자격증명(Fernet 암호문)과 계좌 기록. 연결에는 서버 설정을 쓴다. */
-    var kisAppKey: String? = null,
-    var kisAppSecret: String? = null,
-    var kisAccountNo: String? = null,
-    var tossAppKey: String? = null,
-    var tossAppSecret: String? = null,
-    var tossAccountNo: String? = null,
     @Column(nullable = false, updatable = false) var createdAt: Instant = Instant.now(),
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 ) {

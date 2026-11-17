@@ -96,9 +96,9 @@ class ReconcilerTest(
 
     private fun anyUser(): User = any(User::class.java) ?: User(email = "", passwordHash = "")
 
-    private fun setup(kisAccountNo: String? = null, authorized: Boolean = true): Pair<Int, Int> {
+    private fun setup(authorized: Boolean = true): Pair<Int, Int> {
         willReturn(wrapped).given(brokers).forUser(anyUser())
-        val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", kisAccountNo = kisAccountNo))
+        val u = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x"))
         if (authorized) willReturn(true).given(brokers).isOwner(u.id)
         val s = strategies.save(Strategy(u.id!!, "s", config = mapOf("type" to "rsi")))
         return u.id!! to s.id!!
@@ -310,7 +310,7 @@ class ReconcilerTest(
     }
 
     /**
-     * 컷오버 시나리오: 계좌는 시크릿 교체로 바뀌어 V2 트리거가 발화하지 않았다(`kis_balance_reconcile_blocked`=false). 이전 계좌의 체결 이력은 계좌 키 NULL.
+     * 컷오버 시나리오: 계좌는 시크릿 교체로 바뀌어 계좌 변경 표시가 없다(`kis_balance_reconcile_blocked`=false). 이전 계좌의 체결 이력은 계좌 키 NULL.
      * 그래도 그 이력 하나로 이 사용자의 모의 잔고 추정(매수 배정·잔고 종결 근거 ④)은 전부 막혀야 한다 — 잔고를 읽지도 않는다.
      */
     @Test
@@ -488,20 +488,20 @@ class ReconcilerTest(
         assertEquals(OrderStatus.filled, orders.findById(o.id!!).get().status)
     }
 
-    private fun changeKisAccount(uid: Int, account: String) {
-        val user = users.findById(uid).orElseThrow()
-        user.kisAccountNo = account
-        users.saveAndFlush(user)
+    /** V2 트리거(V6 에서 삭제)가 과거 DB 계좌 변경 때 세운 표시. 컬럼과 읽는 코드는 남아 차단 효과가 유지된다. */
+    private fun markAccountChanged(uid: Int) {
+        ctx.getBean(NamedParameterJdbcTemplate::class.java)
+            .update("update users set kis_balance_reconcile_blocked = true where id = :u", mapOf("u" to uid))
     }
 
     @Test
-    fun changedKisAccountCannotInferFillsFromOldAccountHistory() {
-        val (uid, sid) = setup(kisAccountNo = "12345678-01")
+    fun accountChangeFlagBlocksBalanceInferenceFromOldAccountHistory() {
+        val (uid, sid) = setup()
         val buy = order(uid, sid, "005930", 10, OrderStatus.filled, "OLD-BUY")
         val sell = order(uid, sid, "005930", 6, OrderStatus.filled, "OLD-SELL", side = "sell")
         executions.save(Execution(buy.id!!, sid, BigDecimal.TEN, BigDecimal("1000")))
         executions.save(Execution(sell.id!!, sid, BigDecimal("6"), BigDecimal("1000")))
-        changeKisAccount(uid, "87654321-01")
+        markAccountChanged(uid)
         val current = order(uid, sid, "005930", 6, OrderStatus.submitted, "NEW-BUY")
         balance = Balance(listOf(mapOf("pdno" to "005930", "hldg_qty" to "10")))
         broker.execution = { Fill(0, null, false) }
@@ -516,14 +516,14 @@ class ReconcilerTest(
     }
 
     @Test
-    fun accountChangeDuringBalanceReadCannotWriteInferredFill() {
-        val (uid, sid) = setup(kisAccountNo = "12345678-01")
+    fun accountChangeFlagSetDuringBalanceReadCannotWriteInferredFill() {
+        val (uid, sid) = setup()
         val pending = order(uid, sid, "005930", 2, OrderStatus.pending, null, todayOrderTime())
         balance = Balance(listOf(mapOf("pdno" to "005930", "hldg_qty" to "2")))
         var balanceReads = 0
         onBalance = {
             balanceReads++
-            changeKisAccount(uid, "87654321-01")
+            markAccountChanged(uid)
         }
 
         reconciler.reconcileOpenOrders(uid)

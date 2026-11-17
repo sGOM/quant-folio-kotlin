@@ -12,7 +12,6 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 | 파일 | 내용 | 비고 |
 |------|------|------|
 | `secret_key.txt` | 앱 마스터 키(`SECRET_KEY`) — prod 부팅 필수. 인증은 JWT 가 아닌 서버측 세션이라 현재 서명에 쓰이지 않는다 | `openssl rand -hex 32` |
-| `credential_enc_key.txt` | DB 에 남은 과거 자격증명 암호문(Fernet) 보존용 키. 현재 코드는 복호화에 쓰지 않음 | 아래 생성 명령 |
 | `kis_app_key.txt` | KIS app_key (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `kis_app_secret.txt` | KIS app_secret (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `account_num` | KIS 계좌번호 `CANO-PRDT`(예: 50012345-01). 확장자 없음 | 미사용 시 빈 파일 |
@@ -26,7 +25,7 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 | `s3_backup_secret_access_key.txt` | (선택) S3 백업 오프사이트 복제 시크릿 키 | 액세스 키와 함께 둘 다 설정해야 활성화. 미사용 시 빈 파일 |
 
 혼자 쓰는 서비스라 증권사 키·시크릿·계좌는 **서버 설정(이 디렉터리의 시크릿 파일 우선, 환경변수 호환)에서만** 읽습니다.
-웹 화면·API 로 등록하는 기능은 거부되며(403) 사용자 DB 에 남은 과거 자격증명은 읽지 않습니다.
+웹 화면·API 로 등록하는 기능은 없고 사용자 DB 에도 자격증명 컬럼이 없습니다(Flyway V6 에서 삭제).
 거래·로그인은 `.env` 의 `TRADING_OWNER_USER_ID` 로 지정한 사용자만 가능합니다.
 KIS 계좌번호(`account_num`)와 HTS ID(`hts_id.txt`)도 같은 방식으로 이 디렉터리에서만 읽습니다(파일 끝 개행 없이 저장).
 브로커 키를 쓰지 않는다면 브로커 파일들은 빈 파일로 두면 됩니다(파일 자체는 존재해야 compose 가 기동됩니다).
@@ -36,8 +35,6 @@ KIS 계좌번호(`account_num`)와 HTS ID(`hts_id.txt`)도 같은 방식으로 �
 ```bash
 mkdir -p secrets
 openssl rand -hex 32 > secrets/secret_key.txt
-# Fernet 키 = 32바이트의 URL-safe base64
-openssl rand -base64 32 | tr '+/' '-_' > secrets/credential_enc_key.txt
 # 미사용 브로커 키는 빈 파일로 생성
 : > secrets/kis_app_key.txt;  : > secrets/kis_app_secret.txt
 : > secrets/account_num;       : > secrets/hts_id.txt
@@ -50,9 +47,6 @@ openssl rand -base64 32 | tr '+/' '-_' > secrets/credential_enc_key.txt
 # S3 호환 스토리지의 액세스 키 — 미사용 시 빈 파일(로컬 백업만 동작, 영향 없음)
 : > secrets/s3_backup_access_key_id.txt; : > secrets/s3_backup_secret_access_key.txt
 ```
-
-> 🔁 `credential_enc_key.txt` 를 교체하면 DB 에 남은 과거 암호문을 더 이상 복호화할 수 없습니다
-> (현재 코드는 읽지 않으므로 운영 영향은 없음).
 
 ## 파일 권한(선택, 권장)
 

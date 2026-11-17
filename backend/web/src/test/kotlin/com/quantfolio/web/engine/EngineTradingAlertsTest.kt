@@ -14,7 +14,6 @@ import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
-import com.quantfolio.security.CredentialCipher
 import com.quantfolio.security.Passwords
 import com.quantfolio.test.ContainersConfig
 import com.quantfolio.web.auth.SESSION_COOKIE
@@ -57,22 +56,13 @@ class EngineTradingAlertsTest(
     @Autowired private val alerts: AlertRepository,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val cf: RedisConnectionFactory,
-    @Autowired private val cipher: CredentialCipher,
 ) {
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
 
-    private inner class Me(withKeys: Boolean = false, accountNo: String? = "50012345-01") {
-        val user: User = users.save(
-            User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")).apply {
-                if (withKeys) {
-                    kisAppKey = cipher.encrypt("k")
-                    kisAppSecret = cipher.encrypt("s")
-                    kisAccountNo = accountNo
-                }
-            },
-        )
+    private inner class Me {
+        val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
         val cookie = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
         fun strategy(status: StrategyStatus = StrategyStatus.backtested) = strategies.save(Strategy(user.id!!, "s-$status", config = mapOf("type" to "rsi"), status = status))
     }
@@ -94,7 +84,7 @@ class EngineTradingAlertsTest(
     fun unauthorizedStartDoesNotChangeStatusOrPublishControl() {
         val (container, q) = listen(RedisKeys.ENGINE_CONTROL)
         try {
-            val me = Me(withKeys = true)
+            val me = Me()
             val owner = Me()
             val s = me.strategy()
             for (ownerId in listOf(null, owner.user.id)) {
@@ -148,8 +138,8 @@ class EngineTradingAlertsTest(
 
     @Test
     fun userProfileShowsServerBrokerStateOnlyToOwner() {
-        val owner = Me(withKeys = true, accountNo = "12345678-02")
-        val other = Me(withKeys = true)
+        val owner = Me()
+        val other = Me()
         willReturn(owner.user.id).given(props).tradingOwnerUserId
         willReturn(QuantfolioProperties.Kis(appKey = "test-key", appSecret = "test-secret", accountNo = "50012345-01")).given(props).kis
         willReturn(QuantfolioProperties.Toss(appKey = "test-toss-key", appSecret = "test-toss-secret")).given(props).toss

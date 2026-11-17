@@ -170,16 +170,10 @@ class AuthControllerTest(
         mvc.get("/api/auth/me") { cookie(Cookie(SESSION_COOKIE, "bogus")) }.andExpect { status { isUnauthorized() } }
     }
 
-    /** 소유자라도 DB 에 남은 옛 자격증명·계좌는 쓰지 않는다(서버 설정 미설정이면 없음으로 표시). */
+    /** 소유자라도 서버 설정이 없으면 자격증명·계좌는 없음으로 표시한다. */
     @Test
-    fun meIgnoresLegacyDbCredentialsAndAccount() {
+    fun meShowsNoCredentialsWithoutServerSettings() {
         val user = ownerUser()
-        user.kisAppKey = "enc"
-        user.kisAppSecret = "legacy-secret"
-        user.kisAccountNo = "50012345-01"
-        user.tossAppKey = "legacy-toss-key"
-        user.tossAppSecret = "legacy-toss-secret"
-        users.save(user)
         mvc.get("/api/auth/me") { cookie(sessionFor(user)) }.andExpect {
             status { isOk() }
             jsonPath("$.id") { value(user.id!!) }

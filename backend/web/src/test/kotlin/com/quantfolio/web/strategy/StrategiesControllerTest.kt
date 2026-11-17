@@ -11,7 +11,6 @@ import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
-import com.quantfolio.security.CredentialCipher
 import com.quantfolio.security.Passwords
 import com.quantfolio.test.ContainersConfig
 import com.quantfolio.web.auth.SESSION_COOKIE
@@ -25,7 +24,6 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.http.MediaType
-import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
@@ -53,8 +51,6 @@ class StrategiesControllerTest(
     @Autowired private val backtests: BacktestRepository,
     @Autowired private val positions: PositionRepository,
     @Autowired private val redis: StringRedisTemplate,
-    @Autowired private val cipher: CredentialCipher,
-    @Autowired private val jdbc: JdbcTemplate,
 ) {
     @MockitoSpyBean lateinit var props: QuantfolioProperties
     private val json = JsonMapper.builder().build()
@@ -300,71 +296,5 @@ class StrategiesControllerTest(
         mvc.delete("/api/strategies/${ok.id}") { cookie(me.cookie) }.andExpect { status { isNoContent() } }
         assertFalse(strategies.existsById(ok.id!!))
         assertFalse(backtests.existsById(bt.id!!)) // DB FK CASCADE
-    }
-
-    @Test
-    fun legacyAccountChangeTriggerDisablesBalanceInferenceButKeyRotationDoesNot() {
-        val me = Me()
-        fun credentials(account: String, broker: String = "kis", key: String = "APPKEY", who: Me = me) {
-            jdbc.update(
-                "update users set broker = ?, kis_app_key = ?, kis_app_secret = ?, kis_account_no = ? where id = ?",
-                broker, cipher.encrypt(key), cipher.encrypt("SECRET"), account, who.user.id,
-            )
-        }
-        fun blocked(who: Me = me) = jdbc.queryForObject(
-            "select kis_balance_reconcile_blocked from users where id = ?",
-            Boolean::class.java, who.user.id,
-        ) == true
-
-        credentials("12345678-01")
-        assertFalse(blocked())
-        credentials("1234567801", key = "NEWKEY")
-        assertFalse(blocked())
-        credentials("12345678-02")
-        assertTrue(blocked())
-        credentials("12345678-01")
-        assertTrue(blocked())
-
-        val other = Me()
-        credentials("12345678-01", who = other)
-        credentials("12345678-01", broker = "toss", who = other)
-        credentials("12345678-01", who = other)
-        assertTrue(blocked(other))
-
-        val withWhitespace = Me()
-        credentials("\t12345678-01", who = withWhitespace)
-        assertFalse(blocked(withWhitespace))
-        credentials("\t12345678-02", who = withWhitespace)
-        assertTrue(blocked(withWhitespace))
-
-        val alreadyLive = Me()
-        val live = alreadyLive.strategy()
-        live.status = StrategyStatus.live
-        strategies.saveAndFlush(live)
-        credentials("12345678-01", who = alreadyLive)
-        assertTrue(blocked(alreadyLive))
-    }
-
-    @Test
-    fun credentialRoutesRejectWrites() {
-        val me = Me()
-        for (route in listOf("credentials", "toss-quote")) {
-            mvc.put("/api/kis/$route") {
-                cookie(me.cookie)
-                contentType = MediaType.APPLICATION_JSON
-                content = """{"broker":"toss","kis_app_key":"APPKEY","kis_app_secret":"SECRET","kis_account_no":"1234"}"""
-            }.andExpect {
-                status { isForbidden() }
-                jsonPath("$.detail") { value("증권사 자격증명은 서버 설정에서 관리합니다.") }
-            }
-        }
-        val saved = users.findById(me.user.id!!).orElseThrow()
-        assertEquals("kis", saved.broker)
-        assertNull(saved.kisAppKey)
-        assertNull(saved.kisAppSecret)
-        assertNull(saved.kisAccountNo)
-        assertNull(saved.tossAppKey)
-        assertNull(saved.tossAppSecret)
-        assertNull(saved.tossAccountNo)
     }
 }

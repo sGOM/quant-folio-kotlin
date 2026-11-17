@@ -21,7 +21,7 @@ paths:
 | 런타임 이미지 `-noble` 고정 → pg_dump 16(빌드 때 검사) | 낮으면 덤프 거부, 17+ 면 `transaction_timeout` 이 들어가 pg16 복원 오류 |
 | exec 형식 CMD, engine `stop_grace_period: 60s` > `EngineRuntime.STOP_WAIT_SEC`(전 러너 병렬 대기) | SIGTERM 못 받거나 러너 정리 중 SIGKILL |
 | `backend/gradlew` 는 git 실행 비트(100755) | Linux CI·docker build 에서 Permission denied (Windows 체크아웃은 못 느낀다) |
-| 시크릿은 `/run/secrets/<이름>` → configtree → `TrimmedSecrets` 가 앞뒤 공백 제거(원본 `strip()`, `SecretsConfigTreeTest`) | 개행이 포함된 API 키로 인증 실패·Fernet 키 형식 오류 |
+| 시크릿은 `/run/secrets/<이름>` → configtree → `TrimmedSecrets` 가 앞뒤 공백 제거(원본 `strip()`, `SecretsConfigTreeTest`) | 개행이 포함된 API 키로 인증 실패 |
 | web `server.forward-headers-strategy: native` | Caddy HTTPS(TLS 종료) 뒤 같은 출처 요청이 CORS 403 — 폰 로그인 불가(`ProxyHttpsTest`) |
 | compose 백엔드에 고정 `image:` 태그 금지 | 태그는 전역 — 격리 스모크 빌드가 운영 이미지를 덮어씀 |
 

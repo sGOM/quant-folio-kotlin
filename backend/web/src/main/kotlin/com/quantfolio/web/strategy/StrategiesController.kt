@@ -308,8 +308,4 @@ class KisController(
         }
         return QuoteOut(q.symbol, q.price.toDouble(), q.change.toDouble(), q.changeRate.toDouble(), q.volume, q.high.toDouble(), q.low.toDouble(), q.open.toDouble(), q.currency)
     }
-
-    @PutMapping("/credentials", "/toss-quote")
-    fun credentials(@CurrentUser user: User): Nothing =
-        throw ApiException(HttpStatus.FORBIDDEN, "증권사 자격증명은 서버 설정에서 관리합니다.")
 }

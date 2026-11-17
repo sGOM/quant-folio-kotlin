@@ -6,7 +6,6 @@ name: quantfolio
 # (quantfolio-core.yml) — 평문 env 보다 우선, docker inspect·이미지 레이어에 남지 않는다.
 x-backend-secrets: &backend-secrets
   - secret_key
-  - credential_enc_key
   - kis_app_key
   - kis_app_secret
   - kis_account_no
@@ -138,8 +137,6 @@ services:
 secrets:
   secret_key:
     file: ./secrets/secret_key.txt
-  credential_enc_key:
-    file: ./secrets/credential_enc_key.txt
   kis_app_key:
     file: ./secrets/kis_app_key.txt
   kis_app_secret:

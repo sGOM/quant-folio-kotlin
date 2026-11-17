@@ -78,7 +78,7 @@ class LegacyAccountLinksTest(
     }
 
     private inner class Me {
-        val user = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x", kisAccountNo = "A"))
+        val user = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x"))
         val uid = user.id!!
         val strategy = strategies.save(Strategy(uid, "legacy", config = mapOf("type" to "rsi"))).id!!
         private val session = Cookie(SESSION_COOKIE, sessions.create(uid))
@@ -195,14 +195,13 @@ class LegacyAccountLinksTest(
         val me = Me()
         val first = ReadOnlyBroker()
         val second = ReadOnlyBroker("account-B")
-        given(brokers.forUser(anyUser())).willAnswer { if (it.getArgument<User>(0).kisAccountNo == "A") first else second }
+        var switched = false // 서버 계좌 설정이 증거 조회 도중 바뀐 상황
+        given(brokers.forUser(anyUser())).willAnswer { if (switched) second else first }
         val order = me.order("OLD")
         val position = me.holding()
         first.evidence["OLD"] = proof(order)
         first.holdings = {
-            val user = users.findById(me.uid).orElseThrow()
-            user.kisAccountNo = "B"
-            users.saveAndFlush(user)
+            switched = true
             balance("2", "1000")
         }
         call(me, apply = true, expectedStatus = 409)

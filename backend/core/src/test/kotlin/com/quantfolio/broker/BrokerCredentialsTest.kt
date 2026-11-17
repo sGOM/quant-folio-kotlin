@@ -39,7 +39,7 @@ class BrokerCredentialsTest {
     }
 
     @Test
-    fun orderAndQuoteClientsIgnoreLegacyDbCredentials() {
+    fun orderAndQuoteClientsUseServerCredentials() {
         val credentials = BrokerCredentials(props.copy(tradingOwnerUserId = 7), StringRedisTemplate(), http, Clock.systemUTC())
         val user = user(7)
         assertEquals(ResolvedCredentials("kis", "server-kis", "server-kis-secret", "50012345-01"), credentials.resolve(user))
@@ -51,7 +51,7 @@ class BrokerCredentialsTest {
     }
 
     @Test
-    fun savedDatabaseCredentialsCannotReplaceMissingServerCredentials() {
+    fun missingServerCredentialsDisableClients() {
         val credentials = BrokerCredentials(QuantfolioProperties(tradingOwnerUserId = 7), StringRedisTemplate(), http, Clock.systemUTC())
         val user = user(7)
         assertNull(credentials.resolve(user))
@@ -59,9 +59,5 @@ class BrokerCredentialsTest {
         assertThrows<BrokerError> { credentials.forUser(user) }
     }
 
-    private fun user(id: Int) = User(
-        email = "reader@example.com", passwordHash = "unused", id = id,
-        kisAppKey = "legacy-kis", kisAppSecret = "legacy-kis-secret", kisAccountNo = "12345678-01",
-        tossAppKey = "legacy-toss", tossAppSecret = "legacy-toss-secret", tossAccountNo = "34",
-    )
+    private fun user(id: Int) = User(email = "reader@example.com", passwordHash = "unused", id = id)
 }
