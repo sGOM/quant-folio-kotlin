@@ -1,6 +1,7 @@
-package com.quantfolio.market
+package com.quantfolio.metrics
 
 import com.quantfolio.common.MarketClock
+import com.quantfolio.market.MarketCalendar
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Series
 import org.springframework.stereotype.Component

@@ -1,9 +1,8 @@
 package com.quantfolio.metrics
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.quantfolio.backtest.Signals
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.store.IndexBar
+import com.quantfolio.quant.Indicators
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Series
 import com.quantfolio.quant.Stats
@@ -32,17 +31,17 @@ data class TechIndicators(
                 val hi = close.values.takeLast(252).filter { !it.isNaN() }.maxOrNull() ?: Double.NaN
                 if (hi > 0) high52 = Num.safe(last / hi)
             }
-            val rsi = if (n >= 28) Num.safe(Signals.rsi(close, 14).last()) else null
+            val rsi = if (n >= 28) Num.safe(Indicators.rsi(close, 14).last()) else null
             val vol = MetricsCommon.computeVolAnn(close.tail(253))
             val mdd = MetricsCommon.computeMdd(close.tail(252))
             var aligned: Boolean? = null
             if (n >= 120) {
-                val s = listOf(5, 20, 60, 120).map { Signals.sma(close, it).last() }
+                val s = listOf(5, 20, 60, 120).map { Indicators.sma(close, it).last() }
                 if (s.all { it.isFinite() }) aligned = s[0] > s[1] && s[1] > s[2] && s[2] > s[3]
             }
             var above: Boolean? = null
             if (n >= 200) {
-                val sma200 = Signals.sma(close, 200).last()
+                val sma200 = Indicators.sma(close, 200).last()
                 if (sma200.isFinite()) above = last > sma200
             }
             return TechIndicators(high52, rsi, vol, mdd, aligned, above, n)

@@ -4,9 +4,9 @@ import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.store.Bar
+import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
-import com.quantfolio.rebalance.Cfg
 import org.slf4j.LoggerFactory
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate

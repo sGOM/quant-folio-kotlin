@@ -3,7 +3,6 @@ package com.quantfolio.metrics
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.DataSourceError

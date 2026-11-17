@@ -1,6 +1,5 @@
-package com.quantfolio.market.ohlcv
+package com.quantfolio.worker
 
-import com.quantfolio.domain.TestApp
 import com.quantfolio.domain.strategy.Strategy
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.user.User
@@ -18,7 +17,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.assertTrue
 
-@SpringBootTest(classes = [TestApp::class])
+@SpringBootTest
 @Import(ContainersConfig::class)
 class UniverseBuilderTest(
     @Autowired private val strategies: StrategyRepository,

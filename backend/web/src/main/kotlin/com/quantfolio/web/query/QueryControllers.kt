@@ -2,9 +2,9 @@ package com.quantfolio.web.query
 
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.user.User
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.market.symbols.SymbolInfo
+import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.PanicOut
 import com.quantfolio.metrics.PanicService
 import com.quantfolio.metrics.RecommendOut

@@ -1,4 +1,4 @@
-package com.quantfolio.market
+package com.quantfolio.metrics
 
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Series

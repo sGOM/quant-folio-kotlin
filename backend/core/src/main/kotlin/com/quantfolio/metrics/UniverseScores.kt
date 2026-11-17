@@ -3,7 +3,6 @@ package com.quantfolio.metrics
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource

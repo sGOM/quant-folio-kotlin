@@ -9,8 +9,8 @@ import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.StrategyRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.market.store.PriceTickStore
+import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.pyFloat
-import com.quantfolio.rebalance.Cfg
 import com.quantfolio.web.api.ApiException
 import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser

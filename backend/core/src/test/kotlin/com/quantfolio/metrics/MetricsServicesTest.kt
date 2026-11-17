@@ -2,7 +2,6 @@ package com.quantfolio.metrics
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.krx.KrxMdc
 import com.quantfolio.market.krx.KrxSession
 import com.quantfolio.market.krx.KrxStockApi

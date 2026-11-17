@@ -1,11 +1,17 @@
 package com.quantfolio.backtest
 
 import com.quantfolio.quant.BoolSeries
+import com.quantfolio.quant.Indicators.atr
+import com.quantfolio.quant.Indicators.crossDown
+import com.quantfolio.quant.Indicators.crossUp
+import com.quantfolio.quant.Indicators.ema
+import com.quantfolio.quant.Indicators.macd
+import com.quantfolio.quant.Indicators.rsi
+import com.quantfolio.quant.Indicators.sma
 import com.quantfolio.quant.Series
 import com.quantfolio.quant.constant
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyFloat
-import com.quantfolio.quant.rowMax
 
 /**
  * 단일종목 매매 신호(원본 `backtest/signals.py`). 진입·청산은 **그날 종가로 확정된 사건**(교차·돌파)이다.
@@ -16,48 +22,6 @@ import com.quantfolio.quant.rowMax
 object Signals {
     private val OHLC_TYPES = setOf("atr_trailing", "volatility_breakout", "keltner", "stochastic", "obv_trend")
     private val OHLC_SOURCES = setOf("open", "high", "low", "volume")
-
-    // ── 지표 ──
-    fun sma(close: Series, n: Int): Series = close.rolling(n, n).mean()
-
-    fun ema(close: Series, n: Int): Series = close.ewm(span = n.toDouble(), adjust = false, minPeriods = n).mean()
-
-    fun rsi(close: Series, period: Int): Series {
-        val delta = close.diff()
-        val gain = delta.clip(lo = 0.0)
-        val loss = -delta.clip(hi = 0.0)
-        val avgGain = gain.ewm(alpha = 1.0 / period, adjust = false, minPeriods = period).mean()
-        val avgLoss = loss.ewm(alpha = 1.0 / period, adjust = false, minPeriods = period).mean()
-        val rs = avgGain / avgLoss
-        return Series(
-            close.index,
-            DoubleArray(close.size) { i ->
-                val g = avgGain[i]
-                val l = avgLoss[i]
-                when {
-                    g == 0.0 && l == 0.0 -> 50.0 // 무변동
-                    l != 0.0 -> 100 - 100 / (1 + rs[i]) // NaN 이면 NaN
-                    else -> 100.0 // 손실 0 (NaN != 0 은 참이라 위 분기)
-                }
-            },
-        )
-    }
-
-    fun macd(close: Series, fast: Int, slow: Int, signal: Int): Pair<Series, Series> {
-        val line = ema(close, fast) - ema(close, slow)
-        return line to line.ewm(span = signal.toDouble(), adjust = false, minPeriods = signal).mean()
-    }
-
-    fun atr(high: Series, low: Series, close: Series, n: Int): Series {
-        val prev = close.shift(1)
-        val tr = rowMax(high - low, (high - prev).abs(), (low - prev).abs())
-        return tr.ewm(alpha = 1.0 / n, adjust = false, minPeriods = n).mean()
-    }
-
-    /** a 가 b 를 위로 교차(오늘 a>b, 어제 a<=b). NaN 비교는 거짓. */
-    fun crossUp(a: Series, b: Series) = (a gt b) and (a.shift(1) le b.shift(1))
-
-    fun crossDown(a: Series, b: Series) = (a lt b) and (a.shift(1) ge b.shift(1))
 
     // ── 설정 읽기(원본 int(cfg.get(k, d)) / float(...)) ──
     private fun Map<String, Any?>.i(key: String, default: Int): Int = (if (containsKey(key)) this[key] else default).let { v ->

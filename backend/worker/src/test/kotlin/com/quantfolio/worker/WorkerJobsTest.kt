@@ -16,7 +16,6 @@ import com.quantfolio.market.kis.KisStockMaster
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
-import com.quantfolio.market.ohlcv.UniverseBuilder
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.news.NewsIngestor
 import com.quantfolio.test.ContainersConfig

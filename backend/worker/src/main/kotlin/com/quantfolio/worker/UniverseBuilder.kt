@@ -1,17 +1,12 @@
-package com.quantfolio.market.ohlcv
+package com.quantfolio.worker
 
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.DataSourceError
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
-import java.time.LocalDate
-
-/** 지수 구성종목 조회(테스트에서 교체할 수 있게 분리). [com.quantfolio.market.krx.KrxIndexService] 가 구현한다. */
-fun interface IndexMembers {
-    fun indexMembers(asOf: LocalDate, index: String): List<String>
-}
 
 /** 야간 일봉 적재 대상(원본 `data/ingest.build_universe`) = 지수 구성종목 ∪ 등록 전략이 쓰는 종목. */
 @Component

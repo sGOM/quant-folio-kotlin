@@ -2,7 +2,6 @@ package com.quantfolio.metrics
 
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
-import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.kofia.KofiaClient
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.PriceHistory
