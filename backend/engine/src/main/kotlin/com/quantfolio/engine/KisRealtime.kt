@@ -243,11 +243,21 @@ class FillNoticeApplier(
     }
 }
 
-/** KIS WebSocket 한 연결 — 텍스트 프레임을 큐로 넘기고, 닫히면 null 을 넣어 수신 루프를 끝낸다. internal: 모의투자 확인 도구(test `KisProbe`)가 재사용한다. */
+/**
+ * KIS WebSocket 한 연결 — 텍스트 프레임을 큐로 넘기고, 닫히면 null 을 넣어 수신 루프를 끝낸다. internal: 모의투자 확인 도구(test `KisProbe`)가 재사용한다.
+ * 연결마다 자기 HttpClient 를 갖고 [close]·핸드셰이크 실패 때 닫는다 — 안 닫으면 클라이언트마다 selector 스레드가 GC 될 때까지 남는다.
+ */
 internal class KisSocket(url: String) : WebSocket.Listener {
     private val frames = LinkedBlockingQueue<Any>()
     private val buf = StringBuilder()
-    val ws: WebSocket = HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(url), this).join()
+    private val serverClosed = CountDownLatch(1)
+    private val client = HttpClient.newHttpClient()
+    val ws: WebSocket = try {
+        client.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(url), this).join()
+    } catch (e: Exception) {
+        client.shutdownNow()
+        throw e
+    }
 
     override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*>? {
         buf.append(data)
@@ -261,11 +271,13 @@ internal class KisSocket(url: String) : WebSocket.Listener {
 
     override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*>? {
         frames.add(CLOSED)
+        serverClosed.countDown()
         return null
     }
 
     override fun onError(webSocket: WebSocket, error: Throwable) {
         frames.add(error)
+        serverClosed.countDown()
     }
 
     /** 다음 텍스트 프레임. 닫혔으면 null, 오류면 예외. stop 확인을 위해 1초마다 깨어난다. */
@@ -283,10 +295,30 @@ internal class KisSocket(url: String) : WebSocket.Listener {
 
     fun send(text: String) = ws.sendText(text, true).join()
     fun pong(text: String) = ws.sendPong(ByteBuffer.wrap(text.toByteArray())).join()
-    fun close() = runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "").join() }
+    /**
+     * close 프레임을 보내고 서버의 close(또는 끊김)를 [CLOSE_WAIT_SECONDS] 까지 기다린 뒤 소켓·클라이언트를 버린다.
+     * JDK WebSocket 은 sendClose 만으로는 TCP 를 닫지 않고(FIN 도 안 보낸다) 서버 쪽 close·EOF 를 읽어야 닫는다 — 그래서 끝에 abort 로 닫는다.
+     * 인터럽트되면 기다리지 않고 바로 닫는다(인터럽트 상태는 되살린다).
+     */
+    fun close() {
+        try {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "").get(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)
+            serverClosed.await(CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (e: Exception) {
+            // 전송 실패·시간 초과 — 아래에서 닫는다
+        } finally {
+            ws.abort()
+            client.shutdownNow()
+        }
+    }
 
     private companion object {
         val CLOSED = Any()
+
+        /** close 전송·서버 close 대기 각각의 상한(초). 측정값 아님 — 원본 websockets 의 close_timeout 기본값은 10초. */
+        const val CLOSE_WAIT_SECONDS = 2L
     }
 }
 

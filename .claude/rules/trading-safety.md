@@ -71,3 +71,4 @@ paths:
 ## 함정
 
 - 소유자 혼자 쓰므로 시크릿에 있는 증권사 키를 설정 화면에 재등록하도록 안내하지 않는다(2026-11-16 사용자 교정). 로그인 계정과 증권사 자격증명은 별개다.
+- JDK WebSocket 은 `sendClose` 만으로 TCP 를 닫지 않는다(FIN 도 안 보냄 — 서버 close·EOF 를 읽어야 닫힘). `KisSocket.close()` 는 짧게 기다린 뒤 `abort` + HttpClient `shutdownNow` 로 끝내야 한다. 빼면 정지 뒤 KIS 세션이 열린 채 남는다(2026-11-17 모의 실측에서 엔진 컨테이너에 CLOSE_WAIT 소켓 2개 관측).

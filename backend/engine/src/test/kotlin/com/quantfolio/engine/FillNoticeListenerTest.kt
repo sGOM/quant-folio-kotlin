@@ -194,12 +194,15 @@ class FakeKisWs : AutoCloseable {
     val url = "ws://127.0.0.1:${server.localPort}/tryitout"
     private val frames = LinkedBlockingQueue<Pair<Int, String>>() // (opcode, payload)
     private val subscribed = CountDownLatch(1)
+    /** 서버 쪽에서 본 연결이 끝났다(클라이언트가 소켓을 닫아 EOF·리셋). close 프레임엔 응답하지 않는다 — 클라이언트가 스스로 닫아야 한다. */
+    val ended = CountDownLatch(1)
     @Volatile private var socket: Socket? = null
     private lateinit var out: OutputStream
 
     init {
         Thread.ofVirtual().name("fake-kis-ws").start {
             runCatching { serve(server.accept().also { socket = it }) }
+            ended.countDown()
         }
     }
 
@@ -231,9 +234,10 @@ class FakeKisWs : AutoCloseable {
                 continue
             }
             frames.add(opcode to text)
-            if (opcode == 8) return
         }
     }
+
+    fun receivedClose() = frames.any { it.first == 8 }
 
     private fun readLine(input: InputStream): String {
         val sb = StringBuilder()
