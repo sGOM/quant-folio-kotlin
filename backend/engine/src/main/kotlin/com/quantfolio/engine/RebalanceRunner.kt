@@ -1,7 +1,6 @@
 package com.quantfolio.engine
 
 import com.quantfolio.alert.pyIsoformat
-import com.quantfolio.backtest.PortfolioBacktest
 import com.quantfolio.backtest.RiskCaps
 import com.quantfolio.backtest.Signals
 import com.quantfolio.backtest.Tracking
@@ -262,7 +261,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val riskLayer = Cfg.map(cfg, "risk_layer")
         val hasRuleType = Cfg.truthy(rule["type"])
         val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it) } ?: emptyMap()
-        val universe = if (hasRuleType) PortfolioBacktest.dynamicUniverse(Panel.fromSeries(history), pool, rule) else pool
+        val universe = if (hasRuleType) Rebalance.dynamicUniverse(Panel.fromSeries(history), pool, rule) else pool
         val planCfg = cfg + ("universe" to universe)
         var scores: Map<String, Double>? = null
         if (method == "score") {

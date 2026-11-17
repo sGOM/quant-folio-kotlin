@@ -4,6 +4,7 @@ import com.quantfolio.backtest.PriceData
 import com.quantfolio.backtest.Signals
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.quant.Cfg
+import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
 import java.time.LocalDate
 import java.time.temporal.IsoFields
@@ -217,5 +218,18 @@ object Rebalance {
         "weekly" -> listOf(d.get(IsoFields.WEEK_BASED_YEAR), d.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR))
         "quarterly" -> listOf(d.year, (d.monthValue - 1) / 3)
         else -> listOf(d.year, d.monthValue)
+    }
+
+    /** 후보풀에서 d 시점 상대강도 상위 pick(이력이 lookback 미만인 종목은 자연 제외). 실거래 러너와 공유. */
+    fun dynamicUniverse(hist: Panel, pool: List<String>, rule: Map<String, Any?>): List<String> {
+        val lookback = Cfg.int(Cfg.get(rule, "lookback", 120))
+        val pick = Cfg.int(Cfg.get(rule, "pick", 20))
+        return pool.mapNotNull { code ->
+            if (!hist.hasSymbol(code)) return@mapNotNull null
+            val c = hist.column(code).dropNa()
+            if (c.size < lookback + 1) return@mapNotNull null
+            val p0 = c[c.size - lookback - 1]
+            if (p0 > 0) code to c.last() / p0 - 1.0 else null
+        }.sortedByDescending { it.second }.take(pick).map { it.first }
     }
 }

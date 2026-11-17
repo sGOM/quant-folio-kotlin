@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
-import kotlin.math.floor
 import kotlin.math.pow
 
 /** 리밸런싱일 d 의 후보풀 공급(시점별 지수 구성종목 → 생존편향 제거). */
@@ -36,10 +35,6 @@ typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<St
  */
 object PortfolioBacktest {
     private val log = LoggerFactory.getLogger(javaClass)
-    // KRX 가격제한폭 ±30%(전일 종가 대비)
-    private const val LIMIT_DOWN = 0.7
-    private const val LIMIT_UP = 1.3
-    private val PANIC_RANK = mapOf("normal" to 0, "caution" to 1, "warning" to 2, "panic" to 3)
 
     // KRX 호가단위(2023-01-25 개정): (가격 미만 상한, 호가단위)
     private val TICKS = listOf(2_000.0 to 1.0, 5_000.0 to 5.0, 20_000.0 to 10.0, 50_000.0 to 50.0, 200_000.0 to 100.0, 500_000.0 to 500.0, Double.POSITIVE_INFINITY to 1_000.0)
@@ -50,136 +45,6 @@ object PortfolioBacktest {
         if (!price.isFinite() || price <= 0) return price
         val t = tickSize(price)
         return Math.rint(price / t) * t
-    }
-
-    private fun iso(d: LocalDate) = "${d}T00:00:00"
-
-    private data class PanicParams(
-        val armRank: Int, val armWindow: Int, val holdDays: Int, val profitReclaim: Double, val knifeStop: Double,
-        val baseExposure: Double, val panicExposure: Double, val scaleInConfirm: Double, val maRecovery: Int, val eventOnly: Boolean,
-    )
-
-    private fun panicParams(po: Map<String, Any?>): PanicParams {
-        fun f(k: String, d: Double) = po[k]?.let { Cfg.num(it) } ?: d
-        return PanicParams(
-            PANIC_RANK[(Cfg.or(po, "arm_level", "warning")).toString()] ?: 2,
-            Cfg.int(Cfg.or(po, "arm_window", 5)), Cfg.int(Cfg.or(po, "hold_days", 20)),
-            f("profit_reclaim_pct", 0.5), f("knife_stop_pct", 0.05), f("base_exposure", 0.70), f("panic_exposure", 1.00),
-            f("scale_in_confirm", 0.5), Cfg.int(Cfg.or(po, "ma_recovery_period", 20)), Cfg.truthy(Cfg.get(po, "event_only", false)),
-        )
-    }
-
-    /**
-     * 패닉 오버레이 상태기계: IDLE →(패닉 수준 도달) ARMED →(반등 확인) 진입 →(칼날·익절·보유기한) IDLE.
-     * 진입은 event_only 면 CONFIRMED 한 단계, 아니면 CONFIRMED_HALF →(MA 회복) CONFIRMED_FULL 로 증액.
-     * `i` 는 시뮬레이션 일 순번(기한 계산), `di` 는 패널 행 번호(시계열 조회).
-     */
-    private class PanicOverlay(
-        val params: PanicParams,
-        private val level: Array<String?>,
-        private val hard: BooleanArray,
-        private val close: Series,
-        private val low: Series,
-    ) {
-        private enum class State { IDLE, ARMED, CONFIRMED_HALF, CONFIRMED_FULL, CONFIRMED }
-
-        private val prevClose = close.shift(1)
-        private val ma = close.rolling(params.maRecovery, maxOf(5, params.maRecovery / 2)).mean()
-        private var state = State.IDLE
-        private var armDeadline = -1
-        private var capitClose: Double? = null
-        private var capitLow: Double? = null
-        private var capitDrop: Double? = null
-        private var confirmIdx = -1
-        var numEvents = 0
-            private set
-
-        /** 진입해 있는 동안 — 레짐 청산·정기 리밸런싱을 억제한다. */
-        val holding get() = state == State.CONFIRMED_HALF || state == State.CONFIRMED_FULL || state == State.CONFIRMED
-
-        fun reset() {
-            state = State.IDLE
-            capitClose = null
-            capitLow = null
-            capitDrop = null
-            confirmIdx = -1
-        }
-
-        /** 하루치 전이. 매매가 필요하면 결정을, 아니면 null. `targets` 는 노출도 → 목표비중(필요할 때만 호출). */
-        fun step(i: Int, di: Int, d: LocalDate, riskOff: Boolean, journal: Journal, targets: (Double) -> Map<String, Double>): Decision? {
-            val p = params
-            val lv = level[di] ?: "nan"
-            val c = close[di]
-            val prev = prevClose[di]
-            val hasClose = !c.isNaN()
-            val hasPrev = !prev.isNaN()
-            val cc = capitClose
-            val cl = capitLow
-            val cd = capitDrop
-            when (state) {
-                State.IDLE -> if (hasClose && ((PANIC_RANK[lv] ?: 0) >= p.armRank || hard[di])) {
-                    state = State.ARMED
-                    armDeadline = i + p.armWindow
-                    capitClose = c
-                    capitLow = low[di].takeIf { !it.isNaN() } ?: c
-                    capitDrop = if (hasPrev) prev - c else null
-                    journal.marker(d, "panic_arm", "level" to lv)
-                }
-                State.ARMED -> if (i > armDeadline) {
-                    reset()
-                    journal.marker(d, "panic_arm_timeout")
-                } else if (hasClose && hasPrev && cc != null && c > cc && c > prev) {
-                    val exposure = if (p.eventOnly) p.panicExposure else p.baseExposure + p.scaleInConfirm * (p.panicExposure - p.baseExposure)
-                    val decision = Decision.rebalance("panic_confirm", targets(exposure))
-                    state = if (p.eventOnly) State.CONFIRMED else State.CONFIRMED_HALF
-                    confirmIdx = i
-                    numEvents++
-                    journal.marker(d, "panic_confirm")
-                    return decision
-                }
-                State.CONFIRMED_HALF, State.CONFIRMED_FULL, State.CONFIRMED -> {
-                    val exitReason = when {
-                        hasClose && cl != null && c <= cl * (1.0 - p.knifeStop) -> "panic_exit_knife"
-                        hasClose && cc != null && cd != null && cd > 0 && c >= cc + p.profitReclaim * cd -> "panic_exit_profit"
-                        confirmIdx >= 0 && i - confirmIdx >= p.holdDays -> "panic_exit_hold"
-                        else -> null
-                    }
-                    if (exitReason != null) {
-                        val decision = if (p.eventOnly || riskOff) Decision.liquidate(exitReason) else Decision.rebalance(exitReason, targets(p.baseExposure))
-                        reset()
-                        return decision
-                    }
-                    if (!p.eventOnly && state == State.CONFIRMED_HALF && hasClose && !ma[di].isNaN() && c > ma[di]) {
-                        val decision = Decision.rebalance("panic_scale_full", targets(p.panicExposure))
-                        state = State.CONFIRMED_FULL
-                        journal.marker(d, "panic_scale_full")
-                        return decision
-                    }
-                }
-            }
-            return null
-        }
-
-        companion object {
-            /** 패닉 일지 → 날짜별 시계열(수준·하드트리거는 마지막 관측 유지, 종가·저가는 ffill). 유효 종가가 없으면 null. */
-            fun build(dates: List<LocalDate>, panic: List<PanicDay>?, params: PanicParams): PanicOverlay? {
-                if (panic.isNullOrEmpty()) return null
-                val byDate = panic.associateBy { it.date }
-                val lv = arrayOfNulls<String>(dates.size)
-                val hd = BooleanArray(dates.size)
-                var lastLv: String? = null
-                var lastHd = false
-                dates.forEachIndexed { i, d ->
-                    byDate[d]?.let { lastLv = it.level; lastHd = it.hardTrigger }
-                    lv[i] = lastLv
-                    hd[i] = lastHd
-                }
-                val close = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.close ?: Double.NaN }).ffill()
-                if (close.values.all { it.isNaN() }) return null
-                val low = Series(dates, DoubleArray(dates.size) { byDate[dates[it]]?.low ?: Double.NaN }).ffill()
-                return PanicOverlay(params, lv, hd, close, low)
-            }
-        }
     }
 
     /** 각 주기(일/주/월/분기)에서 지정 임계(weekday·dom, 달 길이로 클램프) 이상인 첫 거래일. */
@@ -248,19 +113,6 @@ object PortfolioBacktest {
         return cols
     }
 
-    /** 후보풀에서 d 시점 상대강도 상위 pick(이력이 lookback 미만인 종목은 자연 제외). 실거래 러너와 공유. */
-    fun dynamicUniverse(hist: Panel, pool: List<String>, rule: Map<String, Any?>): List<String> {
-        val lookback = Cfg.int(Cfg.get(rule, "lookback", 120))
-        val pick = Cfg.int(Cfg.get(rule, "pick", 20))
-        return pool.mapNotNull { code ->
-            if (!hist.hasSymbol(code)) return@mapNotNull null
-            val c = hist.column(code).dropNa()
-            if (c.size < lookback + 1) return@mapNotNull null
-            val p0 = c[c.size - lookback - 1]
-            if (p0 > 0) code to c.last() / p0 - 1.0 else null
-        }.sortedByDescending { it.second }.take(pick).map { it.first }
-    }
-
     private fun scale(w: Map<String, Double>, exposure: Double): Map<String, Double> =
         if (w.isEmpty() || exposure >= 1.0 - 1e-9) w else maxOf(0.0, exposure).let { e -> w.mapValues { it.value * e } }
 
@@ -280,7 +132,7 @@ object PortfolioBacktest {
         @Suppress("UNCHECKED_CAST")
         var universe: List<String> = ctx.pool?.invoke(d) ?: (Cfg.get(ctx.config, "universe", emptyList<String>()) as List<String>)
         @Suppress("UNCHECKED_CAST")
-        (selection["universe_rule"] as? Map<String, Any?>)?.takeIf { Cfg.truthy(it) }?.let { universe = dynamicUniverse(hist, universe, it) }
+        (selection["universe_rule"] as? Map<String, Any?>)?.takeIf { Cfg.truthy(it) }?.let { universe = Rebalance.dynamicUniverse(hist, universe, it) }
         val method = Cfg.get(selection, "method", "momentum")
         val config = ctx.config + ("universe" to universe)
         val risk = Cfg.map(ctx.config, "risk_layer")
@@ -310,187 +162,6 @@ object PortfolioBacktest {
         val priceHistory = universe.filter { hist.hasSymbol(it) }.associateWith { hist.column(it).dropNa() }
         val w = Rebalance.targetWeights(priceHistory, config)
         return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
-    }
-
-    /** 체결 1회의 설정(시뮬레이션 내내 불변). */
-    private class Exec(
-        val capital: Double, val driftBand: Double, val fees: Double, val tax: Double, val slipBase: Double,
-        val integerShares: Boolean, val advCapFrac: Double, val priceLimitModel: Boolean,
-    ) {
-        companion object {
-            fun from(config: Map<String, Any?>) = Exec(
-                capital = Cfg.num(Cfg.get(config, "capital", 10_000_000)),
-                driftBand = Cfg.num(Cfg.get(config, "drift_band_pct", 0.05)),
-                fees = Cfg.num(Cfg.get(config, "fees", 0.00015)),
-                tax = Cfg.num(Cfg.get(config, "tax", 0.0020)),
-                slipBase = maxOf(0.0, Cfg.num(Cfg.get(config, "slippage_bps", 5.0).takeIf { Cfg.truthy(it) } ?: 0.0) / 10_000.0),
-                integerShares = Cfg.truthy(Cfg.get(config, "integer_shares", true)),
-                advCapFrac = Cfg.num(Cfg.or(config, "adv_participation_cap", 0.0)),
-                priceLimitModel = Cfg.truthy(Cfg.get(config, "price_limit_model", false)),
-            )
-        }
-    }
-
-    private class Book(var cash: Double) {
-        val value = LinkedHashMap<String, Double>()
-        val cost = LinkedHashMap<String, Double>()
-        val trades = mutableListOf<Map<String, Any?>>()
-        fun equity() = cash + value.values.sum()
-    }
-
-    private fun tradeRec(d: LocalDate, sym: String, side: String, amt: Double, fill: Map<String, Double>?, capital: Double, portReturn: Double, posReturn: Double?, reason: String) =
-        linkedMapOf<String, Any?>(
-            "t" to iso(d), "symbol" to sym, "side" to side, "amount" to Math.rint(amt * capital).toLong(),
-            "price" to fill?.get(sym)?.let { Num.safe(it) }, "port_return" to Num.safe(portReturn),
-            "position_return" to posReturn?.let { Num.safe(it) }, "reason" to reason,
-        )
-
-    private fun floorToShares(amt: Double, sym: String, fill: Map<String, Double>?, capital: Double): Double {
-        val price = fill?.get(sym)
-        if (price == null || price.isNaN() || price <= 0 || capital <= 0) return amt
-        val qty = floor(amt * capital / price)
-        return if (qty <= 0) 0.0 else qty * price / capital
-    }
-
-    /**
-     * 목표비중으로 리밸런싱(매도 먼저 → 매수). book 을 제자리 수정하고 (turnover, 실체결 거래대금)을 돌려준다.
-     * liquidate 면 드리프트 밴드 무시 전량 청산이며 ADV 캡이 면제된다(라이브 러너가 캡 없이 즉시 전량 매도하므로).
-     */
-    private fun applyRebalance(
-        book: Book, targets: Map<String, Double>, equity: Double, prices: Map<String, Double>, d: LocalDate, ex: Exec,
-        liquidate: Boolean, reason: String, slipMap: Map<String, Double>, advMap: Map<String, Double>?, prevPrices: Map<String, Double>?,
-    ): Pair<Double, Double> {
-        if (equity <= 0) {
-            book.cash = 0.0
-            return 0.0 to 0.0
-        }
-        fun slip(s: String) = slipMap[s] ?: ex.slipBase
-        val fill = if (ex.priceLimitModel) prices.mapValues { (_, p) -> if (p.isNaN()) p else roundToTick(p) } else prices
-        fun blocked(sym: String, side: String): Boolean {
-            if (!ex.priceLimitModel || prevPrices == null) return false
-            val cur = prices[sym]
-            val prev = prevPrices[sym]
-            if (cur == null || cur.isNaN() || prev == null || prev.isNaN() || prev <= 0) return false
-            val lower = roundToTick(prev * LIMIT_DOWN).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
-            val upper = roundToTick(prev * LIMIT_UP).takeIf { it != 0.0 && !it.isNaN() } ?: 0.0
-            return if (side == "buy") cur >= upper - 1e-6 else cur <= lower + 1e-6
-        }
-        var executed = 0.0
-        val portReturn = equity - 1.0
-        var sells = mutableListOf<Pair<String, Double>>()
-        var buys = mutableListOf<Pair<String, Double>>()
-        var turnover = 0.0
-        if (liquidate) {
-            for ((sym, v) in book.value) if (v > EPS) {
-                sells += sym to v
-                turnover += v / equity
-            }
-        } else {
-            for (sym in (targets.keys + book.value.keys).sorted()) {
-                val curVal = book.value[sym] ?: 0.0
-                val tw = targets[sym] ?: 0.0
-                val dev = tw - curVal / equity
-                val isNew = curVal <= EPS && tw > 0.0
-                val isExit = tw <= 0.0 && curVal > EPS
-                if (!(isNew || isExit) && kotlin.math.abs(dev) <= ex.driftBand) continue
-                turnover += kotlin.math.abs(dev)
-                if (dev < 0) sells += sym to -dev * equity else buys += sym to dev * equity
-            }
-        }
-        if (ex.advCapFrac > 0 && advMap != null && !liquidate) {
-            fun cap(sym: String, amt: Double): Double {
-                if (ex.capital <= 0) return amt
-                val adv = advMap[sym]
-                if (adv == null || !adv.isFinite() || adv <= 0) return amt
-                return minOf(amt, ex.advCapFrac * adv / ex.capital)
-            }
-            sells = sells.map { (s, a) -> s to cap(s, a) }.toMutableList()
-            buys = buys.map { (s, a) -> s to cap(s, a) }.toMutableList()
-        }
-        var cash = equity - book.value.values.sum()
-        for ((sym, a0) in sells) {
-            if (blocked(sym, "sell")) continue
-            val curVal = book.value[sym] ?: 0.0
-            var amt = a0
-            val fullExit = amt >= curVal - 1e-9
-            if (ex.integerShares && !fullExit) amt = floorToShares(amt, sym, fill, ex.capital)
-            amt = minOf(amt, curVal)
-            if (amt <= EPS) continue
-            cash += amt * (1.0 - ex.fees - ex.tax - slip(sym))
-            val frac = if (curVal > 0) amt / curVal else 0.0
-            val costPortion = (book.cost[sym] ?: 0.0) * frac
-            val posRet = if (costPortion > EPS) amt / costPortion - 1.0 else null
-            book.value[sym] = curVal - amt
-            book.cost[sym] = (book.cost[sym] ?: 0.0) - costPortion
-            if (book.value.getValue(sym) <= EPS) {
-                book.value.remove(sym)
-                book.cost.remove(sym)
-            }
-            book.trades += tradeRec(d, sym, "sell", amt, fill, ex.capital, portReturn, posRet, reason)
-            executed += amt
-        }
-        var bs = buys.filter { !blocked(it.first, "buy") }
-        if (ex.integerShares) bs = bs.map { (s, a) -> s to floorToShares(a, s, fill, ex.capital) }
-        val totalBuyCost = bs.sumOf { (s, a) -> a * (1.0 + ex.fees + slip(s)) }
-        val k = if (totalBuyCost > cash && totalBuyCost > 0) cash / totalBuyCost else 1.0
-        for ((sym, a0) in bs) {
-            val amt = a0 * k
-            if (amt <= EPS) continue
-            cash -= amt * (1.0 + ex.fees + slip(sym))
-            book.value[sym] = (book.value[sym] ?: 0.0) + amt
-            book.cost[sym] = (book.cost[sym] ?: 0.0) + amt
-            book.trades += tradeRec(d, sym, "buy", amt, fill, ex.capital, portReturn, null, reason)
-            executed += amt
-        }
-        book.cash = cash
-        return turnover to executed
-    }
-
-    /**
-     * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없고 그 종목의 마지막 유효 관측 이후면(terminal gap)
-     * 상장폐지로 보고 회수율만 현금화한다 — 중간 결측(interior gap)은 평가액을 동결.
-     */
-    private fun markToMarket(
-        book: Book, prevPrices: Map<String, Double>, prices: Map<String, Double>, d: LocalDate,
-        lastValid: Map<String, LocalDate>, delistRecovery: Double, journal: Journal,
-    ) {
-        for (sym in book.value.keys.toList()) {
-            val p0 = prevPrices[sym]
-            val p1 = prices[sym]
-            if (p1 != null && !p1.isNaN() && p0 != null && !p0.isNaN() && p0 > 0) {
-                book.value[sym] = book.value.getValue(sym) * (p1 / p0)
-            } else if (p1 == null || p1.isNaN()) {
-                val lv = lastValid[sym]
-                if (lv != null && d.isAfter(lv)) {
-                    book.cash += book.value.remove(sym)!! * delistRecovery
-                    book.cost.remove(sym)
-                    journal.marker(d, "delist", "symbol" to sym)
-                }
-            }
-        }
-    }
-
-    private enum class Action { REBALANCE, LIQUIDATE }
-
-    /** 하루치 매매 결정. 청산은 목표비중 없이 보유 전량 매도. */
-    private data class Decision(val action: Action, val reason: String, val targets: Map<String, Double> = emptyMap()) {
-        companion object {
-            fun rebalance(reason: String, targets: Map<String, Double>) = Decision(Action.REBALANCE, reason, targets)
-            fun liquidate(reason: String) = Decision(Action.LIQUIDATE, reason)
-        }
-    }
-
-    /** 일별 루프가 쌓는 기록 — 성과지표의 입력이자 결과 그대로의 일부. */
-    private class Journal {
-        val equities = mutableListOf<Double>()
-        val equityCurve = mutableListOf<Map<String, Any?>>()
-        val markers = mutableListOf<Map<String, Any?>>()
-        val turnovers = mutableListOf<Double>()
-        val turnoversActual = mutableListOf<Double>()
-
-        fun marker(d: LocalDate, type: String, vararg extra: Pair<String, Any?>) {
-            markers += linkedMapOf<String, Any?>("t" to iso(d), "type" to type).apply { putAll(extra) }
-        }
     }
 
     fun run(
