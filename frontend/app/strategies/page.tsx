@@ -11,7 +11,6 @@ import {
   GripVertical,
   Loader2,
   Star,
-  Share2,
 } from "lucide-react";
 import { api, Strategy, StrategyConfig } from "@/lib/api";
 import { Nav } from "@/components/Nav";
@@ -174,7 +173,7 @@ function StrategiesContent() {
 }
 
 /**
- * 전략 목록 카드. 클릭하면 상세로 이동하며, 우측 컨트롤로 즐겨찾기·공유·순서변경·삭제를
+ * 전략 목록 카드. 클릭하면 상세로 이동하며, 우측 컨트롤로 즐겨찾기·순서변경·삭제를
  * 직접 처리한다. 컨트롤은 카드 링크 위에 겹쳐 있으므로 클릭 시 링크 이동을 막는다.
  * 순서 변경은 그립 핸들 드래그 앤 드롭으로, 키보드 사용자는 핸들에 포커스 후 ↑/↓ 로 한다.
  */
@@ -218,11 +217,6 @@ function StrategyCard({
   const favorite = useMutation({
     mutationFn: () =>
       s.is_favorite ? api.unfavoriteStrategy(s.id) : api.favoriteStrategy(s.id),
-    onSuccess: invalidate,
-  });
-  const share = useMutation({
-    mutationFn: () =>
-      s.is_shared ? api.unshareStrategy(s.id) : api.shareStrategy(s.id),
     onSuccess: invalidate,
   });
 
@@ -308,27 +302,9 @@ function StrategyCard({
                 )}
               />
             </button>
-            {/* 공유 토글 */}
-            <button
-              onClick={stop(() => share.mutate())}
-              disabled={share.isPending}
-              aria-label={s.is_shared ? `${s.name} 공유 해제` : `${s.name} 공유`}
-              aria-pressed={s.is_shared}
-              className={cn(
-                "rounded-md p-1 transition-colors hover:bg-accent disabled:opacity-50",
-                s.is_shared ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {share.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Share2 className="h-4 w-4" />
-              )}
-            </button>
             <Badge variant={STATUS_VARIANT[s.status] ?? "muted"}>
               {STATUS_LABEL[s.status] ?? s.status}
             </Badge>
-            {s.is_shared && <Badge variant="secondary">공유 중</Badge>}
             <button
               onClick={handleDelete}
               disabled={remove.isPending}

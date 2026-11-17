@@ -10,7 +10,6 @@ import {
   Settings,
   BookOpen,
   LogOut,
-  Share2,
   BarChart3,
   TrendingUp,
   Sparkles,
@@ -25,7 +24,6 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
   { href: "/strategies", label: "전략", icon: LineChart },
-  { href: "/strategies/shared", label: "공유 전략", icon: Share2 },
   { href: "/monitor", label: "실시간", icon: Activity },
   { href: "/metrics", label: "지표", icon: BarChart3 },
   { href: "/recommend", label: "추천", icon: Sparkles },
@@ -34,19 +32,9 @@ const LINKS = [
   { href: "/settings", label: "설정", icon: Settings },
 ];
 
-/**
- * 현재 경로가 메뉴 링크에 해당하는지 판정한다.
- * "/strategies" 가 "/strategies/shared" 의 prefix 이므로, 더 구체적인(긴) 링크가
- * 매칭되는 경우 덜 구체적인 링크는 비활성으로 둔다.
- */
+/** 현재 경로가 메뉴 링크에 해당하는지 판정한다. */
 function isActive(pathname: string, href: string): boolean {
-  if (pathname !== href && !pathname.startsWith(href + "/")) return false;
-  // 이 링크보다 더 길게(구체적으로) 매칭되는 다른 링크가 있으면 양보한다.
-  return !LINKS.some(
-    (other) =>
-      other.href.length > href.length &&
-      (pathname === other.href || pathname.startsWith(other.href + "/")),
-  );
+  return pathname === href || pathname.startsWith(href + "/");
 }
 
 /**
@@ -118,8 +106,6 @@ export function Nav() {
       {/* 모바일: 아이콘 탭 바 */}
       <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2 md:hidden">
         {LINKS.map((l) => {
-          // 데스크톱과 동일한 판정: prefix 충돌(/strategies vs /strategies/shared) 시
-          // 더 구체적인 링크만 활성화한다.
           const active = isActive(pathname, l.href);
           const Icon = l.icon;
           return (

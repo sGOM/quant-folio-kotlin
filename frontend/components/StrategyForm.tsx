@@ -177,7 +177,7 @@ export function StrategyForm({
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="전략의 아이디어·근거·사용법을 적어 두면 공유 시 함께 표시됩니다."
+          placeholder="전략의 아이디어·근거·사용법을 적어 둡니다."
           rows={2}
           maxLength={2000}
           className={`${INPUT} h-auto min-h-[60px] resize-y py-2`}

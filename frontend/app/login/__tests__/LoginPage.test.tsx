@@ -13,7 +13,6 @@ describe("password-only login", () => {
     vi.mocked(api.login).mockResolvedValue({
       id: 1,
       email: "owner@example.com",
-      display_name: null,
       broker: "kis",
       kis_account_no: null,
       has_kis_credentials: false,

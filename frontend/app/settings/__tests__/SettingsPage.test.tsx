@@ -16,7 +16,6 @@ vi.mock("@/lib/api", () => ({ api: { kisHealth: vi.fn() } }));
 const user: UserOut = {
   id: 1,
   email: "owner@example.com",
-  display_name: null,
   broker: "kis",
   kis_account_no: "50012345-01",
   has_kis_credentials: true,
@@ -39,7 +38,7 @@ describe("server-managed brokerage settings", () => {
 
     expect(screen.getByText("증권사 자격증명은 서버에서 관리합니다.")).toBeVisible();
     expect(screen.getByText("50012345-01")).toBeVisible();
-    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
     expect(container.querySelector('input[type="password"]')).toBeNull();
   });
 
