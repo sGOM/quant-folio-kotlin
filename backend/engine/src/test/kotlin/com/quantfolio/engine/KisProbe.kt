@@ -177,6 +177,7 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
                         "quote" -> quote(client, parsed.symbol!!)
                         "ccld" -> ccld(client, appKey, appSecret, digits, parsed.ccld!!, parsed.day)
                         "buy", "sell" -> placeOrder(client, cmd, parsed.symbol!!, parsed.qty, parsed.price)
+                        "xorder" -> xorder(client, appKey, appSecret, digits, parsed.side!!, parsed.symbol!!, parsed.qty, parsed.price!!, parsed.ordDvsn!!, parsed.excg)
                         else -> modify(client, appKey, appSecret, digits, cmd == "cancel", parsed.orderNo!!, parsed.orgNo!!, parsed.qty, parsed.price!!)
                     }
                 }
@@ -193,6 +194,7 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
     private class Args(
         val day: LocalDate, val minutes: Long = 10, val orderNo: String? = null, val symbol: String? = null,
         val qty: Int = 0, val price: Int? = null, val orgNo: String? = null, val ccld: List<String>? = null,
+        val side: String? = null, val ordDvsn: String? = null, val excg: String? = null,
     )
 
     private fun parseArgs(args: List<String>): Args? {
@@ -212,6 +214,9 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
             "buy", "sell" -> if (args.size in 3..4 && symbol(args[1])) {
                 val p = args.getOrNull(3)?.let { price(it) ?: return null }
                 qty(args[2])?.let { Args(today, symbol = args[1], qty = it, price = p) }
+            } else null
+            "xorder" -> if (args.size in 6..7 && args[1] in setOf("buy", "sell") && symbol(args[2]) && args[5].length == 2 && args[5].all { it in '0'..'9' } && args.getOrNull(6).let { it == null || it in EXCGS }) {
+                qty(args[3])?.let { q -> price(args[4])?.let { Args(today, symbol = args[2], qty = q, price = it, side = args[1], ordDvsn = args[5], excg = args.getOrNull(6)) } }
             } else null
             "amend" -> if (args.size == 5 && alnum(args[1]) && alnum(args[2])) qty(args[3])?.let { q -> price(args[4])?.let { Args(today, orderNo = args[1], orgNo = args[2], qty = q, price = it) } } else null
             "cancel" -> if (args.size == 4 && alnum(args[1]) && alnum(args[2])) qty(args[3])?.let { Args(today, orderNo = args[1], orgNo = args[2], qty = it, price = 0) } else null
@@ -233,11 +238,13 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
             |  -- 아래는 모의투자 계좌에 실제 주문을 낸다(실행당 1건, 실패해도 다시 보내지 않음) --
             |  buy <종목코드> <수량> [지정가]          매수(VTTC0802U) — 지정가 없으면 시장가. 수량 1~$MAX_QTY
             |  sell <종목코드> <수량> [지정가]         매도(VTTC0801U) — 지정가 없으면 시장가
+            |  xorder <buy|sell> <종목코드> <수량> <가격> <ORD_DVSN 2자리> [KRX|NXT|SOR]  ORD_DVSN 원시 코드·거래소(EXCG_ID_DVSN_CD, 생략 시 키 없음)로 주문 1건.
+            |        코드 의미는 KIS 문서 기준(00 지정가·01 시장가·05 장전 시간외·06 장후 시간외·07 시간외 단일가) — 모의투자가 받는지는 미측정. 가격 0 가능
             |  amend <주문번호> <주문조직번호> <수량> <가격>  정정(VTTC0803U, 지정가)
             |  cancel <주문번호> <주문조직번호> <수량>        취소(VTTC0803U)
             |환경변수: KIS_PROBE_APP_KEY, KIS_PROBE_APP_SECRET, KIS_PROBE_ACCOUNT_NO(notices 밖 전부), KIS_PROBE_HTS_ID(notices)
             |  KIS_PROBE_TOKEN_FILE(선택): 토큰을 이 파일에 두고 재사용(발급 분당 1회 제한). 인증 오류면 파일을 지우고 다시 실행.
-            |모의투자(vts) 전용 · 조회 명령은 읽기 전용, buy·sell·amend·cancel 은 주문을 낸다.
+            |모의투자(vts) 전용 · 조회 명령은 읽기 전용, buy·sell·xorder·amend·cancel 은 주문을 낸다.
             """.trimMargin(),
         )
         return 2
@@ -313,6 +320,31 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
             { say("OrderResult(orderId=${q(it.orderId)}, orderOrgNo=${q(it.orderOrgNo)})") },
             { e -> say("예외 ${e.javaClass.simpleName}: ${e.message}") },
         )
+    }
+
+    /** 유형·거래소 지정 주문 — [KisClient] 가 ORD_DVSN 원시 코드·거래소를 못 넘겨서 직접 만든다. 본문·헤더·hashkey 는 KisClient.placeOrder 와 같고 ORD_DVSN·ORD_UNPR·선택 EXCG_ID_DVSN_CD 만 다르다. */
+    private fun xorder(client: KisClient, appKey: String, appSecret: String, digits: String, side: String, symbol: String, qty: Int, price: Int, ordDvsn: String, excg: String?) {
+        say()
+        say("== xorder $side $symbol ${qty}주 가격 $price ORD_DVSN=${q(ordDvsn)} EXCG_ID_DVSN_CD=${excg?.let(::q) ?: "(키 생략)"}: 모의투자 계좌에 실제 주문(실행당 1건, 재전송 안 함) ==")
+        val body = linkedMapOf(
+            "CANO" to digits.take(8), "ACNT_PRDT_CD" to digits.substring(8, 10), "PDNO" to symbol, "ORD_DVSN" to ordDvsn, "ORD_QTY" to qty.toString(), "ORD_UNPR" to price.toString(),
+        ).apply { if (excg != null) put("EXCG_ID_DVSN_CD", excg) }
+        val bodyJson = json.writeValueAsString(body)
+        val base = PROBE_PROPS.kis.baseUrlVts
+        val from = http.exchanges.size
+        runCatching {
+            Thread.sleep(KisClient.PAPER_MIN_INTERVAL_MS)
+            val h = http.send("POST", "$base${ProbeHttp.HASHKEY}", headers = mapOf("content-type" to JSON_TYPE, "appkey" to appKey, "appsecret" to appSecret), json = bodyJson)
+            check(h.status == 200) { "hashkey 발급 실패: HTTP ${h.status} — 주문을 보내지 않음" }
+            val hash = json.readValue<Map<String, Any?>>(h.body)["HASH"]?.toString() ?: error("hashkey 응답에 HASH 없음 — 주문을 보내지 않음")
+            val headers = linkedMapOf(
+                "content-type" to JSON_TYPE, "authorization" to "Bearer ${client.accessToken()}", "appkey" to appKey, "appsecret" to appSecret,
+                "tr_id" to if (side == "buy") "VTTC0802U" else "VTTC0801U", "custtype" to "P", "hashkey" to hash,
+            )
+            Thread.sleep(KisClient.PAPER_MIN_INTERVAL_MS)
+            http.send("POST", "$base${ProbeHttp.ORDER_CASH}", headers = headers, json = bodyJson)
+        }.onFailure { e -> say("예외(재전송 안 함) ${e.javaClass.simpleName}: ${e.message}") }
+        printOutputs(from, ORDER_FIELDS)
     }
 
     /** 정정·취소 — [KisClient] 에 없는 기능이라 직접 만든다. 헤더·hashkey·계좌 분해는 [KisClient] 의 placeOrder 와 같은 방식. */
@@ -529,10 +561,11 @@ internal class KisProbe(private val env: Map<String, String>, transport: BrokerH
     private companion object {
         val YMD: DateTimeFormatter = DateTimeFormatter.ofPattern("uuuuMMdd").withResolverStyle(ResolverStyle.STRICT)
         val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
-        val ORDER_COMMANDS = setOf("buy", "sell", "amend", "cancel")
+        val ORDER_COMMANDS = setOf("buy", "sell", "xorder", "amend", "cancel")
         val CCLD_TRS = setOf("VTTC8001R", "VTTC0081R")
         val CCLD_FIELDS = listOf("odno", "orgn_odno", "ord_gno_brno", "pdno", "ord_qty", "tot_ccld_qty", "avg_prvs", "ord_tmd")
         const val MAX_QTY = 1000
+        val EXCGS = setOf("KRX", "NXT", "SOR")
         const val JSON_TYPE = "application/json; charset=utf-8"
         val ORDER_FIELDS = listOf("ODNO", "KRX_FWDG_ORD_ORGNO", "ORD_TMD")
         val ROW_FIELDS = listOf("odno", "orgn_odno", "ord_dt", "ord_tmd", "sll_buy_dvsn_cd", "pdno", "ord_qty", "tot_ccld_qty", "avg_prvs", "cncl_yn", "rmn_qty", "rjct_qty")

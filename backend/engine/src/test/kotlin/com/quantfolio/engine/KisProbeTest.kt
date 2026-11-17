@@ -273,6 +273,21 @@ class KisProbeTest {
     }
 
     @Test
+    fun xorderSendsRawOrdDvsnAndOptionalExchange() {
+        for ((args, excg) in listOf(listOf("xorder", "sell", "005930", "1", "0", "07", "NXT") to "NXT", listOf("xorder", "sell", "005930", "1", "0", "07") to null)) {
+            val http = orderHttp()
+            val out = mutableListOf<String>()
+            assertEquals(0, KisProbe(env, http, out::add, clock).run(args))
+            assertSafe(http, out, orders = 1)
+            val c = http.orderPosts().single()
+            assertEquals("VTTC0801U", c.headers["tr_id"])
+            val expected = mapOf("CANO" to "50012345", "ACNT_PRDT_CD" to "01", "PDNO" to "005930", "ORD_DVSN" to "07", "ORD_QTY" to "1", "ORD_UNPR" to "0")
+            assertEquals(if (excg == null) expected else expected + ("EXCG_ID_DVSN_CD" to excg), body(c))
+            assertEquals(c.json, http.calls.single { it.url.endsWith("/uapi/hashkey") }.json)
+        }
+    }
+
+    @Test
     fun secondOrderPostIsRefusedEvenWhenKisClientRetriesRateLimit() {
         val http = orderHttp { ok("""{"rt_cd":"1","msg_cd":"EGW00201","msg1":"초당 거래건수를 초과하였습니다."}""") }
         val out = mutableListOf<String>()
@@ -316,6 +331,7 @@ class KisProbeTest {
         for (args in listOf(
             listOf("buy", "005930", "0"), listOf("buy", "005930", "1001"), listOf("sell", "00593", "1"), listOf("buy", "00593!", "1"),
             listOf("buy", "005930", "1", "-1"), listOf("buy", "005930", "1", "1.5"), listOf("amend", "0000117057", "00950", "1"),
+            listOf("xorder", "buy", "005930", "1", "0", "7"), listOf("xorder", "buy", "005930", "1", "0", "07", "XXX"), listOf("xorder", "hold", "005930", "1", "0", "07"),
             listOf("cancel", "", "00950", "1"), listOf("cancel", "0000117057", "0-950", "1"), listOf("quote", "5930"),
         )) {
             val http = FakeHttp { _, _, _ -> error("요청이 나가면 안 된다") }
