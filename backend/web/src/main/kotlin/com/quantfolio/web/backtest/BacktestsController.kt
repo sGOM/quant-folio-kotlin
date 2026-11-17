@@ -2,6 +2,7 @@ package com.quantfolio.web.backtest
 
 import com.quantfolio.backtest.BacktestRunner
 import com.quantfolio.backtest.DeflatedSharpe
+import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
 import com.quantfolio.domain.strategy.StrategyRepository
@@ -70,7 +71,7 @@ class BacktestsController(
         val bt = tx.execute {
             val saved = backtests.saveAndFlush(
                 Backtest(
-                    strategy.id!!, BacktestRunner.kstStart(start), BacktestRunner.kstEnd(end),
+                    strategy.id!!, MarketClock.kstStart(start), MarketClock.kstEnd(end),
                     num(result["total_return"]), num(result["mdd"]), num(result["sharpe"]), result,
                 ),
             )

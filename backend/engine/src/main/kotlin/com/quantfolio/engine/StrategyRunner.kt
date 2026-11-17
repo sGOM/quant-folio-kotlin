@@ -69,7 +69,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
     /** 시드 + 오늘 봉(현재가 반영). 오늘은 원본 `date.today()` — 컨테이너 UTC 날짜(보존). */
     private fun dataWithToday(px: Double): PriceData {
         val today = MarketClock.todayUtcLegacy(ctx.clock)
-        val rows = bars.associateBy { it.time.atZone(ZoneOffset.UTC).toLocalDate() }.toSortedMap()
+        val rows = bars.associateBy { it.date }.toSortedMap()
         val prev = rows[today]
         rows[today] = if (ohlc && prev != null) {
             Bar(prev.time, prev.open, maxOf(prev.high, px), minOf(prev.low, px), px, prev.volume)

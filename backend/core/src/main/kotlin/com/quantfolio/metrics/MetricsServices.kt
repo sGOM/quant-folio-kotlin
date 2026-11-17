@@ -10,8 +10,8 @@ import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
 import com.quantfolio.market.store.StockPeriod
+import com.quantfolio.market.store.closeSeries
 import com.quantfolio.market.symbols.SymbolCatalog
-import com.quantfolio.quant.Series
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import tools.jackson.databind.json.JsonMapper
@@ -30,7 +30,7 @@ class TechIndicatorLoader(private val prices: PriceHistory) {
 
     fun load(code: String, start: LocalDate, end: LocalDate): TechIndicators = try {
         val bars = prices.load(code, start, end)
-        TechIndicators.of(Series(bars.map { it.time.atZone(java.time.ZoneOffset.UTC).toLocalDate() }, DoubleArray(bars.size) { bars[it].close }))
+        TechIndicators.of(bars.closeSeries())
     } catch (e: Exception) {
         log.debug("기술지표 계산 실패 ({}): {}", code, e.message)
         TechIndicators()

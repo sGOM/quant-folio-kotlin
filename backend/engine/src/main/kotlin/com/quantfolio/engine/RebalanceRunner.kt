@@ -10,6 +10,7 @@ import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.MetricsCommon
 import com.quantfolio.market.source.DataSourceError
+import com.quantfolio.market.store.closeSeries
 import com.quantfolio.metrics.UniverseScoreParams
 import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
@@ -26,7 +27,6 @@ import java.math.MathContext
 import java.time.Duration
 import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
 /**
@@ -432,7 +432,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val out = linkedMapOf<String, Series>()
         universe.forEachIndexed { i, sym ->
             val bars = barsWithBackfill(sym, start, end, need, "리밸런싱 시드")
-            out[sym] = Series(bars.map { it.time.atZone(ZoneOffset.UTC).toLocalDate() }, DoubleArray(bars.size) { bars[it].close })
+            out[sym] = bars.closeSeries()
             if ((i + 1) % 20 == 0 || i + 1 == universe.size) log.info("전략 {} 히스토리 시딩 진행: {}/{}", strategyId, i + 1, universe.size)
         }
         return out

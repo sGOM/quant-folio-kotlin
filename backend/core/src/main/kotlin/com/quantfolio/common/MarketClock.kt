@@ -3,6 +3,7 @@ package com.quantfolio.common
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
@@ -20,6 +21,12 @@ object MarketClock {
 
     /** 시각 → KST 달력 날짜(거래일 기준). */
     fun kstDate(t: Instant): LocalDate = t.atZone(KST).toLocalDate()
+
+    /** KST 하루 시작(00:00) 시각. */
+    fun kstStart(d: LocalDate): Instant = d.atStartOfDay(KST).toInstant()
+
+    /** KST 하루 끝(23:59:59) 시각. */
+    fun kstEnd(d: LocalDate): Instant = d.atTime(LocalTime.of(23, 59, 59)).atZone(KST).toInstant()
 
     /**
      * 원본 `date.today()` — 컨테이너(UTC) 날짜라 KST 00~09시엔 전날이다. **새 코드에 쓰지 말 것.**

@@ -9,11 +9,11 @@ import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
+import com.quantfolio.market.store.closeSeries
 import com.quantfolio.quant.Series
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.LocalDate
-import java.time.ZoneOffset
 
 /** 팩터 점수가 쓰는 재무·시총·업종 조회(테스트에서 교체 가능). */
 interface FactorInputs {
@@ -180,7 +180,7 @@ class UniverseScores(
         for (c in norm) {
             val bars = runCatching { prices.load(c, start, asOf) }.getOrNull()
             if (bars.isNullOrEmpty()) continue
-            closes[c] = Series(bars.map { it.time.atZone(ZoneOffset.UTC).toLocalDate() }, DoubleArray(bars.size) { bars[it].close })
+            closes[c] = bars.closeSeries()
         }
         if (closes.isEmpty()) return emptyMap()
         return ResidualMomentum.compute(closes, market, asOf, norm, regWindow, momWindow, skip)

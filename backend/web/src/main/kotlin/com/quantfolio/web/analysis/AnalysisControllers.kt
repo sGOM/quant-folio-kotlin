@@ -1,6 +1,5 @@
 package com.quantfolio.web.analysis
 
-import com.quantfolio.backtest.BacktestRunner
 import com.quantfolio.backtest.FillQuality
 import com.quantfolio.backtest.FillQualityReport
 import com.quantfolio.backtest.SlippageCalibration
@@ -74,7 +73,7 @@ class TrackingController(
         val replayFrom = all.minOf { it.date }
 
         val panel = FillQualityReport.dailyClosePanel(
-            all.map { it.symbol }.toSortedSet().associateWith { ticks.bars(it, BacktestRunner.kstStart(replayFrom), BacktestRunner.kstEnd(effTo)) },
+            all.map { it.symbol }.toSortedSet().associateWith { ticks.bars(it, MarketClock.kstStart(replayFrom), MarketClock.kstEnd(effTo)) },
         )
         val capital = initialCapital ?: Cfg.num(Cfg.or(strategy.config, "cash", 10_000_000.0))
         val (realized, notes0) = Tracking.reconstructRealizedCurve(all, panel, capital, dFrom)

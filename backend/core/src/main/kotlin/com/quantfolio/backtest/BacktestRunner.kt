@@ -22,10 +22,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.security.MessageDigest
 import java.time.Clock
-import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalTime
-import java.time.ZoneOffset
 
 /** 입력·설정이 백테스트에 맞지 않음 — HTTP 422(원본 ValueError·HTTPException 422). */
 class BacktestInputError(message: String) : RuntimeException(message)
@@ -56,11 +53,11 @@ class BacktestRunner(
 
     private fun bars(symbol: String, start: LocalDate, end: LocalDate): List<Bar> {
         loader.ensureCoverage(symbol, start, end)
-        return ticks.bars(symbol, kstStart(start), kstEnd(end))
+        return ticks.bars(symbol, MarketClock.kstStart(start), MarketClock.kstEnd(end))
     }
 
     private fun series(bars: List<Bar>, f: (Bar) -> Double) =
-        Series(bars.map { it.time.atZone(ZoneOffset.UTC).toLocalDate() }, DoubleArray(bars.size) { f(bars[it]) })
+        Series(bars.map { it.date }, DoubleArray(bars.size) { f(bars[it]) })
 
     private fun single(config: Map<String, Any?>, start: LocalDate, end: LocalDate): Map<String, Any?> {
         val b = bars(config["symbol"].toString(), start, end)
@@ -135,7 +132,14 @@ class BacktestRunner(
             null
         }
 
-        val result = LinkedHashMap(engine { PortfolioBacktest.run(panel, withSectorMap(config), start, end, provider, regime, pool, benchmark, panicDays, volume) })
+        val result = LinkedHashMap(
+            engine {
+                PortfolioBacktest.run(
+                    closePanel = panel, config = withSectorMap(config), simStart = start, simEnd = end, fundamentals = provider,
+                    regime = regime, pool = pool, benchmark = benchmark, panic = panicDays, volume = volume,
+                )
+            },
+        )
         factorCoverageWarnings(config, universe, end).takeIf { it.isNotEmpty() }?.let { result["factor_warnings"] = it }
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
         return result
@@ -296,9 +300,6 @@ class BacktestRunner(
     companion object {
         private val REGIME_TICKER = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
-
-        fun kstStart(d: LocalDate): Instant = d.atStartOfDay(MarketClock.KST).toInstant()
-        fun kstEnd(d: LocalDate): Instant = d.atTime(LocalTime.of(23, 59, 59)).atZone(MarketClock.KST).toInstant()
 
         /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */
         fun universeFingerprint(universe: List<String>, rule: Map<String, Any?>?): String {

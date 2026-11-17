@@ -1,13 +1,22 @@
 package com.quantfolio.market.store
 
+import com.quantfolio.quant.Series
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.sql.Timestamp
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 /** 종목 일봉 한 개. 백테스트·차트는 price_ticks 를 단일 출처로 쓴다. */
-data class Bar(val time: Instant, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Long)
+data class Bar(val time: Instant, val open: Double, val high: Double, val low: Double, val close: Double, val volume: Long) {
+    /** 봉 시각 → 달력 날짜(UTC 기준). */
+    val date: LocalDate get() = time.atZone(ZoneOffset.UTC).toLocalDate()
+}
+
+/** 일봉 → 종가 Series(인덱스 [Bar.date]). */
+fun List<Bar>.closeSeries(): Series = Series(map { it.date }, DoubleArray(size) { this[it].close })
 
 @Component
 class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate) {

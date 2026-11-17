@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
 
 /** 체결된(부분·전체) 주문 1건과 그 체결들. */
 data class FilledOrder(val id: Int, val symbol: String, val side: String, val price: Double?, val fills: List<Fill>) {
@@ -77,7 +76,7 @@ class FillQualityReport(
                 volScale = Cfg.or(s.config, "slippage_vol_scale", 0.0).let { Cfg.num(it) }
             }
         }
-        val orders = filledOrders(userId, strategyId, BacktestRunner.kstStart(dFrom), BacktestRunner.kstEnd(dTo))
+        val orders = filledOrders(userId, strategyId, MarketClock.kstStart(dFrom), MarketClock.kstEnd(dTo))
         val norm = orders.mapNotNull { o ->
             if (o.fills.isEmpty()) return@mapNotNull null
             val tot = o.fills.sumOf { it.qty }
@@ -133,7 +132,7 @@ class FillQualityReport(
             for ((sym, bars) in barsBySymbol) {
                 if (bars.isEmpty()) continue
                 val byDate = java.util.TreeMap<LocalDate, Double>()
-                for (b in bars) byDate[b.time.atZone(ZoneOffset.UTC).toLocalDate()] = b.close
+                for (b in bars) byDate[b.date] = b.close
                 cols[sym] = Series(byDate.keys.toList(), byDate.values.toDoubleArray())
             }
             return if (cols.isEmpty()) Panel(emptyList(), emptyList(), emptyMap()) else Panel.fromSeries(cols)
