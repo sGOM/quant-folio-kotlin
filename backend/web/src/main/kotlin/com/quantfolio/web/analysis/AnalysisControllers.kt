@@ -12,6 +12,7 @@ import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.pyFloat
 import com.quantfolio.web.api.ApiException
+import com.quantfolio.web.api.ofStrategy
 import com.quantfolio.web.api.owned
 import com.quantfolio.web.auth.CurrentUser
 import jakarta.validation.Valid
@@ -84,7 +85,7 @@ class TrackingController(
         }
 
         val bt = if (backtestId != null) {
-            backtests.findById(backtestId).filter { it.strategyId == id }.orElseThrow { ApiException(HttpStatus.NOT_FOUND, "백테스트를 찾을 수 없습니다.") }
+            backtests.ofStrategy(id, backtestId)
         } else {
             backtests.findByStrategyIdOrderByIdDesc(id).firstOrNull()
         }

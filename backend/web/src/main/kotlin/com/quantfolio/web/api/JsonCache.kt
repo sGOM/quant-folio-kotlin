@@ -38,6 +38,17 @@ class JsonCache(private val redis: StringRedisTemplate, private val json: JsonMa
         }
     }
 
+    /**
+     * 캐시 조회 → 미스면 계산 → [cacheable] 이면 저장, 아니면 [onSkip] 후 저장하지 않음(일시 장애가 TTL 만큼 굳지 않게).
+     * 계산 예외는 그대로 전파한다 — 감싸려면 [compute] 안에서.
+     */
+    fun <T : Any> getOrCompute(key: String, type: Class<T>, cacheable: (T) -> Boolean, onSkip: (T) -> Unit = {}, compute: () -> T): T {
+        get(key, type)?.let { return it }
+        val data = compute()
+        if (cacheable(data)) put(key, data, EOD_TTL) else onSkip(data)
+        return data
+    }
+
     companion object {
         /** EOD 스냅샷 캐시 수명(장 마감 후 변하지 않음). 원본 *_CACHE_TTL = 6h. */
         val EOD_TTL: Duration = Duration.ofHours(6)
