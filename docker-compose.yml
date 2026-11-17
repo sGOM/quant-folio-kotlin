@@ -16,8 +16,6 @@ x-backend-secrets: &backend-secrets
   - krx_id
   - krx_pw
   - opendart_api_key
-  - telegram_bot_token
-  - telegram_chat_id
   - s3_backup_access_key_id
   - s3_backup_secret_access_key
 
@@ -160,10 +158,6 @@ secrets:
     file: ./secrets/krx_pw.txt
   opendart_api_key:
     file: ./secrets/opendart_api_key.txt
-  telegram_bot_token:
-    file: ./secrets/telegram_bot_token.txt
-  telegram_chat_id:
-    file: ./secrets/telegram_chat_id.txt
   s3_backup_access_key_id:
     file: ./secrets/s3_backup_access_key_id.txt
   s3_backup_secret_access_key:

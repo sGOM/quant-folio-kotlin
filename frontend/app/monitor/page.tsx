@@ -724,7 +724,7 @@ const GRADE_LABEL: Record<string, string> = {
  * 가정(M3)과 얼마나 어긋나는지 bp 단위로 보여준다. M2(시점 규약 표류)는 등급 없이 참고용
  * 진단 보조 지표로만 노출한다. 표본(min_sample) 미달이면 등급이 "표본 부족"으로 나오는 게
  * 정상 — 매매 이력이 쌓일수록(B-2 주간 배치가 자동 재점검) 신뢰도가 오른다. RED 등급이면
- * B-2 배치가 텔레그램으로도 알린다.
+ * B-2 배치가 알림을 낸다.
  */
 function FillQualityPanel({
   data,

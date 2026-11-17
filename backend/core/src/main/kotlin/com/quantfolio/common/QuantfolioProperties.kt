@@ -23,7 +23,6 @@ data class QuantfolioProperties(
     val toss: Toss = Toss(),
     val krx: Krx = Krx(),
     val opendart: OpenDart = OpenDart(),
-    val telegram: Telegram = Telegram(),
     val s3Backup: S3Backup = S3Backup(),
     val frontendOrigin: String = "http://localhost:3000",
     val debugErrors: Boolean = false,
@@ -93,10 +92,6 @@ data class QuantfolioProperties(
 
     data class OpenDart(val apiKey: String = "", val baseUrl: String = "https://opendart.fss.or.kr/api") {
         val enabled: Boolean get() = apiKey.isNotBlank()
-    }
-
-    data class Telegram(val botToken: String = "", val chatId: String = "") {
-        val enabled: Boolean get() = botToken.isNotBlank() && chatId.isNotBlank()
     }
 
     data class S3Backup(

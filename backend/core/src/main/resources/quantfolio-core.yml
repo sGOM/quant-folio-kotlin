@@ -48,9 +48,6 @@ quantfolio:
     pw: ${krx_pw:${KRX_PW:}}
   opendart:
     api-key: ${opendart_api_key:${OPENDART_API_KEY:}}
-  telegram:
-    bot-token: ${telegram_bot_token:${TELEGRAM_BOT_TOKEN:}}
-    chat-id: ${telegram_chat_id:${TELEGRAM_CHAT_ID:}}
   s3-backup:
     bucket: ${S3_BACKUP_BUCKET:}
     endpoint-url: ${S3_BACKUP_ENDPOINT_URL:}

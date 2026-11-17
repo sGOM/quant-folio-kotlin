@@ -11,7 +11,7 @@ import jakarta.persistence.Table
 import org.springframework.data.jpa.repository.JpaRepository
 import java.time.Instant
 
-/** 알림 등급. 이름이 곧 DB·이벤트 문자열이라 소문자다. critical 만 텔레그램으로 나간다. */
+/** 알림 등급. 이름이 곧 DB·이벤트 문자열이라 소문자다. */
 @Suppress("EnumEntryName")
 enum class AlertSeverity { warning, critical }
 

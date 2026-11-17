@@ -106,6 +106,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 
+- 텔레그램 알림 제거(2026-11-17 소유자 결정): 원본 `engine/alerts.publish_alert` 는 DB 적재가 dedup 으로 생략되지 않은 경우에 한해 `severity == "critical"` 이고 `TELEGRAM_BOT_TOKEN`·`TELEGRAM_CHAT_ID` 가 모두 비어 있지 않으면 사용자(WS) 유무와 무관하게 봇으로 추가 발송했다(타임아웃 5초, 실패는 로그만). Kotlin 은 그 경로를 지웠다 — 알림은 DB 저장·화면(WS)만. 되살리려면 이 제거 커밋을 되돌린다.
 - 422 검증 오류 `msg` 는 pydantic 영문 대신 한국어/Bean Validation 메시지.
 - `representative()` 메시지의 원인별 건수 표기 형식(`{A=1}` vs `{'A': 1}`).
 - 성과귀속 롱숏(`Attribution.factorAttribution` 의 `ls_return`): 원본 `pair.sort_values(ascending=False)` 는 numpy quicksort 라

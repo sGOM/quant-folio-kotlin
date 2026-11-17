@@ -1,10 +1,8 @@
 package com.quantfolio.alert
 
 import com.quantfolio.common.MarketClock
-import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
-import com.quantfolio.market.source.ExternalHttp
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -16,7 +14,6 @@ import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionTemplate
 import java.sql.Timestamp
 import java.time.Clock
-import java.time.Duration
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
@@ -28,16 +25,14 @@ fun pyIsoformat(t: ZonedDateTime): String {
 }
 
 /**
- * 엔진·배치 이상 알림(원본 `engine/alerts.publish_alert`): DB 적재(알림함) + 사용자 이벤트 채널(WS 토스트) + critical 은 텔레그램.
+ * 엔진·배치 이상 알림(원본 `engine/alerts.publish_alert`): DB 적재(알림함) + 사용자 이벤트 채널(WS 토스트). 외부 푸시 채널은 없다(`docs/migration-notes.md`).
  * 무인 운영의 "조용한 실패"를 사람에게 넘기는 유일한 통로라, 한 경로의 실패가 다른 경로를 막지 않는다.
- * dedupWindowHours 를 주면 같은 (사용자, 전략, code) 의 미확인 알림이 창 안에 있을 때 DB·텔레그램을 생략한다(WS 는 항상).
+ * dedupWindowHours 를 주면 같은 (사용자, 전략, code) 의 미확인 알림이 창 안에 있을 때 DB 적재를 생략한다(WS 는 항상).
  */
 @Component
 class AlertPublisher(
     private val jdbc: NamedParameterJdbcTemplate,
     private val redis: StringRedisTemplate,
-    private val http: ExternalHttp,
-    private val props: QuantfolioProperties,
     private val clock: Clock,
     txManager: PlatformTransactionManager,
 ) {
@@ -74,11 +69,7 @@ class AlertPublisher(
         } catch (e: Exception) {
             log.warn("알림 DB 영속화 실패: {}", e.message)
         }
-        if (dup) {
-            log.info("알림[{}] dedup 창 내 미확인 알림 존재 — DB/텔레그램 생략", code)
-        } else if (severity == AlertSeverity.critical && props.telegram.enabled) {
-            telegram("[QuantFolio] 전략 $strategyId${code?.let { "($it)" } ?: ""}\n$message")
-        }
+        if (dup) log.info("알림[{}] dedup 창 내 미확인 알림 존재 — DB 생략", code)
         if (userId == null) return
         val payload = linkedMapOf<String, Any?>(
             "type" to "alert", "user_id" to userId, "strategy_id" to strategyId, "severity" to severity, "message" to message,
@@ -93,18 +84,5 @@ class AlertPublisher(
         val data = pyJsonDumps(payload)
         (payload["user_id"] as? Number)?.let { redis.convertAndSend(RedisKeys.engineEvents(it.toInt()), data) }
         redis.convertAndSend(RedisKeys.ENGINE_EVENTS, data)
-    }
-
-    private fun telegram(text: String) {
-        try {
-            val r = http.postJson(
-                "https://api.telegram.org/bot${props.telegram.botToken}/sendMessage",
-                pyJsonDumps(linkedMapOf("chat_id" to props.telegram.chatId, "text" to text)),
-                mapOf("Content-Type" to "application/json"), Duration.ofSeconds(5),
-            )
-            if (r.status !in 200..299) log.warn("텔레그램 알림 발송 실패: HTTP {}", r.status)
-        } catch (e: Exception) {
-            log.warn("텔레그램 알림 발송 실패: {}", e.message)
-        }
     }
 }

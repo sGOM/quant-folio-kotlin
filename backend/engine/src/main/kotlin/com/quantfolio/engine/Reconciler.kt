@@ -128,7 +128,7 @@ class Reconciler(
         }
         val input = "누적 ${grouped(filledQty)}주, 평균가 ${avgPrice?.toPlainString() ?: "없음"}"
         var resolved = false
-        // 알림(경고 + 텔레그램일 수 있음)은 락을 놓은 뒤에 낸다.
+        // 알림은 락을 놓은 뒤에 낸다.
         val alert: () -> Unit = redis.withLockOrElse(
             RedisKeys.reconcileLock(orderId), Duration.ofSeconds(RedisKeys.RECONCILE_LOCK_TTL_SECONDS),
             busy = { rejectManually(seen, input, "다른 경로(정합·체결통보·주문 실행)가 이 주문을 처리 중입니다 — 잠시 뒤 다시 보내세요") },
@@ -635,7 +635,7 @@ class Reconciler(
             } else if (verified) {
                 notes += "증권사 클라이언트를 만들지 못했습니다"
             }
-            // 알림(critical 은 텔레그램 HTTP)은 락을 놓은 뒤에 낸다.
+            // 알림은 락을 놓은 뒤에 낸다.
             var lockBusy = false
             val alert = redis.withLockOrElse(RedisKeys.reconcileLock(id), Duration.ofSeconds(RedisKeys.RECONCILE_LOCK_TTL_SECONDS), busy = { lockBusy = true; null }) {
                 val order = orders.findById(id).orElse(null)
