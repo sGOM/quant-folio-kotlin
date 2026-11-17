@@ -237,6 +237,18 @@ class StrategiesControllerTest(
     }
 
     @Test
+    fun credentialRegistrationEndpointsAreGone() {
+        val me = Me()
+        for (path in listOf("/api/kis/credentials", "/api/kis/toss-quote")) {
+            mvc.put(path) {
+                cookie(me.cookie)
+                contentType = MediaType.APPLICATION_JSON
+                content = """{"app_key":"k","app_secret":"s","account_no":"1"}"""
+            }.andExpect { status { isNotFound() } }
+        }
+    }
+
+    @Test
     fun sharedListFiltersSortsAndSummarizes() {
         val tag = UUID.randomUUID().toString().take(8)
         val me = Me()
