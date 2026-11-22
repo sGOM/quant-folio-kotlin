@@ -39,7 +39,7 @@ class Valuation(
         val codes = symbols.map { it.padStart(6, '0') }.distinct()
         val snaps = daily.latestUpTo(codes, asOf, SNAPSHOT_LOOKBACK_DAYS).associateBy { it.symbol }
         if (snaps.isEmpty()) return codes.map { StockDaily(it) }
-        val corps = dart.corpCodeMap() ?: throw MarketDataNotLoaded("dart_corp_map", "corp_code")
+        val corps = dart.corpCodeMapLocal()
         val fins = codes.filter { it in snaps }.associateWith { c -> corps[c]?.let { financials(it, asOf) } ?: Fin.Absent }
         val queried = fins.values.filter { it !is Fin.Absent }
         if (queried.isNotEmpty() && queried.all { it is Fin.NotLoaded }) throw (queried.first() as Fin.NotLoaded).error
@@ -94,6 +94,7 @@ class Valuation(
             .mapValues { (_, es) -> es.sumOf { it.dps } }
 
     companion object {
+        // 측정 근거 없음. LocalSnapshots 경유 시 asOf 당일 행만 넘어와 실질 무영향.
         private const val SNAPSHOT_LOOKBACK_DAYS = 14L
         private const val DIV_WINDOW_DAYS = 365L
         private const val UNANNOUNCED_LAG_DAYS = 90L

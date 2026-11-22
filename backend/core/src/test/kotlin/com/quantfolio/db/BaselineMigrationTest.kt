@@ -41,7 +41,7 @@ class BaselineMigrationTest {
         val tables = query(url, "select tablename from pg_tables where schemaname='public' and tablename <> 'flyway_schema_history' order by 1") { it.getString(1) }
         assertEquals(
             listOf(
-                "alerts", "backtests", "dart_financials", "dividends", "executions", "external_fetches", "index_constituents",
+                "alerts", "backtests", "dart_corp_codes", "dart_financials", "dividends", "executions", "external_fetches", "index_constituents",
                 "index_ohlcv", "index_ohlcv_coverage", "kis_stock_master_snapshots", "news_article_symbols",
                 "news_articles", "orders", "positions", "price_ticks", "risk_limits", "sector_map_snapshots",
                 "stock_daily_snapshots", "stock_period_stats", "strategies", "users",

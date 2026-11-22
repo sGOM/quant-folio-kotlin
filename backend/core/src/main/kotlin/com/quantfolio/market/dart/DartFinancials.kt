@@ -36,6 +36,7 @@ class DartFinancials(
     private val calendarCache = ConcurrentHashMap<Pair<String, Int>, List<Triple<LocalDate, Int, String>>>()
 
     @Volatile private var corpMap: Map<String, String>? = null
+    @Volatile private var localCorpMap: Map<String, String>? = null
 
     /** OpenDART 키 설정 여부(없으면 재무 팩터는 중립). */
     fun enabled(): Boolean = client.enabled()
@@ -70,7 +71,16 @@ class DartFinancials(
         return null
     }
 
-    fun corpCodeMap(): Map<String, String>? = corpMap ?: client.corpCodeMap()?.also { corpMap = it }
+    /** 원격 허용 경로. 받을 때마다 로컬 테이블에 upsert 해 로컬 전용 경로([corpCodeMapLocal])가 읽게 한다. */
+    fun corpCodeMap(): Map<String, String>? = corpMap ?: client.corpCodeMap()?.also {
+        store.writeCorpCodes(it)
+        corpMap = it
+        localCorpMap = null
+    }
+
+    /** 로컬 전용: 테이블만 읽는다(키 유무와 무관). 비어 있으면 [MarketDataNotLoaded]. */
+    fun corpCodeMapLocal(): Map<String, String> =
+        localCorpMap ?: store.readCorpCodes().ifEmpty { throw MarketDataNotLoaded("dart_corp_map", "corp_code") }.also { localCorpMap = it }
 
     /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. */
     fun annualMetrics(corp: String, year: Int): Map<String, Double?> {

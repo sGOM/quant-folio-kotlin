@@ -58,6 +58,23 @@ class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate, private v
         mapOf("corp" to corpCode, "year" to bsnsYear, "reprt" to reprtCode, "fs" to fsDiv),
     ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }.firstOrNull()
 
+    /** 종목코드(6자리) → corp_code 매핑 upsert. 원격 corpCode.xml 을 받을 때마다 호출된다. */
+    fun writeCorpCodes(map: Map<String, String>) {
+        if (map.isEmpty()) return
+        jdbc.batchUpdate(
+            """
+            INSERT INTO dart_corp_codes (symbol, corp_code, updated_at) VALUES (:symbol, :corp, now())
+            ON CONFLICT (symbol) DO UPDATE SET corp_code = EXCLUDED.corp_code, updated_at = now()
+            """,
+            map.map { (symbol, corp) -> mapOf("symbol" to symbol, "corp" to corp) }.toTypedArray(),
+        )
+    }
+
+    fun readCorpCodes(): Map<String, String> =
+        jdbc.query("SELECT symbol, corp_code FROM dart_corp_codes ORDER BY symbol", emptyMap<String, Any>()) { rs, _ ->
+            rs.getString(1) to rs.getString(2)
+        }.toMap()
+
     fun delete(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String) {
         jdbc.update(
             "DELETE FROM dart_financials WHERE corp_code = :corp AND bsns_year = :year AND reprt_code = :reprt AND fs_div = :fs",

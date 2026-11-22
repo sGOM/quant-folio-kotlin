@@ -30,14 +30,17 @@ import kotlin.test.assertTrue
 
 @SpringBootTest(classes = [TestApp::class])
 @Import(ContainersConfig::class)
-class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
+class DartFinancialsTest(
+    @Autowired private val store: DartFinancialStore,
+    @Autowired private val jdbc: org.springframework.jdbc.core.JdbcTemplate,
+) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp()
     private val cooldowns = Cooldowns(clock)
     private val ledger = InMemoryFetchLedger()
     private val client = OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock)
     private val fin = DartFinancials(client, store, ledger, cooldowns, clock)
-    private val corp = "C" + UUID.randomUUID().toString().take(7)
+    private val corp = "C" + UUID.randomUUID().toString().take(6)
 
     /** (사업연도, 보고서) → 당기순이익. 계정 응답에 접수번호를 넣어 확정일 계산이 되게 한다. */
     private fun serveAccounts(netIncome: Map<Pair<Int, String>, Long>, fsDiv: String = "CFS") {
@@ -64,6 +67,31 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
     }
 
     private fun accountCalls() = http.calls.count { it.url.endsWith("fnlttSinglAcntAll.json") }
+
+    @Test
+    fun remoteCorpMapIsPersisted() {
+        val stock = corp.takeLast(6).filter { it.isLetterOrDigit() }.padStart(6, '0')
+        serveCorpMap(stock to corp)
+        assertEquals(corp, fin.corpCodeMap()!![stock])
+        assertEquals(corp, store.readCorpCodes()[stock])
+    }
+
+    @Test
+    fun localCorpMapReadsTableWithoutRemote() {
+        val stock = "L" + corp.takeLast(5)
+        store.writeCorpCodes(mapOf(stock to corp))
+        // http 에 핸들러가 없어 원격을 부르면 실패한다. 키가 있어도 로컬 경로는 테이블만 본다.
+        assertEquals(corp, fin.corpCodeMapLocal()[stock])
+        assertEquals(0, http.calls.size)
+    }
+
+    @Test
+    fun localCorpMapEmptyTableIsNotLoaded() {
+        jdbc.update("DELETE FROM dart_corp_codes")
+        val e = assertThrows<MarketDataNotLoaded> { fin.corpCodeMapLocal() }
+        assertEquals("dart_corp_map", e.kind)
+        assertEquals(0, http.calls.size)
+    }
 
     @Test
     fun dartLocalOnlyThrowsWhenLedgerHasNoFinalEntry() {

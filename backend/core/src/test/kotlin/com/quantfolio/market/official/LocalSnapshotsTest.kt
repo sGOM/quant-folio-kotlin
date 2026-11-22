@@ -5,16 +5,12 @@ import com.quantfolio.domain.TestApp
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.OpenDartClient
 import com.quantfolio.market.source.Cooldowns
-import com.quantfolio.market.source.HttpBytes
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.DividendStore
 import com.quantfolio.test.FakeExternalHttp
-import java.io.ByteArrayOutputStream
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.IndexOhlcvStore
 import com.quantfolio.market.store.StockDaily
@@ -41,20 +37,16 @@ class LocalSnapshotsTest(
 ) {
     private val ledger = InMemoryFetchLedger()
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
-    private val http = FakeExternalHttp().also { h ->
-        val out = ByteArrayOutputStream()
-        ZipOutputStream(out).use { z ->
-            z.putNextEntry(ZipEntry("CORPCODE.xml"))
-            z.write("<result><list><corp_code>00000001</corp_code><stock_code>999999</stock_code></list></result>".toByteArray())
-            z.closeEntry()
-        }
-        h.on({ it.url.endsWith("corpCode.xml") }) { HttpBytes(200, out.toByteArray()) }
-    }
+    private val http = FakeExternalHttp() // 호출되면 안 된다: 로컬 경로
     private val cooldowns = Cooldowns(clock)
     private val dart = DartFinancials(
         OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock),
         dartStore, ledger, cooldowns, clock,
     )
+    init {
+        dartStore.writeCorpCodes(mapOf("999999" to "00000001"))
+    }
+
     private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger), Valuation(daily, dart, dartStore, dividends))
 
     // 2310-03-01 ~ 03-05 (공유 DB 의 다른 테스트와 겹치지 않는 먼 미래). 요일은 무관하게 평일 가정이 필요하므로 아래에서 검증한다.

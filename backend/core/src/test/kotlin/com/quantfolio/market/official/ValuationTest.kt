@@ -5,7 +5,6 @@ import com.quantfolio.domain.TestApp
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.OpenDartClient
 import com.quantfolio.market.source.Cooldowns
-import com.quantfolio.market.source.HttpBytes
 import com.quantfolio.market.store.CacheKeys
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.DividendEvent
@@ -20,14 +19,11 @@ import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
-import java.io.ByteArrayOutputStream
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
@@ -55,12 +51,7 @@ class ValuationTest(
     /** 이 테스트 전용 종목코드(6자리 숫자)와 corp. */
     private fun newSymbol(): String = (id.take(5) + (seq++)).also { corps[it] = "C${it}0" }
 
-    private fun serveCorpMap() {
-        val xml = "<result>" + corps.entries.joinToString("") { (s, c) -> "<list><corp_code>$c</corp_code><stock_code>$s</stock_code></list>" } + "</result>"
-        val out = ByteArrayOutputStream()
-        ZipOutputStream(out).use { z -> z.putNextEntry(ZipEntry("CORPCODE.xml")); z.write(xml.toByteArray()); z.closeEntry() }
-        http.on({ it.url.endsWith("corpCode.xml") }) { HttpBytes(200, out.toByteArray()) }
-    }
+    private fun serveCorpMap() = dartStore.writeCorpCodes(corps)
 
     private fun snapshot(symbol: String, day: LocalDate = asOf, cap: Long = 100_000L, close: Double = 1000.0) =
         daily.write(day, listOf(StockDaily(symbol, market = "KOSPI", marketCap = cap, close = close)))
@@ -190,5 +181,17 @@ class ValuationTest(
         assertNull(out.getValue(missing).per)
         assertNull(out.getValue(missing).pbr)
         assertThrows<MarketDataNotLoaded> { valuation.compute(asOf, listOf(missing)) }
+    }
+
+    @Test
+    fun `symbol missing from corp map is null for that symbol only`() {
+        val ok = newSymbol(); val unmapped = newSymbol()
+        corps.remove(unmapped) // 매핑 테이블에 없는 종목
+        serveCorpMap()
+        snapshot(ok); snapshot(unmapped)
+        report(ok, 2020, LocalDate.of(2021, 3, 10), netIncome = 10_000L, equity = 50_000L)
+        val out = valuation.compute(asOf, listOf(ok, unmapped)).associateBy { it.symbol }
+        assertEquals(10.0, out.getValue(ok).per)
+        assertNull(out.getValue(unmapped).per)
     }
 }
