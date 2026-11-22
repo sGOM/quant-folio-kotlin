@@ -4,6 +4,8 @@ import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.backtest.FillQualityReport
 import com.quantfolio.backtest.SlippageCalibration
 import com.quantfolio.common.MarketClock
+import com.quantfolio.common.RedisKeys
+import com.quantfolio.common.withLockOrElse
 import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.kis.KisStockMaster
 import com.quantfolio.market.official.DividendIngest
@@ -12,6 +14,7 @@ import com.quantfolio.news.NewsIngestor
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyFloat
 import org.slf4j.LoggerFactory
+import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
@@ -37,6 +40,7 @@ class WorkerJobs(
     private val news: NewsIngestor,
     private val alerts: AlertPublisher,
     private val jdbc: NamedParameterJdbcTemplate,
+    private val redis: StringRedisTemplate,
     private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -47,7 +51,7 @@ class WorkerJobs(
     private fun pct(ratio: Double) = pyFixed(ratio * 100, 0) + "%"
 
     /**
-     * KRX Open API 일일 적재(10:00 KST): 직전 평일 + 미확정 최근일. 실패가 있으면 warning(20h dedup).
+     * KRX Open API 일일 적재(평일 07:00~20:00 KST 30분마다 - 끝난 날은 원장만 읽고 넘어간다): 직전 평일 + 미확정 최근일. 실패가 있으면 warning(20h dedup).
      * 휴장일은 0행이라 7일 뒤에야 확정된다 — 그 전엔 매일 재조회하므로 실패 알림은 '실패' 항목만 센다.
      */
     fun ingestOfficialDaily(): Map<String, Any?> {
@@ -64,6 +68,28 @@ class WorkerJobs(
         }
         return linkedMapOf("date" to day.toString(), "done" to r.daysDone, "calls" to r.calls, "failed" to r.failed)
     }
+
+    /**
+     * OpenDART 정기보고서 로컬 적재(매일 05:00 KST 주기 작업 + `quantfolio.dart-backfill.*` 수동 실행). 엔진·백테스트는 로컬 DART 만 읽으므로
+     * 이 작업이 돌지 않으면 quality·growth 점수 입력이 비어 커버리지 관문이 막는다. 이미 확정된 조합은 호출 없이 넘어가고
+     * 한도(020)·인증 오류면 즉시 멈춘다 - 다음 실행이 원장으로 이어받는다. 주기·수동이 겹치지 않게 Redis 락.
+     */
+    fun dartBackfill(fromYear: Int, callBudget: Int): Map<String, Any?> =
+        redis.withLockOrElse(RedisKeys.DART_BACKFILL_LOCK, Duration.ofSeconds(RedisKeys.DART_BACKFILL_LOCK_TTL_SECONDS), busy = {
+            log.info("OpenDART 백필 건너뜀 - 다른 실행이 진행 중")
+            linkedMapOf<String, Any?>("busy" to true)
+        }) {
+            val r = official.dartBackfill(fromYear, callBudget)
+            log.info("OpenDART 백필 [{}~] {}", fromYear, r)
+            if (r.failed.isNotEmpty()) {
+                alerts.publish(
+                    null, 0, AlertSeverity.warning,
+                    "OpenDART 재무 백필 실패 ${r.failed.size}건: " + r.failed.take(5).joinToString("; "),
+                    "dart_backfill_failure", dedupWindowHours = 20.0,
+                )
+            }
+            linkedMapOf<String, Any?>("done" to r.daysDone, "calls" to r.calls, "stoppedByBudget" to r.stoppedByBudget, "failed" to r.failed)
+        }
 
     /** 수동 백필(`quantfolio.backfill.*` 설정으로 [BackfillRunner] 가 부른다). */
     fun backfillOfficial(from: LocalDate, to: LocalDate, callBudget: Int): Map<String, Any?> {

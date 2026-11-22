@@ -72,6 +72,10 @@ object RedisKeys {
     const val RECONCILE_LOCK_TTL_SECONDS = 30L
     fun reconcileLock(orderId: Int): String = "$RECONCILE_LOCK_PREFIX$orderId"
 
+    /** OpenDART 재무 백필 단독 실행(주기 작업·수동 실행 겹침 방지 - 겹치면 일 한도를 같이 쓴다). 원본에 없는 새 키. TTL 은 예산 소진까지의 상한 추정(측정값 아님). */
+    const val DART_BACKFILL_LOCK = "lock:dart_backfill"
+    const val DART_BACKFILL_LOCK_TTL_SECONDS = 6 * 3600L
+
     /** 마지막 DB 백업 성공 시각(ISO) */
     const val BACKUP_LAST_SUCCESS = "backup:last_success_at"
 

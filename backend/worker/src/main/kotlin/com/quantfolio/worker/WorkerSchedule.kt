@@ -25,9 +25,16 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
         }
     }
 
-    // 공개 시각은 Task 1 실측(차단 해제 후) 으로 확인한다. 그 전까지 보수적으로 다음 날 10:00.
-    @Scheduled(cron = "0 0 10 * * *", zone = KST)
+    // KRX Open API 공개 시각은 미실측(Task 1 에서 확정) - 그래서 한 번이 아니라 평일 07:00~20:00 30분마다 부른다. 목표일(직전 평일)이 끝나면
+    // daily() 는 원장만 읽고 API 를 부르지 않는다(5개 서비스 확정 날은 건너뜀). 최근 휴장 0행 같은 미확정 날은 7일 확정 전까지 매번 다시 받는다.
+    @Scheduled(cron = "0 0,30 7-19 * * MON-FRI", zone = KST)
+    @Scheduled(cron = "0 0 20 * * MON-FRI", zone = KST)
     fun ingestOfficialDaily() = run("ingest_official_daily") { jobs.ingestOfficialDaily() }
+
+    // 매일 05:00 KST - 사용자 조회가 적은 시간대, 03:00 백업 뒤. 초기 적재는 수만 호출이라 며칠에 걸쳐 이어받고, 끝나면 원장 조회만 한다.
+    // 예산 10,000 은 OpenDART 일 한도(공식 문서 기준 20,000, 미실측)의 절반 - 나머지는 웹의 원격 조회용으로 남긴다.
+    @Scheduled(cron = "0 0 5 * * *", zone = KST)
+    fun backfillDart() = run("backfill_dart") { jobs.dartBackfill(2015, DART_DAILY_BUDGET) }
 
     @Scheduled(cron = "0 0 7 * * SUN", zone = KST)
     fun ingestDividends() = run("ingest_dividends") { jobs.ingestDividends() }
@@ -52,6 +59,7 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
 
     private companion object {
         const val KST = "Asia/Seoul"
+        const val DART_DAILY_BUDGET = 10_000
     }
 }
 

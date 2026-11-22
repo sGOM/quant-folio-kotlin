@@ -186,4 +186,28 @@ class WorkerJobsTest(
         val c = backup.conn()
         assertTrue(c.host.isNotEmpty() && c.port.toInt() > 0 && c.dbname.isNotEmpty())
     }
+
+    @Test
+    fun dartBackfillPassesBudgetAndAlertsOnFailures() {
+        given(official.dartBackfill(eq(2015), eq(100))).willReturn(IngestReport(3, 100, true, listOf("000001 2024 11011: 한도")))
+        val r = jobs.dartBackfill(2015, 100)
+        assertEquals(3, r["done"])
+        assertEquals(true, r["stoppedByBudget"])
+        assertEquals("OpenDART 재무 백필 실패 1건: 000001 2024 11011: 한도", latest("dart_backfill_failure")!!.message)
+    }
+
+    @Test
+    fun dartBackfillIsSkippedWhileAnotherRunHoldsTheLock() {
+        redis.opsForValue().set(RedisKeys.DART_BACKFILL_LOCK, "other")
+        try {
+            val r = jobs.dartBackfill(2015, 100)
+            assertEquals(true, r["busy"])
+            org.mockito.Mockito.verify(official, org.mockito.Mockito.never()).dartBackfill(anyInt(), anyInt())
+        } finally {
+            redis.delete(RedisKeys.DART_BACKFILL_LOCK)
+        }
+        given(official.dartBackfill(eq(2015), eq(100))).willReturn(IngestReport(0, 0, false, emptyList()))
+        assertEquals(0, jobs.dartBackfill(2015, 100)["done"])
+        assertFalse(redis.hasKey(RedisKeys.DART_BACKFILL_LOCK)) // 끝나면 해제
+    }
 }

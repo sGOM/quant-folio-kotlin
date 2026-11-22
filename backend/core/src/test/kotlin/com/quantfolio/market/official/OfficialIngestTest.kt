@@ -344,4 +344,31 @@ class OfficialIngestTest(
         assertEquals(21 - 4, ok.called.size)
         assertEquals(0, ok.called.intersect(failing.called.toSet()).size)
     }
+
+    /** 워커가 평일 30분마다 daily() 를 부른다 - 끝난 창은 호출 0, 미확정 날(최근 휴장 0행)은 매번 다시 받아야 잠정 휴장·7일 확정이 동작한다. */
+    private fun window(target: LocalDate) =
+        generateSequence(target.minusDays(14)) { it.plusDays(1) }.takeWhile { !it.isAfter(target) }.filter { it.dayOfWeek.value <= 5 }.toList()
+
+    @Test
+    fun `daily rerun makes no api calls when the whole window is final`() {
+        val target = generateSequence(today.minusDays(1)) { it.minusDays(1) }.first { it.dayOfWeek.value <= 5 }
+        trade(*window(target).toTypedArray())
+        assertTrue(ingest().daily(target).daysDone > 0)
+        val before = open.calls
+        assertEquals(0, ingest().daily(target).daysDone)
+        assertEquals(before, open.calls)
+    }
+
+    @Test
+    fun `daily rerun refetches an unfinalized recent day`() {
+        val target = generateSequence(today.minusDays(1)) { it.minusDays(1) }.first { it.dayOfWeek.value <= 5 }
+        val win = window(target)
+        val holiday = win[win.size - 2] // 최근 휴장 0행 - 7일 전에는 확정되지 않는다
+        trade(*(win - holiday).toTypedArray())
+        ingest().daily(target)
+        assertFalse(ledger.get("krx_open", key("stk_bydd_trd", holiday, "KOSPI"))!!.final)
+        val before = open.calls
+        ingest().daily(target)
+        assertTrue(open.calls > before, "미확정 날은 다음 실행에서 다시 받아야 한다")
+    }
 }
