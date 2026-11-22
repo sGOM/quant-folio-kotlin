@@ -3,18 +3,12 @@ package com.quantfolio.worker
 import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.alert.pyIsoformat
 import com.quantfolio.common.MarketClock
-import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.stereotype.Component
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import java.io.OutputStream
 import java.net.URI
 import java.nio.file.Files
@@ -52,13 +46,11 @@ object PgDump : Dumper {
 /**
  * 야간 DB 백업(원본 `worker.backup_database`·`check_backup_freshness`). pg_dump+gzip → `/backups/quant_YYYYMMDD_HHMMSS.sql.gz`
  * (tmp 에 쓰고 이름 변경), 14일 보존, 성공 시각을 Redis 에 기록. 실패는 critical 알림(결과로 표현하고 예외는 던지지 않는다).
- * S3 호환 오프사이트 복제는 opt-in — 업로드 실패는 warning(로컬 백업은 이미 성공).
  */
 @Component
 class DbBackup(
     private val alerts: AlertPublisher,
     private val redis: StringRedisTemplate,
-    private val props: QuantfolioProperties,
     private val clock: Clock,
     @Value("\${spring.datasource.url}") private val jdbcUrl: String,
     @Value("\${spring.datasource.username:quant}") private val dbUser: String,
@@ -92,17 +84,7 @@ class DbBackup(
         }
         val removed = prune(dir)
         redis.opsForValue().set(RedisKeys.BACKUP_LAST_SUCCESS, pyIsoformat(clock.instant().atZone(MarketClock.KST)))
-        var s3Key: String? = null
-        if (props.s3Backup.enabled) {
-            try {
-                s3Key = upload(out)
-                log.info("DB 백업 오프사이트 업로드 완료: s3://{}/{}", props.s3Backup.bucket, s3Key)
-            } catch (e: Exception) {
-                log.error("DB 백업 오프사이트 업로드 실패(로컬 백업은 정상): {}", e.message)
-                alerts.publish(null, 0, AlertSeverity.warning, "DB 백업 오프사이트 업로드 실패(로컬 백업은 정상): ${e.message}", "db_backup_s3_upload_failed")
-            }
-        }
-        val result = linkedMapOf<String, Any?>("ok" to true, "path" to out.toString(), "size_bytes" to size, "removed" to removed, "s3_key" to s3Key)
+        val result = linkedMapOf<String, Any?>("ok" to true, "path" to out.toString(), "size_bytes" to size, "removed" to removed)
         log.info("DB 백업 완료: {}", result)
         return result
     }
@@ -115,17 +97,6 @@ class DbBackup(
                 .filter { Files.getLastModifiedTime(it).toInstant().isBefore(cutoff) }
                 .toList()
         }.map { Files.deleteIfExists(it); it.fileName.toString() }
-    }
-
-    private fun upload(path: Path): String {
-        val s3 = props.s3Backup
-        val builder = S3Client.builder()
-            .region(Region.of(s3.region))
-            .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(s3.accessKeyId, s3.secretAccessKey)))
-        if (s3.endpointUrl.isNotEmpty()) builder.endpointOverride(URI(s3.endpointUrl))
-        val key = s3.prefix + path.fileName
-        builder.build().use { it.putObject(PutObjectRequest.builder().bucket(s3.bucket).key(key).build(), path) }
-        return key
     }
 
     /** 백업 신선도 — 성공 기록이 없거나 26시간 넘게 갱신 안 됐으면 critical(워커·beat 사망 같은 상위 침묵 실패를 잡는다). */

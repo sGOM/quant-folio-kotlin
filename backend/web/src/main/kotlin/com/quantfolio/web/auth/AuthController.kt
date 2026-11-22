@@ -42,9 +42,6 @@ class AuthController(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    @PostMapping("/register")
-    fun register(): Nothing = throw ApiException(HttpStatus.FORBIDDEN, "회원가입은 지원하지 않습니다.")
-
     @PostMapping("/login")
     fun login(
         @RequestParam password: String,

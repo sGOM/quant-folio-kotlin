@@ -14,8 +14,6 @@ x-backend-secrets: &backend-secrets
   - krx_id
   - krx_pw
   - opendart_api_key
-  - s3_backup_access_key_id
-  - s3_backup_secret_access_key
 
 x-backend: &backend
   # image: 고정 태그를 두지 않는다 — 태그는 프로젝트 전역이라 qf-smoke 빌드가 운영 스택 이미지를 덮어쓴다.
@@ -93,7 +91,7 @@ services:
       web:
         condition: service_healthy
     volumes:
-      # 야간 DB 백업 산출물. 서버 디스크와 함께 사라지므로 오프사이트 반출은 S3 설정으로.
+      # 야간 DB 백업 산출물. 로컬 볼륨 전용(오프사이트 반출 없음).
       - db_backups:/backups
 
   frontend:
@@ -152,10 +150,6 @@ secrets:
     file: ./secrets/krx_pw.txt
   opendart_api_key:
     file: ./secrets/opendart_api_key.txt
-  s3_backup_access_key_id:
-    file: ./secrets/s3_backup_access_key_id.txt
-  s3_backup_secret_access_key:
-    file: ./secrets/s3_backup_secret_access_key.txt
 
 volumes:
   pgdata:

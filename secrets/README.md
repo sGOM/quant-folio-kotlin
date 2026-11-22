@@ -20,8 +20,6 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 | `krx_id.txt` | (선택) KRX 데이터 포털 로그인 ID | 지표 화면용. 미사용 시 빈 파일 |
 | `krx_pw.txt` | (선택) KRX 데이터 포털 비밀번호 | 지표 화면용. 미사용 시 빈 파일 |
 | `opendart_api_key.txt` | (선택) OpenDART 인증키 | 퀄리티·성장 팩터·턴어라운드 스크리너. 없으면 해당 팩터가 중립 처리돼 점수가 편향된다. 미사용 시 빈 파일 |
-| `s3_backup_access_key_id.txt` | (선택) S3 백업 오프사이트 복제 액세스 키 | 야간 DB 백업 추가 반출용(§10). 미사용 시 빈 파일 |
-| `s3_backup_secret_access_key.txt` | (선택) S3 백업 오프사이트 복제 시크릿 키 | 액세스 키와 함께 둘 다 설정해야 활성화. 미사용 시 빈 파일 |
 
 혼자 쓰는 서비스라 증권사 키·시크릿·계좌는 **서버 설정(이 디렉터리의 시크릿 파일 우선, 환경변수 호환)에서만** 읽습니다.
 웹 화면·API 로 등록하는 기능은 없고 사용자 DB 에도 자격증명 컬럼이 없습니다(Flyway V6 에서 삭제).
@@ -41,9 +39,6 @@ mkdir -p secrets
 : > secrets/krx_id.txt; : > secrets/krx_pw.txt
 # OpenDART 재무데이터(퀄리티·성장 팩터). 무료 발급 https://opendart.fss.or.kr — 미사용 시 빈 파일
 : > secrets/opendart_api_key.txt
-# S3 백업 오프사이트 복제(선택, §10). AWS S3/Cloudflare R2/Backblaze B2/MinIO 등
-# S3 호환 스토리지의 액세스 키 — 미사용 시 빈 파일(로컬 백업만 동작, 영향 없음)
-: > secrets/s3_backup_access_key_id.txt; : > secrets/s3_backup_secret_access_key.txt
 ```
 
 ## 파일 권한(선택, 권장)

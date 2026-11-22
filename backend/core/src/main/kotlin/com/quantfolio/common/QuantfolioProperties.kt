@@ -20,7 +20,6 @@ data class QuantfolioProperties(
     val toss: Toss = Toss(),
     val krx: Krx = Krx(),
     val opendart: OpenDart = OpenDart(),
-    val s3Backup: S3Backup = S3Backup(),
     val frontendOrigin: String = "http://localhost:3000",
     val debugErrors: Boolean = false,
     /** 파일 캐시 디렉터리(패닉 브레드스 등, 원본 backend/.cache). */
@@ -88,17 +87,6 @@ data class QuantfolioProperties(
 
     data class OpenDart(val apiKey: String = "", val baseUrl: String = "https://opendart.fss.or.kr/api") {
         val enabled: Boolean get() = apiKey.isNotBlank()
-    }
-
-    data class S3Backup(
-        val bucket: String = "",
-        val endpointUrl: String = "",
-        val region: String = "auto",
-        val prefix: String = "quantfolio-db-backups/",
-        val accessKeyId: String = "",
-        val secretAccessKey: String = "",
-    ) {
-        val enabled: Boolean get() = bucket.isNotBlank() && accessKeyId.isNotBlank() && secretAccessKey.isNotBlank()
     }
 }
 

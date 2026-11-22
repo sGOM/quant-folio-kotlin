@@ -63,12 +63,12 @@ class AuthControllerTest(
     private fun sessionFor(user: User) = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
 
     @Test
-    fun registerIsRejectedWithoutCreatingUser() {
+    fun registerEndpointIsGoneAndCreatesNoUser() {
         val before = users.count()
         mvc.post("/api/auth/register") {
             contentType = MediaType.APPLICATION_JSON
             content = """{"email":"${email()}","password":"password-1"}"""
-        }.andExpect { status { isForbidden() }; jsonPath("$.detail") { value("회원가입은 지원하지 않습니다.") } }
+        }.andExpect { status { isNotFound() } }
         assertEquals(before, users.count())
     }
 

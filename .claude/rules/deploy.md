@@ -27,7 +27,7 @@ paths:
 
 ## 함정
 
-- **이 PC 의 운영은 로컬 스택 `qf-paper`(복제 DB)다.** 원본 Python 스택(`quantfolio-*`)은 정지(`docker stop`)·볼륨 보존 상태이고 더 쓰지 않는다(2026-11-17 소유자 결정, 원격 배포·S3 반출 없음).
+- **이 PC 의 운영은 로컬 스택 `qf-paper`(복제 DB)다.** 원본 Python 스택(`quantfolio-*`)은 정지(`docker stop`)·볼륨 보존 상태이고 더 쓰지 않는다(2026-11-17 소유자 결정, 원격 배포·오프사이트 백업 없음).
   기동: `docker compose -p qf-paper -f docker-compose.yml -f docker-compose.paper.local.yml up -d`(`.env`(git 무시)의 `COMPOSE_PROJECT_NAME=qf-paper`·`COMPOSE_FILE` 이 자동 적용, 포트 DB 15432·Redis 16379·web 18000·화면 13000).
   시험 스택은 저장소 밖 사본에서 `-p qf-smoke`(포트는 `.env` 의 `DB_PORT`·`WEB_PORT`·`APP_PORT` 등).
   `.env` 없는 곳에서 `-p` 없이 띄우거나 `-p quantfolio`(compose 기본 `name`)를 주면 보존된 원본 볼륨 `quantfolio_pgdata` 를 물고 Flyway 가 원본 DB 를 마이그레이션(V6 은 되돌릴 수 없음)하며 live 전략을 복구한다 — `.env` 의 `COMPOSE_PROJECT_NAME` 은 `-p` 를 생략한 경우만 막는다(우선순위 `-p` > 환경변수 > `name:`). `-p quantfolio` 는 쓰지 않는다.
