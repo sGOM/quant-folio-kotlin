@@ -27,6 +27,16 @@ class DividendStoreTest(@Autowired private val store: DividendStore) {
     }
 
     @Test
+    fun nullAnnouncedOnDoesNotOverwriteExisting() {
+        val ann = d.minusDays(40)
+        store.write(listOf(DividendEvent("009993", d, 100.0, ann, "dart")))
+        store.write(listOf(DividendEvent("009993", d, 120.0, null, "krx")))
+        val got = store.read(listOf("009993"), d, d).single()
+        assertEquals(ann, got.announcedOn)
+        assertEquals(120.0, got.dps)
+    }
+
+    @Test
     fun readFiltersBySymbolsAndRange() {
         store.write(listOf(DividendEvent("009991", d, 1.0, null, "dart"), DividendEvent("009992", d, 2.0, null, "dart"),
             DividendEvent("009991", d.minusYears(1), 3.0, null, "dart")))
