@@ -7,7 +7,6 @@ import com.quantfolio.backtest.Tracking
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
-import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.UniverseScoreParams
@@ -300,12 +299,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     private fun sectors(): Map<String, String> {
         sectorMap?.takeIf { it.isNotEmpty() }?.let { return it }
-        val smap = try {
-            ctx.krx.sectorMap()
-        } catch (e: DataSourceError) {
-            log.error("전략 {} 섹터 한도용 업종 매핑 조회 실패 — 섹터 캡 미적용: {}", strategyId, e.message)
-            return emptyMap() // 실패는 캐시하지 않는다
-        }
+        val smap = ctx.krx.sectorMap(MarketClock.todayKst(ctx.clock)) // 로컬 스냅샷이 없으면 MarketDataNotLoaded — 캡을 조용히 빼지 않고 리밸런싱을 멈춘다
         if (smap.isNotEmpty()) sectorMap = smap else log.warn("전략 {} 섹터 한도 설정됨이나 업종 매핑 미확보 — 섹터 캡 미적용.", strategyId)
         return smap
     }

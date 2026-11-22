@@ -3,6 +3,8 @@ package com.quantfolio.market.kis
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.market.KisStockMasterSnapshot
 import com.quantfolio.domain.market.KisStockMasterSnapshotRepository
+import com.quantfolio.domain.market.SectorMapSnapshot
+import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -37,6 +39,7 @@ class KisStockMaster(
     private val http: ExternalHttp,
     private val cooldowns: Cooldowns,
     private val repo: KisStockMasterSnapshotRepository,
+    private val sectors: SectorMapSnapshotRepository,
     private val clock: Clock,
     private val tx: org.springframework.transaction.support.TransactionTemplate,
 ) : MasterListing {
@@ -65,6 +68,7 @@ class KisStockMaster(
         val day = tradeDate ?: MarketClock.todayKst(clock)
         val errors = mutableListOf<DataSourceError>()
         var saved = 0
+        val sectorRows = mutableListOf<SectorMapSnapshot>()
         for (market in FILE_NAMES.keys) {
             val rows = try {
                 fetch(market)
@@ -76,6 +80,14 @@ class KisStockMaster(
             repo.deleteByMarketAndTradeDate(market, day)
             repo.saveAll(rows.map { KisStockMasterSnapshot(day, it.symbol, market, it.name, it.raw) })
             saved += rows.size
+            rows.forEach { row -> sectorOf(market, row)?.let { sectorRows += SectorMapSnapshot(row.symbol, it, day) } }
+        }
+        // PIT 업종 맵은 latest 스냅샷일 전체를 쓰므로 두 시장이 다 성공했을 때만 쓴다(한 시장만이면 그 날짜가 반쪽 맵이 된다).
+        if (errors.isEmpty()) {
+            sectors.deleteBySnapshotDate(day)
+            sectors.saveAll(sectorRows)
+        } else if (saved > 0) {
+            log.warn("KIS 종목마스터 일부 시장 실패 — 업종 스냅샷({}) 적재 건너뜀", day)
         }
         if (saved == 0 && errors.isNotEmpty()) throw DataSourceErrors.representative(errors)
         log.info("KIS 종목마스터 스냅샷 적재: trade_date={} {}종목(성공 시장 {}/2)", day, saved, 2 - errors.size)
@@ -87,6 +99,10 @@ class KisStockMaster(
         val row = repo.findFirstBySymbolOrderByTradeDateDesc(symbol) ?: return null
         return mapOf("trade_date" to row.tradeDate, "market" to row.market, "name" to row.name) + row.raw
     }
+
+    /** 지수업종 중분류 코드 → `시장:코드`(시장별 코드 체계가 달라 접두). 비었거나 0000 이면 업종 없음(null). */
+    private fun sectorOf(market: String, row: MasterRow): String? =
+        row.raw[SECTOR_FIELD[market]]?.takeIf { code -> code.isNotEmpty() && code.any { it != '0' } }?.let { "$market:$it" }
 
     private fun extractMst(zip: ByteArray, market: String): String {
         try {
@@ -136,6 +152,7 @@ class KisStockMaster(
     companion object {
         const val SOURCE = "kis_master"
         private const val BASE_URL = "https://new.real.download.dws.co.kr/common/master/%s.mst.zip"
+        private val SECTOR_FIELD = mapOf("KOSPI" to "지수업종중분류", "KOSDAQ" to "지수 업종 중분류 코드")
         private val FILE_NAMES = linkedMapOf("KOSPI" to "kospi_code", "KOSDAQ" to "kosdaq_code")
         private val CP949: Charset = Charset.forName("MS949")
 

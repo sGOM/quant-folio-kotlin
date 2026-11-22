@@ -13,9 +13,9 @@ import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
 
-/** 오늘 이전 날짜가 거래일인가 — 로컬 적재 데이터 기준. */
+/** 오늘 이전 날짜가 거래일인가 — 로컬 적재 데이터 기준. 적재 구간 밖이라 모르면 null. */
 fun interface PastTradingDays {
-    fun isTradingDay(day: LocalDate): Boolean
+    fun isTradingDay(day: LocalDate): Boolean?
 }
 
 /** KIS 국내휴장일조회: [from] 이후 날짜별 개장일 여부. 실패하면 예외. */
@@ -45,29 +45,40 @@ class MarketCalendar(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private class Cached(val day: LocalDate, val map: Map<LocalDate, Boolean>)
-
-    @Volatile private var cached: Cached? = null
-    @Volatile private var failedAt: Instant? = null
+    // KIS 응답은 기준일 이후 날짜들이라 한 번 받으면 그 이후를 모두 덮는다. 날짜가 바뀌면 비운다.
+    private val holidays = HashMap<LocalDate, Boolean>()
+    private var holidaysDay: LocalDate? = null
+    private var holidaysFrom: LocalDate? = null
+    private var failedAt: Instant? = null
 
     fun isBusinessDay(d: LocalDate): Boolean {
         if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) return false
         val today = MarketClock.todayKst(clock)
-        if (d.isBefore(today)) return past.isTradingDay(d)
-        return kisHolidays(today)[d] ?: true
+        if (d.isBefore(today)) past.isTradingDay(d)?.let { return it }
+        return kisOpen(d, today) ?: true
     }
 
+    /** 오늘·미래, 그리고 로컬이 모르는 과거일의 개장 여부. 조회 불가·응답에 없으면 null(평일 규칙). 기준일 = min(오늘, d). */
     @Synchronized
-    private fun kisHolidays(today: LocalDate): Map<LocalDate, Boolean> {
-        cached?.takeIf { it.day == today }?.let { return it.map }
+    private fun kisOpen(d: LocalDate, today: LocalDate): Boolean? {
+        if (holidaysDay != today) {
+            holidays.clear()
+            holidaysDay = today
+            holidaysFrom = null
+        }
+        val from = minOf(d, today)
+        if (holidaysFrom?.let { !from.isBefore(it) } == true) return holidays[d]
         val now = clock.instant()
-        if (failedAt?.let { Duration.between(it, now) < RETRY_AFTER } == true) return emptyMap()
+        if (failedAt?.let { Duration.between(it, now) < RETRY_AFTER } == true) return null
         return try {
-            kis.holidays(today).also { cached = Cached(today, it); failedAt = null }
+            holidays.putAll(kis.holidays(from))
+            holidaysFrom = from
+            failedAt = null
+            holidays[d]
         } catch (e: Exception) {
             failedAt = now
             log.warn("KIS 휴장일 조회 실패 — 평일 규칙으로 판단: {}", e.message)
-            emptyMap()
+            null
         }
     }
 

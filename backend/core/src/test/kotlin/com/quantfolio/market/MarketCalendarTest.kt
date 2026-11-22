@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -25,7 +26,13 @@ import kotlin.test.assertTrue
 @Import(ContainersConfig::class)
 class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
     // 2026-10-19 10:00 KST = 오늘
-    private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
+    private class MutableClock(var now: Instant) : Clock() {
+        override fun getZone() = ZoneOffset.UTC
+        override fun withZone(zone: java.time.ZoneId?) = this
+        override fun instant() = now
+    }
+
+    private val clock = MutableClock(Instant.parse("2026-10-19T01:00:00Z"))
     private val kisCalls = mutableListOf<LocalDate>()
     private var kis: (LocalDate) -> Map<LocalDate, Boolean> = { emptyMap() }
     private val calendar by lazy {
@@ -68,6 +75,48 @@ class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 20)))
         assertEquals(1, kisCalls.size) // 실패 직후 재호출 폭주 없음
+    }
+
+    @Test
+    fun `past holiday after last loaded index day comes from KIS`() {
+        indexes.delete("1001")
+        indexes.write("1001", listOf(12, 13, 14).map { IndexBar(LocalDate.of(2026, 10, it), close = 1.0) }, null)
+        kis = { mapOf(LocalDate.of(2026, 10, 15) to false, LocalDate.of(2026, 10, 16) to true, LocalDate.of(2026, 10, 19) to true) }
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 15))) // 적재 범위 밖 과거 휴장일
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 16)))
+        assertEquals(listOf(LocalDate.of(2026, 10, 15)), kisCalls) // 기준일 = 지수 최대일+1, 한 번
+    }
+
+    @Test
+    fun `unloaded past day falls back to weekday rule when KIS is unavailable`() {
+        indexes.delete("1001")
+        indexes.write("1001", listOf(12, 13, 14).map { IndexBar(LocalDate.of(2026, 10, it), close = 1.0) }, null)
+        kis = { error("vts 미지원") }
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 15)))
+    }
+
+    @Test
+    fun `failed KIS lookup is retried after ten minutes`() {
+        kis = { error("down") }
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        clock.now = clock.now.plus(Duration.ofMinutes(9))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        assertEquals(1, kisCalls.size)
+        clock.now = clock.now.plus(Duration.ofMinutes(2))
+        kis = { mapOf(LocalDate.of(2026, 10, 19) to false) }
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        assertEquals(2, kisCalls.size)
+    }
+
+    @Test
+    fun `KIS cache is refreshed when the day changes`() {
+        kis = { from -> mapOf(from to true) }
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        assertEquals(1, kisCalls.size)
+        clock.now = clock.now.plus(Duration.ofDays(1))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 20))
+        assertEquals(listOf(LocalDate.of(2026, 10, 19), LocalDate.of(2026, 10, 20)), kisCalls)
     }
 
     @Test

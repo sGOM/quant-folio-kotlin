@@ -154,6 +154,17 @@ class BacktestsControllerTest(
         }
     }
 
+    private fun dateThat(test: (LocalDate) -> Boolean): LocalDate {
+        org.mockito.ArgumentMatchers.argThat<LocalDate> { test(it) }
+        return LocalDate.MIN
+    }
+
+    /** Mockito any() 는 null 을 돌려줘 비널 인자에 못 쓴다. */
+    private fun anyDate(): LocalDate {
+        org.mockito.ArgumentMatchers.any(LocalDate::class.java)
+        return LocalDate.MIN
+    }
+
     /** 원본 `_with_sector_map`: max_sector_pct 가 있을 때만 업종 매핑을 조회해 섹터 캡을 건다. 조회 실패는 캡 없이 진행. */
     @Test
     fun sectorCapLooksUpSectorMapOnlyWhenLimitSet() {
@@ -169,17 +180,17 @@ class BacktestsControllerTest(
         }
 
         val uncapped = invested(base)
-        verify(krx, never()).sectorMap(any())
+        verify(krx, never()).sectorMap(anyDate())
         assertTrue(uncapped > 0.9, "캡 없으면 거의 전액 투자: $uncapped")
 
-        given(krx.sectorMap(any())).willReturn(codes.associateWith { "전기전자" })
+        given(krx.sectorMap(anyDate())).willReturn(codes.associateWith { "전기전자" })
         val before = MarketClock.todayUtcLegacy(clock)
         val withCap = invested(capped)
         val after = MarketClock.todayUtcLegacy(clock)
-        verify(krx).sectorMap(argThat { it == before || it == after }) // 원본 date.today()(UTC)
+        verify(krx).sectorMap(dateThat { it == before || it == after }) // 원본 date.today()(UTC)
         assertTrue(withCap < 0.5, "한 업종 30% 상한이면 나머지는 현금: $withCap")
 
-        given(krx.sectorMap(any())).willThrow(SourceUnavailableError("krx", "down"))
+        given(krx.sectorMap(anyDate())).willThrow(SourceUnavailableError("krx", "down"))
         assertEquals(uncapped, invested(capped), 1e-9)
     }
 

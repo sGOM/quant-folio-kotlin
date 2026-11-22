@@ -4,6 +4,7 @@ import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.TestApp
 import com.quantfolio.domain.market.SectorMapSnapshot
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.source.SourceUnavailableError
@@ -146,16 +147,6 @@ class KrxIndexServiceTest(
     }
 
     @Test
-    fun sectorMapExcludesZeroCodeAndCaches() {
-        transport.on({ it.form["bld"] == "dbms/MDC/STAT/standard/MDCSTAT03901" }) {
-            HttpResult(200, """{"block1":[{"ISU_SRT_CD":"005930","IDX_IND_NM":"전기전자"},{"ISU_SRT_CD":"000000","IDX_IND_NM":"합계"}]}""")
-        }
-        assertEquals(mapOf("005930" to "전기전자"), service.sectorMap())
-        service.sectorMap()
-        assertEquals(2, transport.calls.count { it.form["bld"] == "dbms/MDC/STAT/standard/MDCSTAT03901" })
-    }
-
-    @Test
     fun sectorMapUsesPitSnapshot() {
         sectors.saveAll(
             listOf(
@@ -169,14 +160,9 @@ class KrxIndexServiceTest(
     }
 
     @Test
-    fun snapshotSectorMapPersistsSkipsAndForces() {
-        transport.on({ it.form["bld"] == "dbms/MDC/STAT/standard/MDCSTAT03901" }) {
-            HttpResult(200, """{"block1":[{"ISU_SRT_CD":"800001","IDX_IND_NM":"운수"}]}""")
-        }
-        val day = LocalDate.of(1998, 1, 2)
-        assertEquals(1, service.snapshotSectorMap(day))
-        assertEquals(0, service.snapshotSectorMap(day))
-        assertEquals(1, service.snapshotSectorMap(day, force = true))
-        assertEquals(1, sectors.findAll().count { it.snapshotDate == day })
+    fun sectorMapWithoutSnapshotIsNotLoaded() {
+        val e = assertThrows<MarketDataNotLoaded> { service.sectorMap(LocalDate.of(1990, 1, 1)) }
+        assertEquals("sector_map", e.kind)
+        assertTrue(transport.calls.none { it.form["bld"] == "dbms/MDC/STAT/standard/MDCSTAT03901" })
     }
 }

@@ -15,7 +15,16 @@ import java.time.format.DateTimeFormatter
  */
 @Component
 class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger: FetchLedger) : PastTradingDays {
-    override fun isTradingDay(day: LocalDate): Boolean = day in expected(day, day)
+    /** 적재 구간 안이면 지수 행 유무, 휴장 확정 기록이면 false, 적재 구간 뒤(최신 지수일 이후)는 모르므로 null. 구간 앞은 평일 규칙(true). */
+    override fun isTradingDay(day: LocalDate): Boolean? {
+        if (isHoliday(day)) return false
+        val span = indexes.span(KOSPI_INDEX) ?: return null
+        return when {
+            day.isBefore(span.first) -> true
+            day.isAfter(span.second) -> null
+            else -> indexes.read(KOSPI_INDEX, day, day).isNotEmpty()
+        }
+    }
 
     /** [start, end] 의 기대 거래일(오름차순). 적재 구간 앞·뒤의 평일(휴장 확정 제외)은 아직 모르는 날이라 결측 후보다. */
     fun expected(start: LocalDate, end: LocalDate): List<LocalDate> {

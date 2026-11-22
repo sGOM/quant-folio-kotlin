@@ -1,9 +1,9 @@
 package com.quantfolio.market.krx
 
-import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.market.SectorMapSnapshot
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.ohlcv.IndexMembers
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -13,7 +13,6 @@ import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.StoreCache
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
@@ -50,8 +49,6 @@ class KrxIndexService(
     private val capsCache = ConcurrentHashMap<LocalDate, Map<String, Long>>()
 
     @Volatile private var stocksCache: List<ListedStock>? = null
-
-    @Volatile private var sectorCache: Map<String, String>? = null
 
     /** 지수 구성종목(PIT). 확정 기록이 있으면 로컬, 없으면 KRX 에서 최대 7일 거슬러 조회 후 저장. */
     override fun indexMembers(asOf: LocalDate, index: String): List<String> {
@@ -137,63 +134,12 @@ class KrxIndexService(
     }
 
     /**
-     * 종목 → 업종. asOf 가 있으면 그 시점 이하 최신 PIT 스냅샷을 우선 쓴다(KRX 는 '현재' 분류만 준다).
-     * 스냅샷이 없으면 현재 분류로 폴백 — 스냅샷 도입 이전 구간은 소급할 수 없다.
+     * 종목 → 업종. asOf 이하 최신 PIT 스냅샷(`sector_map_snapshots`, KIS 종목마스터 스냅샷이 채운다)만 쓴다.
+     * 스냅샷이 없으면 원격으로 대체하지 않고 [MarketDataNotLoaded] — 업종 없이 돌리면 섹터 캡이 조용히 무력화된다.
      */
-    fun sectorMap(asOf: LocalDate? = null): Map<String, String> {
-        if (asOf != null) {
-            val snap = pitSnapshot(asOf)
-            if (snap.isNotEmpty()) return snap
-            log.warn("업종분류 PIT 스냅샷 미확보({} 이전 스냅샷 없음) — 현재 KRX 분류로 폴백", asOf)
-        }
-        sectorCache?.let { return it }
-        if (session.current() == null) return emptyMap()
-        val base = asOf ?: MarketClock.todayUtcLegacy(clock)
-        val mapping = linkedMapOf<String, String>()
-        val att = Attempts()
-        for (back in 0L until 10L) {
-            val dd = base.minusDays(back).format(YMD)
-            for (mkt in listOf("STK", "KSQ")) {
-                if (att.cooling()) break
-                val payload = mapOf("bld" to BLD_SECTOR, "locale" to "ko_KR", "mktId" to mkt, "trdDd" to dd, "money" to "1", "csvxls_isNo" to "false")
-                val rows = att.rows(payload, "block1", "업종분류($mkt)") { e ->
-                    log.warn("KRX 업종분류 조회 실패({} {}): {}", mkt, dd, e.message)
-                } ?: continue
-                for (r in rows) {
-                    val code = r["ISU_SRT_CD"]?.toString()?.trim().orEmpty().padStart(6, '0')
-                    val industry = r["IDX_IND_NM"]?.toString()?.trim().orEmpty()
-                    if (code != "000000" && industry.isNotEmpty()) mapping[code] = industry
-                }
-            }
-            if (att.cooling()) break
-            if (mapping.isNotEmpty()) break
-        }
-        att.throwIfAllFailed()
-        if (mapping.isNotEmpty()) {
-            sectorCache = mapping
-            log.info("KRX 업종분류 로드: {}종목", mapping.size)
-        }
-        return mapping
-    }
-
-    /** 현재 업종분류를 snapshotDate 로 적재(분기 배치). 이미 있으면 스킵, force 면 교체. 적재 건수 반환. */
-    @Transactional
-    fun snapshotSectorMap(asOf: LocalDate? = null, force: Boolean = false): Int {
-        val day = asOf ?: MarketClock.todayUtcLegacy(clock)
-        val existing = sectors.countBySnapshotDate(day)
-        if (existing > 0 && !force) {
-            log.info("업종분류 스냅샷({}) 이미 존재({}건) — 스킵", day, existing)
-            return 0
-        }
-        val mapping = sectorMap()
-        if (mapping.isEmpty()) {
-            log.warn("업종분류 미인증/빈 응답 — 스냅샷({}) 적재 건너뜀", day)
-            return 0
-        }
-        if (existing > 0) sectors.deleteBySnapshotDate(day)
-        sectors.saveAll(mapping.map { (code, sector) -> SectorMapSnapshot(code, sector, day) })
-        log.info("업종분류 스냅샷 적재: snapshot_date={} {}종목", day, mapping.size)
-        return mapping.size
+    fun sectorMap(asOf: LocalDate): Map<String, String> {
+        val latest = sectors.latestDateOnOrBefore(asOf) ?: throw MarketDataNotLoaded("sector_map", asOf.toString())
+        return sectors.findBySnapshotDate(latest).associate { it.symbol to it.sector }
     }
 
     /**
@@ -222,14 +168,6 @@ class KrxIndexService(
         }
     }
 
-    private fun pitSnapshot(asOf: LocalDate): Map<String, String> = try {
-        val latest = sectors.latestDateOnOrBefore(asOf)
-        if (latest == null) emptyMap() else sectors.findBySnapshotDate(latest).associate { it.symbol to it.sector }
-    } catch (e: Exception) {
-        log.warn("업종분류 PIT 스냅샷 조회 실패({}): {}", asOf, e.message)
-        emptyMap()
-    }
-
     companion object {
         val INDEX_PARAMS = mapOf(
             "KOSPI200" to mapOf("indIdx" to "1", "indIdx2" to "028"),
@@ -240,7 +178,6 @@ class KrxIndexService(
         private const val BLD_INDEX_CONSTITUENTS = "dbms/MDC/STAT/standard/MDCSTAT00601"
         private const val BLD_STOCK_FINDER = "dbms/comm/finder/finder_stkisu"
         private const val BLD_MARKET_CAP = "dbms/MDC/STAT/standard/MDCSTAT01501"
-        private const val BLD_SECTOR = "dbms/MDC/STAT/standard/MDCSTAT03901"
         private val YMD: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
     }
 }
