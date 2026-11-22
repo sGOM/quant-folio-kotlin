@@ -17,7 +17,7 @@
 기존 주문·포지션 계좌 키와 잔고 추정 차단은 보존한다. 과거 계좌의 장부를 새 시크릿 계좌에 자동 연결하지 않는다.
 엔진 정합(주기·체결통보 트리거)은 비소유자 주문을 조회·통계·알림 없이 건너뛰고, 주문 실행은 전략이 그 사용자 것이 아니면 예약 없이 보류한다(원본은 둘 다 사용자 구분이 없다).
 계좌는 이제 시크릿 교체로 바뀌므로 V2 트리거는 V6 이전에도 발화하지 않았다. V6 는 트리거만 지우고 이미 선 `kis_balance_reconcile_blocked` 는 남겨 계속 잔고 추정을 막는다(새로 서지는 않는다). 이전 장부와 새 계좌 잔고의 혼합은 기존 계좌 키 조건이 막는다 —
-사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다(V8 이 그 주문을 지우면서 이 차단을 플래그로 옮겼다 — 아래 "의도적 차이").
+사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다(V8 이 그 주문을 지웠다 — 아래 "의도적 차이").
 
 예외: 2026-11-07~08 사용자 지시로 주문 안전성 #13·#14를 Kotlin에서 먼저 수정했다. 아래 표는 원본 결함의 이력이며, 이 두 행은 현재 Kotlin 동작이 아니다.
 선택 증권사 기준의 실전 게이트, 접수 정보 선저장(호출자 롤백과 분리), 사용자·종목별 접수불명 재주문 차단,
@@ -137,8 +137,8 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 배포: 원본 `docker-compose.override.yml`(uvicorn `--reload`)은 옮기지 않았다 — JVM 에 해당 없음. 소스 볼륨 마운트(`./backend:/app`)도 제거(이미지에 jar 포함).
 - 배포: worker 가 원본은 redis 만 기다렸지만 Kotlin 은 `web` healthy(=Flyway 완료) 뒤에 기동한다. engine 도 같다.
 - frontend `Dockerfile`: 원본 `npm install`(lockfile 미사용)은 현재 레지스트리에서 `edgesOut` null 오류로 재현 가능하게 실패 → `package-lock.json` + `npm ci`. 앱 코드는 무수정.
-- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성(이후 `credential_enc_key`·`secret_key`·`s3_backup_*` 를 지워 현재 9개). `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
+- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성. `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
 - Caddy 의 `/docs`·`/openapi.json`·`/redoc` 라우트는 남겼지만 Kotlin web 은 해당 문서를 제공하지 않는다(404).
-- 요청 DTO 의 `@Size`(전략 이름 255·설명 2000·비밀번호 8~128)는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
+- 요청 DTO 의 `@Size` 는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
 - KIS WS 종료: 원본은 `async with websockets.connect()` 종료 시 closing handshake 를 close_timeout(기본 10초)까지 기다린 뒤 TCP 를 닫는다. Kotlin `KisSocket.close()` 는 close 프레임 전송과 서버 close 대기에 각 2초 상한(측정값 아님)을 두고, 그 뒤 `abort` 와 HttpClient `shutdownNow` 로 소켓을 닫는다. 인터럽트되면 대기 없이 즉시 닫는다. JDK HttpClient 는 핸드셰이크 응답 없이 끊기면 한 번 재시도해 시도당 TCP 연결을 2개 만든다(원본 websockets 는 재시도 없음 — 바꾸지 않음).
 - KIS 계좌번호·HTS ID: 원본은 환경변수(`KIS_ACCOUNT_NO`·`KIS_HTS_ID`)로 받았다. Kotlin 은 compose secret `kis_account_no`(`secrets/account_num`)·`kis_hts_id`(`secrets/hts_id.txt`)를 우선 읽고 환경변수는 로컬 실행용 폴백이다(2026-11-17 소유자 결정: 시크릿은 `secrets/` 한 곳에서만 관리).

@@ -39,7 +39,7 @@ paths:
 
 - `core/src/main/resources/quantfolio-core.yml` 을 세 앱이 import 한다. 값 우선순위:
   `/run/secrets/<name>` 파일(configtree, 앞뒤 공백 제거) > 원본과 같은 이름의 환경변수(.env 호환) > 기본값.
-- 부팅 거부(안전측): `KIS_ENV=prod` 인데 `KIS_PROD_APPROVED` 아님, `APP_ENV=prod` 인데 `COOKIE_SECURE=false`.
+- 부팅 거부 조건은 `QuantfolioProperties.validate()` 참조.
 - DB URL 은 `DATABASE_JDBC_URL`(원본 `DATABASE_URL` 은 SQLAlchemy 형식이라 쓰지 않는다).
 - `TRADING_OWNER_USER_ID`는 거래 가능한 소유자 ID이며 미설정이면 거래를 차단한다.
 ## 함정

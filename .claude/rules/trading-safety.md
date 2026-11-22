@@ -3,6 +3,7 @@ paths:
   - "backend/core/src/main/kotlin/com/quantfolio/live/**"
   - "backend/core/src/main/kotlin/com/quantfolio/broker/**"
   - "backend/engine/**"
+  - "frontend/app/monitor/**"
 ---
 
 # 실거래 안전 — 실전 게이트·자격증명
@@ -22,7 +23,7 @@ paths:
 - 체결 정합 **표본 부족은 등급보다 먼저** 차단한다 — "판단 불가"는 통과가 아니라 차단.
 - 차단 등급은 `RED` 뿐(AMBER 통과). 금액 상한은 **초과만** 차단(같으면 통과), 일일 상한 0/미설정이면 검사 생략.
 - 거부 사유 문구는 원본 그대로(알림·로그 소비처가 있다). 금액은 Python `,.0f`(HALF_EVEN) 형식.
-- 입력 조립(최근 90일 체결 정합 리포트·전략별→사용자 공통 리스크 한도·KST 당일 체결 명목 합)은 엔진 쪽 책임.
+- 입력 조립(최근 90일 체결 정합 리포트·전략별→사용자 공통 리스크 한도·KST 당일 체결 명목 합)은 엔진 쪽 책임(`LiveGateService`).
 
 ## 주문·체결 불변식 (엔진)
 
@@ -63,7 +64,7 @@ paths:
 
 - 단일 소유자 서비스다. 증권사 키·계좌는 서버 설정(configtree 시크릿 우선, 환경변수 호환)만 사용하고 사용자 DB의 과거 자격증명은 읽지 않는다.
 - `TRADING_OWNER_USER_ID`로 지정한 양의 사용자 ID만 거래·서버 자격증명 사용을 허용한다. 미설정이면 차단하며(엔진 기동 로그에 경고) 가입 순서로 소유자를 선택하지 않는다. API 시작·엔진 복구·주문 실행(전략 소유도 확인)·정합 모두 검사한다 — 비소유자 주문은 정합이 조회·통계·알림 없이 건너뛴다(`resolve_order` 는 검사 없음).
-- 기존 주문·포지션의 계좌 키와 `kis_balance_reconcile_blocked`는 유지한다. 시크릿을 바꿨다고 과거 장부를 새 계좌에 연결하거나 잔고 추정 차단을 해제하지 않는다. 과거 주문 계좌 연결 API(`/api/trading/legacy-account-links`)는 그 대상 데이터와 함께 삭제했다(V8).
+- 기존 주문·포지션의 계좌 키와 `kis_balance_reconcile_blocked`는 유지한다. 시크릿을 바꿨다고 과거 장부를 새 계좌에 연결하거나 잔고 추정 차단을 해제하지 않는다(강제: `CodeRulesTest.reconcileBlockedFlagNeverReleased`).
 - 사용자 DB 에 자격증명 컬럼·암호화 키는 없다(V6 에서 삭제). 되살리지 않는다.
 - 원문·암호문을 응답·로그에 넣지 않는다(응답은 보유 여부 boolean 만).
 
@@ -72,3 +73,5 @@ paths:
 - 소유자 혼자 쓰므로 시크릿에 있는 증권사 키를 설정 화면에 재등록하도록 안내하지 않는다(2026-11-16 사용자 교정). 로그인 계정과 증권사 자격증명은 별개다.
 - KIS 모의 WS(31000)는 새 접속을 자주 거부한다(2026-11-17: 09:03~10:21 약 25회 중 1회 성공, 이후도 성공·실패 혼재, 원인 미확정 — `docs/migration-notes.md`). 붙어 있는 연결을 끊는 전략 정지→재시작을 실측 중에 가볍게 하지 않는다. 끊겨도 체결은 주문 직후 조회·주기 정합으로 기록된다.
 - JDK WebSocket 은 `sendClose` 만으로 TCP 를 닫지 않는다(FIN 도 안 보냄 — 서버 close·EOF 를 읽어야 닫힘). `KisSocket.close()` 는 짧게 기다린 뒤 `abort` + HttpClient `shutdownNow` 로 끝내야 한다. 빼면 정지 뒤 KIS 세션이 열린 채 남는다(2026-11-17 모의 실측에서 엔진 컨테이너에 CLOSE_WAIT 소켓 2개 관측).
+- `MarketHaltMonitor` 같은 클래스에 `@Component` 를 붙이면 kotlin-spring 플러그인이 `open` 으로 만들어 `private set` 프로퍼티가 컴파일되지 않는다 — 그래서 `EngineBeans` 의 `@Bean` 으로 등록한다.
+- 매매 화면 `frontend/app/monitor/` 는 전략 시작/중지·슬리피지 승인 테스트(`__tests__/MonitorPage.test.tsx`)가 안전망이다 — 패널을 고치면 이 테스트를 함께 본다.

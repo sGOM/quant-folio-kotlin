@@ -25,3 +25,4 @@ paths:
 - 백업은 워커 이미지에 `pg_dump`(postgresql-client)가 있어야 한다. 비밀번호는 `PGPASSWORD` 로만.
 - 뉴스 XML 은 DOCTYPE 금지(XXE). 원본 의미: XML 이 엔티티를 풀고 HTML unescape 가 한 번 더 — "고치지" 말 것.
 - 일봉 보충 실패는 `ensureCoverage` 가 삼킨다(원본 동일) — 실패율 알림은 DB 계열 오류에서만 발화한다.
+- 일봉 적재와 일별 스냅샷 선적재는 "실패율 알림" 발행 실패 처리가 다르다(한쪽만 삼킴) — 원본 `worker/tasks.py` 와 같으니 통합하지 말 것.

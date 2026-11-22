@@ -47,7 +47,7 @@ paths:
 - **클라이언트 IP 는 `ClientIp.of()` 하나로만.** `X-Forwarded-For` 의 **마지막** 항목만 신뢰한다.
   앞 항목을 쓰면 헤더를 끼워 넣어 로그인 스로틀을 우회할 수 있다(원본 §58 실제 결함).
 - 사용자 응답(`UserOut`)에 자격증명 원문·암호문을 넣지 않는다. 보유 여부만 boolean 으로.
-- 메시지 문자열은 원본과 동일하게 유지한다(프론트·사용자가 보는 문구). 예외: 로그인·가입 문구는 단일 소유자 전환으로 바뀌었다.
+- 메시지 문자열은 원본과 동일하게 유지한다(프론트·사용자가 보는 문구). 예외: 로그인 문구는 단일 소유자 전환으로 바뀌었다.
 - **숫자가 낀 필드명은 snake_case 자동 변환이 틀린다**(`mom1m`→`mom1m`, 원본은 `mom_1m`). `@JsonProperty("mom_1m")` 로 명시한다.
 - 세션을 쓰는 web 테스트는 그 사용자를 소유자로 지정해야 한다(`@MockitoSpyBean props` + `willReturn(id).given(props).tradingOwnerUserId`).
   스파이 조합이 다른 테스트 클래스마다 Spring 컨텍스트가 늘어 Postgres 접속 수가 바닥난다(`too many clients`) — 기존 조합에 맞춘다.
