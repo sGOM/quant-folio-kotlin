@@ -333,7 +333,7 @@ class OfficialIngest(
             MARKETS.map { STOCK_SERVICES.getValue(it) to it } + INDEX_SERVICES.map { (family, svc) -> svc to family }
 
         private const val DAY_CALLS = 5
-        private const val PREV_DAY_LOOKBACK = 10
+        private const val PREV_DAY_LOOKBACK = 20 // LocalTradingDays.MAX_BACK 과 같게 — 2017 추석은 달력상 11일 공백
 
         /** KRX Open API 일별 데이터 제공 시작일. */
         val API_START: LocalDate = LocalDate.of(2010, 1, 4)
