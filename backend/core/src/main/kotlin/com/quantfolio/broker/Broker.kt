@@ -1,7 +1,6 @@
 package com.quantfolio.broker
 
 import java.math.BigDecimal
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -46,17 +45,6 @@ data class Fill(
     val fullyFilled: Boolean,
     val raw: Map<String, Any?>? = null,
     val terminal: Boolean = false,
-)
-
-/** Strict broker-side evidence used only to attach a fully filled legacy order. */
-data class LegacyFillEvidence(
-    val orderId: String,
-    val symbol: String,
-    val side: String,
-    val orderedAt: Instant,
-    val orderQty: BigDecimal,
-    val filledQty: BigDecimal,
-    val filledAmount: BigDecimal,
 )
 
 /**
@@ -121,12 +109,10 @@ interface BrokerClient {
     fun getOrderExecution(orderId: String, symbol: String? = null): Fill
     /** 주문일 기준 조회를 지원하는 브로커에 KST 주문일을 전달한다. */
     fun getOrderExecution(orderId: String, symbol: String?, orderDate: LocalDate): Fill = getOrderExecution(orderId, symbol)
-    fun legacyFillEvidence(orderId: String, organizationNo: String?, symbol: String, orderDate: LocalDate): LegacyFillEvidence? = null
     /**
      * [day](KST 주문일)에 이 계좌로 낸 주문 전체(미체결·거부·정정·취소 주문 행 포함 — [BrokerOrderRow.originalOrderNo]). null = 이 증권사는 목록 조회를 지원하지 않는다.
      * 조회 실패·목록이 완결되지 않음(다음 페이지 확인 불가, 상한 초과)은 빈 목록이 아니라 [BrokerError].
      */
     fun dailyOrders(day: LocalDate): List<BrokerOrderRow>? = null
-    fun legacyBalanceEvidence(): Balance = getBalance()
     fun getBalance(): Balance
 }

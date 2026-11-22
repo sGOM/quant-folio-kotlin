@@ -1,12 +1,9 @@
 package com.quantfolio.broker
 
-import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
 import org.slf4j.LoggerFactory
 import tools.jackson.module.kotlin.readValue
 import java.math.BigDecimal
-import java.time.LocalDate
-import java.time.OffsetDateTime
 
 /**
  * 토스증권 Open API(원본 `broker/toss.py`). REST 전용(WS 시세 없음 → 러너는 REST 폴링), 모의투자 없음(항상 실거래).
@@ -104,22 +101,6 @@ class TossClient(
     }
 
     @Suppress("UNCHECKED_CAST")
-    override fun legacyFillEvidence(orderId: String, organizationNo: String?, symbol: String, orderDate: LocalDate): LegacyFillEvidence? {
-        if (!ORDER_ID.matches(orderId) || organizationNo != null) return null
-        val data = (request("GET", "/api/v1/orders/$orderId", withAccount = true) as? Map<String, Any?>)?.unwrapResult() ?: return null
-        if (data["orderId"] != orderId || data["symbol"] != symbol || !"FILLED".equals(data["status"]?.toString(), ignoreCase = true)) return null
-        val side = data["side"]?.toString()?.lowercase()?.takeIf { it == "buy" || it == "sell" } ?: return null
-        val time = runCatching { OffsetDateTime.parse(data["orderedAt"].toString()).toInstant() }.getOrNull() ?: return null
-        if (MarketClock.kstDate(time) != orderDate) return null
-        val qty = data["quantity"].decimal() ?: return null
-        val ex = data["execution"] as? Map<String, Any?> ?: return null
-        val filled = ex["filledQuantity"].decimal() ?: return null
-        val amount = ex["filledAmount"].decimal() ?: return null
-        if (filled.signum() <= 0 || filled.compareTo(qty) != 0) return null
-        return LegacyFillEvidence(orderId, symbol, side, time, qty, filled, amount)
-    }
-
-    @Suppress("UNCHECKED_CAST")
     override fun getBalance(): Balance {
         val data = request("GET", "/api/v1/holdings", withAccount = true).unwrapResult()
         return Balance((data["items"] as? List<Map<String, Any?>>).orEmpty(), data.filterKeys { it != "items" })
@@ -136,8 +117,6 @@ class TossClient(
     }
 
     companion object {
-        private val ORDER_ID = Regex("[A-Za-z0-9_-]{1,128}")
-
         /**
          * 이 주문이 더 체결되지 않는 상태 — 공식 스펙(openapi.json `OrderStatus`) 설명: FILLED 전량 체결, CANCELED 취소 완료·REJECTED 거부
          * (둘 다 "execution.filledQuantity 로 부분 체결 여부 확인"). 제외: PENDING·PENDING_CANCEL·PENDING_REPLACE·PARTIAL_FILLED(진행 중),

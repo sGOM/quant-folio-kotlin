@@ -184,52 +184,6 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
     }
 
     @Test
-    fun kisLegacyEvidenceRequiresOneCompleteExactBranchAndOrderRow() {
-        val http = FakeHttp()
-        val kis = kisWithToken(http)
-        val date = LocalDate.parse("2026-10-19")
-        val row = """{"odno":"0000123","ord_dt":"20261019","ord_gno_brno":"91252","pdno":"005930","sll_buy_dvsn_cd":"02","ord_tmd":"100001","ord_qty":"2","tot_ccld_qty":"2","tot_ccld_amt":"2000"}"""
-        var rows = row
-        var page = "E"
-        http.on({ it.url.endsWith("/inquire-daily-ccld") }) {
-            BrokerResponse(200, """{"rt_cd":"0","output1":[$rows]}""", mapOf("tr_cont" to listOf(page)))
-        }
-        val evidence = kis.legacyFillEvidence("0000123", "91252", "005930", date)!!
-        assertEquals(Instant.parse("2026-10-19T01:00:01Z"), evidence.orderedAt)
-        assertEquals(BigDecimal("2000"), evidence.filledAmount)
-        assertEquals("VTTC0081R", http.calls.last().headers["tr_id"])
-        assertEquals("91252", http.calls.last().query["ORD_GNO_BRNO"])
-        assertEquals("ALL", http.calls.last().query["EXCG_ID_DVSN_CD"])
-        assertNull(kis.legacyFillEvidence("0000123", "wrong", "005930", date))
-        assertNull(kis.legacyFillEvidence("0000123", null, "005930", date))
-        rows = "$row,$row"
-        assertNull(kis.legacyFillEvidence("0000123", "91252", "005930", date))
-        rows = row
-        page = "M"
-        assertThrows<KisError> { kis.legacyFillEvidence("0000123", "91252", "005930", date) }
-        page = "E"
-        rows = row.replace("20261019", "20260119")
-        assertTrue(kis.legacyFillEvidence("0000123", "91252", "005930", LocalDate.parse("2026-01-19")) != null)
-        assertEquals("VTSC9215R", http.calls.last().headers["tr_id"])
-    }
-
-    @Test
-    fun tossLegacyEvidenceChecksReturnedOrderIdentity() {
-        val http = FakeHttp()
-        val toss = TossClient("legacy-" + UUID.randomUUID(), "test", "1", support(http))
-        http.on({ it.url.endsWith("/oauth2/token") }) { BrokerResponse(200, """{"access_token":"test","expires_in":3600}""") }
-        var returnedId = "abc123"
-        http.on({ it.url.endsWith("/api/v1/orders/abc123") }) {
-            BrokerResponse(200, """{"orderId":"$returnedId","symbol":"005930","side":"SELL","quantity":"2","status":"FILLED","orderedAt":"2026-10-19T10:00:01+09:00","execution":{"filledQuantity":"2","filledAmount":"2000"}}""")
-        }
-        val date = LocalDate.parse("2026-10-19")
-        assertEquals("sell", toss.legacyFillEvidence("abc123", null, "005930", date)?.side)
-        assertEquals("1", http.calls.last().headers["X-Tossinvest-Account"])
-        returnedId = "other"
-        assertNull(toss.legacyFillEvidence("abc123", null, "005930", date))
-    }
-
-    @Test
     fun executionParsesTotalsForTheOrder() {
         val http = FakeHttp()
         val kis = kisWithToken(http)
@@ -532,8 +486,6 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         assertEquals("N", calls[1].headers["tr_cont"])
         assertEquals("FK1", calls[1].query["CTX_AREA_FK100"])
         assertEquals("NK1", calls[1].query["CTX_AREA_NK100"])
-        // 엄격 경로(레거시 증거)도 마지막 페이지가 D/E 면 합쳐서 받는다
-        assertEquals(2, kis.legacyBalanceEvidence().positions.size)
     }
 
     @Test
@@ -561,9 +513,6 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
         http.on({ it.url.endsWith("/inquire-balance") }) { balancePage(rowA, "M", "FK1", "NK1") } // 끝나지 않는 응답
         assertThrows<KisError> { kis.getBalance() }
         assertEquals(KisClient.BALANCE_MAX_PAGES, http.calls.count { it.url.endsWith("/inquire-balance") })
-        // 엄격 경로는 헤더가 없는 응답도 기존처럼 실패
-        http.on({ it.url.endsWith("/inquire-balance") }) { balancePage(rowA, null) }
-        assertThrows<KisError> { kis.legacyBalanceEvidence() }
     }
 
     private fun tossWithToken(http: FakeHttp): TossClient {
@@ -597,7 +546,6 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
             assertEquals(2, f.filledQty, body)
             assertEquals(BigDecimal("70010"), f.avgPrice)
             assertTrue(f.fullyFilled)
-            assertEquals("buy", toss.legacyFillEvidence("A1", null, "005930", LocalDate.parse("2026-10-19"))?.side, body)
         }
         http.on({ "/api/v1/orders/A1" in it.url }) { BrokerResponse(200, """{"result":{"orderId":"A1"}}""") }
         assertEquals(0, toss.getOrderExecution("A1").filledQty) // 봉투 안에 체결 정보가 없으면 지금처럼 미체결 0

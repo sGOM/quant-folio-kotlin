@@ -17,7 +17,7 @@
 기존 주문·포지션 계좌 키와 잔고 추정 차단은 보존한다. 과거 계좌의 장부를 새 시크릿 계좌에 자동 연결하지 않는다.
 엔진 정합(주기·체결통보 트리거)은 비소유자 주문을 조회·통계·알림 없이 건너뛰고, 주문 실행은 전략이 그 사용자 것이 아니면 예약 없이 보류한다(원본은 둘 다 사용자 구분이 없다).
 계좌는 이제 시크릿 교체로 바뀌므로 V2 트리거는 V6 이전에도 발화하지 않았다. V6 는 트리거만 지우고 이미 선 `kis_balance_reconcile_blocked` 는 남겨 계속 잔고 추정을 막는다(새로 서지는 않는다). 이전 장부와 새 계좌 잔고의 혼합은 기존 계좌 키 조건이 막는다 —
-사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다.
+사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다(V8 이 그 주문을 지우면서 이 차단을 플래그로 옮겼다 — 아래 "의도적 차이").
 
 예외: 2026-11-07~08 사용자 지시로 주문 안전성 #13·#14를 Kotlin에서 먼저 수정했다. 아래 표는 원본 결함의 이력이며, 이 두 행은 현재 Kotlin 동작이 아니다.
 선택 증권사 기준의 실전 게이트, 접수 정보 선저장(호출자 롤백과 분리), 사용자·종목별 접수불명 재주문 차단,
@@ -120,6 +120,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 
 - 텔레그램 알림 제거(2026-11-17 소유자 결정): 원본 `engine/alerts.publish_alert` 는 DB 적재가 dedup 으로 생략되지 않은 경우에 한해 `severity == "critical"` 이고 `TELEGRAM_BOT_TOKEN`·`TELEGRAM_CHAT_ID` 가 모두 비어 있지 않으면 사용자(WS) 유무와 무관하게 봇으로 추가 발송했다(타임아웃 5초, 실패는 로그만). Kotlin 은 그 경로를 지웠다 — 알림은 DB 저장·화면(WS)만. 되살리려면 이 제거 커밋을 되돌린다.
 - 전략 공유 제거(2026-11-22 소유자 결정, 혼자 쓰는 서비스): 원본의 `PATCH /api/auth/me`(닉네임)·`GET /api/strategies/shared`·`POST|DELETE /api/strategies/{id}/share`·`/like`·`POST /{id}/copy`·`PUT /{id}/featured-backtest` 와 응답의 `display_name`·`is_shared`·`featured_backtest_id` 를 지웠다(프론트는 `6e586d6` 에서 먼저 제거). Flyway V7 이 `strategy_likes` 와 `strategies.is_shared`·`shared_at`·`copied_from_id`·`featured_backtest_id`, `users.display_name` 을 삭제한다 — 삭제 행은 CSV 로 백업했다.
+- 계좌 미상 장부 삭제(2026-11-22 소유자 결정): 원본에 없던 Kotlin 유지보수 API `POST /api/trading/legacy-account-links`(키 NULL 주문·포지션을 증권사 증거로 현재 계좌에 연결)와 증거 조회(`BrokerClient.legacyFillEvidence`·`legacyBalanceEvidence`)를 지웠다. Flyway V8 이 `broker_account_key IS NULL` 인 주문(체결 CASCADE)·포지션과 부분 유니크 인덱스 `uq_positions_legacy_user_strategy_symbol` 을 지운다 — 당시 대상은 전략 23 의 2026-07-13 옛 모의 계좌 매수 14건(CSV 백업). 그 주문이 막던 KIS 모의 잔고 추정은 지우기 전에 그 사용자의 `kis_balance_reconcile_blocked` 를 세워 계속 막는다.
 - 422 검증 오류 `msg` 는 pydantic 영문 대신 한국어/Bean Validation 메시지.
 - `representative()` 메시지의 원인별 건수 표기 형식(`{A=1}` vs `{'A': 1}`).
 - 성과귀속 롱숏(`Attribution.factorAttribution` 의 `ls_return`): 원본 `pair.sort_values(ascending=False)` 는 numpy quicksort 라

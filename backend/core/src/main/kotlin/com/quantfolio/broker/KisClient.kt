@@ -48,11 +48,11 @@ class KisClient(
      * [orderSubmit] 이면 접수 여부를 알 수 없는 응답(5xx·408·결과 코드 없음)을 거절이 아니라 [OrderOutcomeUnknown] 으로 올린다 —
      * 예외는 5xx 본문이 JSON 이고 `rt_cd`="1"·`msg_cd` ∈ [ORDER_REJECTED_ON_5XX] 일 때뿐(명시적 거절 [KisError]).
      */
-    private fun request(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, requireComplete: Boolean = false, orderSubmit: Boolean = false): Map<String, Any?> =
-        requestPage(method, url, headers, label, query, body, requireComplete, orderSubmit).first
+    private fun request(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, orderSubmit: Boolean = false): Map<String, Any?> =
+        requestPage(method, url, headers, label, query, body, orderSubmit).first
 
     /** [request] 와 같되 성공 응답의 `tr_cont` 헤더(앞뒤 공백 제거, 없으면 null)도 돌려준다 — 연속조회 호출부용. */
-    private fun requestPage(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, requireComplete: Boolean = false, orderSubmit: Boolean = false): Pair<Map<String, Any?>, String?> {
+    private fun requestPage(method: String, url: String, headers: Map<String, String>, label: String, query: Map<String, String> = emptyMap(), body: Map<String, Any?>? = null, orderSubmit: Boolean = false): Pair<Map<String, Any?>, String?> {
         var last: KisError? = null
         for (attempt in 0 until RATE_RETRY) {
             throttle()
@@ -70,12 +70,7 @@ class KisClient(
                 KisError("$label 실패: HTTP ${r.status} ${r.body.take(200)}")
             } else {
                 val data = s.parse(r.body)
-                if (data["rt_cd"] == "0") {
-                    if (requireComplete && r.header("tr_cont")?.trim() !in setOf("D", "E")) {
-                        throw KisError("완전한 체결 조회 결과를 확인할 수 없습니다.")
-                    }
-                    return data to r.header("tr_cont")?.trim()
-                }
+                if (data["rt_cd"] == "0") return data to r.header("tr_cont")?.trim()
                 if (orderSubmit && data["rt_cd"] != "1") throw OrderOutcomeUnknown("KIS 주문 응답에 유효한 결과 코드 없음")
                 code = data["msg_cd"] as? String
                 KisError("$label 오류: [${data["msg_cd"] ?: ""}] ${data["msg1"] ?: data}")
@@ -184,57 +179,26 @@ class KisClient(
         return Fill(filled, avg, ordQty > 0 && filled >= ordQty, row)
     }
 
-    private fun dailyExecutions(
-        orderId: String, symbol: String?, day: String, organizationNo: String = "",
-        requireComplete: Boolean = false, transactionId: String = trId("TTC0081R"),
-    ): Map<String, Any?> {
+    private fun dailyExecutions(orderId: String, symbol: String?, day: String): Map<String, Any?> {
         val (cano, prdt) = accountParts()
         return request(
-            "GET", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-daily-ccld", authHeaders(transactionId), "체결 조회",
+            "GET", "$baseUrl/uapi/domestic-stock/v1/trading/inquire-daily-ccld", authHeaders(trId("TTC0081R")), "체결 조회",
             linkedMapOf(
                 "CANO" to cano, "ACNT_PRDT_CD" to prdt, "INQR_STRT_DT" to day, "INQR_END_DT" to day, "SLL_BUY_DVSN_CD" to "00",
-                "INQR_DVSN" to "00", "PDNO" to (symbol ?: ""), "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to organizationNo, "ODNO" to orderId,
+                "INQR_DVSN" to "00", "PDNO" to (symbol ?: ""), "CCLD_DVSN" to "00", "ORD_GNO_BRNO" to "", "ODNO" to orderId,
                 "INQR_DVSN_3" to "00", "INQR_DVSN_1" to "", "CTX_AREA_FK100" to "", "CTX_AREA_NK100" to "", "EXCG_ID_DVSN_CD" to "ALL",
-            ), requireComplete = requireComplete,
+            ),
         )
     }
-
-    @Suppress("UNCHECKED_CAST")
-    override fun legacyFillEvidence(orderId: String, organizationNo: String?, symbol: String, orderDate: LocalDate): LegacyFillEvidence? {
-        if (organizationNo.isNullOrBlank()) return null
-        val day = orderDate.format(DateTimeFormatter.BASIC_ISO_DATE)
-        val recent = !orderDate.isBefore(MarketClock.todayKst(s.clock).withDayOfMonth(1).minusMonths(3))
-        val transactionId = when {
-            recent -> trId("TTC0081R")
-            kis.isPaperTrading -> "VTSC9215R"
-            else -> "CTSC9215R"
-        }
-        val data = dailyExecutions(orderId, symbol, day, organizationNo, requireComplete = true, transactionId = transactionId)
-        val rows = data["output1"] as? List<Map<String, Any?>> ?: return null
-        val row = rows.singleOrNull { it["odno"] == orderId } ?: return null
-        if (row["ord_dt"] != day || row["ord_gno_brno"] != organizationNo || row["pdno"] != symbol) return null
-        val side = when (row["sll_buy_dvsn_cd"]) { "01" -> "sell"; "02" -> "buy"; else -> return null }
-        val time = runCatching { LocalTime.parse(row["ord_tmd"].toString(), ORDER_TIME) }.getOrNull() ?: return null
-        val qty = row["ord_qty"].decimal() ?: return null
-        val filled = row["tot_ccld_qty"].decimal() ?: return null
-        val amount = row["tot_ccld_amt"].decimal() ?: return null
-        if (filled.signum() <= 0 || filled.compareTo(qty) != 0) return null
-        return LegacyFillEvidence(orderId, symbol, side, orderDate.atTime(time).atZone(MarketClock.KST).toInstant(), qty, filled, amount)
-    }
-
-    override fun getBalance(): Balance = balance(requireComplete = false)
-
-    override fun legacyBalanceEvidence(): Balance = balance(requireComplete = true)
 
     /**
      * 공식 예제(`koreainvestment/open-trading-api` `inquire_balance.py`)의 연속조회 규약: 응답 헤더 tr_cont 가 F/M 이면 응답 본문의
      * ctx_area_fk100·nk100 을 CTX_AREA_FK100·NK100 으로, 요청 헤더 tr_cont 를 N 으로 실어 다음 페이지를 받고 D/E 에서 끝난다.
      * 보유 종목(output1)은 합치고 계좌 요약(output2)은 예제처럼 이어 붙인다. 원본 Python 은 첫 페이지만 읽는다(`kis/client.py` get_balance).
      * 일부 페이지만 있는 잔고는 "보유 없음"으로 오독되므로 상한·규약 위반은 부분 잔고가 아니라 [KisError]. tr_cont 헤더가 없거나 빈 값이면 한 페이지로 끝난 것.
-     * [requireComplete] 면 마지막 응답이 D/E 여야 한다(헤더 없음도 실패).
      */
     @Suppress("UNCHECKED_CAST")
-    private fun balance(requireComplete: Boolean): Balance {
+    override fun getBalance(): Balance {
         val (cano, prdt) = accountParts()
         val positions = mutableListOf<Map<String, Any?>>()
         val summary = mutableListOf<Any?>()
@@ -244,7 +208,7 @@ class KisClient(
                 "CANO" to cano, "ACNT_PRDT_CD" to prdt, "AFHR_FLPR_YN" to "N", "OFL_YN" to "", "INQR_DVSN" to "02", "UNPR_DVSN" to "01",
                 "FUND_STTL_ICLD_YN" to "N", "FNCG_AMT_AUTO_RDPT_YN" to "N", "PRCS_DVSN" to "00",
             ),
-            BALANCE_MAX_PAGES, requireEnd = requireComplete,
+            BALANCE_MAX_PAGES, requireEnd = false,
         ) { data ->
             positions.addAll((data["output1"] as? List<Map<String, Any?>>).orEmpty())
             data["output2"]?.let { summary.addAll(it as? List<*> ?: listOf(it)) }

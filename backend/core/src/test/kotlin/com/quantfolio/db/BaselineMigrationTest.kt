@@ -65,7 +65,7 @@ class BaselineMigrationTest {
                 select id, '005930', 10, 900 from users""")
         }
 
-        flyway(url).migrate()
+        flyway(url, target = "7").migrate() // V8 은 계좌 키 없는 행을 지운다 — 아래 v8 테스트
 
         val history = query(url, "select version, type from flyway_schema_history order by installed_rank") { it.getString(1) to it.getString(2) }
         assertEquals(listOf("1" to "BASELINE", "2" to "SQL", "3" to "SQL", "4" to "SQL", "5" to "SQL", "6" to "SQL", "7" to "SQL"), history)
@@ -152,5 +152,46 @@ class BaselineMigrationTest {
             "${it.getString(1)}|${it.getBoolean(2)}|${it.getInt(3)}"
         })
         assertEquals(1, query(url, "select count(*) from backtests") { it.getInt(1) }.single())
+    }
+
+    /**
+     * V8 은 계좌 키 없는 주문(체결은 CASCADE)·포지션만 지우고 키 있는 행과 다른 테이블은 남긴다.
+     * 그 주문이 막던 KIS 모의 잔고 추정은 사용자 표시로 옮겨 계속 막는다. 계좌 키 없는 포지션용 부분 유니크 인덱스는 지운다.
+     */
+    @Test
+    fun v8DeletesUnkeyedTradesOnly() {
+        val url = freshDb("bl_v8")
+        flyway(url, target = "7").migrate()
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1'), ('other@t.dev', 'h2')",
+            "insert into strategies(user_id, name) select id, 's' from users where email = 'owner@t.dev'",
+            """insert into orders(user_id, strategy_id, symbol, side, qty, order_type, status, idempotency_key, created_at, broker_account_key)
+               select u.id, s.id, '005930', 'buy', 1, 'market', 'filled', k.key, now(), k.acct
+               from users u, strategies s, (values ('unkeyed', null), ('keyed', 'kis:vts:1')) k(key, acct) where u.email = 'owner@t.dev'""",
+            """insert into orders(user_id, symbol, side, qty, order_type, status, idempotency_key, created_at, broker_account_key)
+               select id, '005930', 'buy', 1, 'market', 'filled', 'other-keyed', now(), 'kis:vts:2' from users where email = 'other@t.dev'""",
+            "insert into executions(order_id, strategy_id, filled_qty, filled_price) select id, strategy_id, 1, 1000 from orders",
+            """insert into positions(user_id, strategy_id, symbol, qty, avg_price, broker_account_key)
+               select u.id, s.id, '005930', 1, 1000, k.acct from users u, strategies s, (values (null), ('kis:vts:1')) k(acct) where u.email = 'owner@t.dev'""",
+            "insert into alerts(user_id, strategy_id, severity, message) select id, 0, 'info', 'kept' from users where email = 'owner@t.dev'",
+        )
+
+        flyway(url).migrate()
+
+        assertEquals(listOf("keyed", "other-keyed"), query(url, "select idempotency_key from orders order by id") { it.getString(1) })
+        assertEquals(listOf("keyed", "other-keyed"), query(url, "select o.idempotency_key from executions e join orders o on o.id = e.order_id order by e.id") { it.getString(1) })
+        assertEquals(listOf("kis:vts:1"), query(url, "select broker_account_key from positions") { it.getString(1) })
+        assertEquals(listOf("owner@t.dev|true", "other@t.dev|false"), query(url, "select email, kis_balance_reconcile_blocked from users order by id") {
+            "${it.getString(1)}|${it.getBoolean(2)}"
+        })
+        assertEquals(1, query(url, "select count(*) from strategies") { it.getInt(1) }.single())
+        assertEquals(1, query(url, "select count(*) from alerts") { it.getInt(1) }.single())
+        assertEquals(0, query(url, "select count(*) from pg_indexes where indexname = 'uq_positions_legacy_user_strategy_symbol'") { it.getInt(1) }.single())
+
+        // 빈 DB 에서는 아무 일도 하지 않는다(신규 설치·테스트).
+        val empty = freshDb("bl_v8_empty")
+        flyway(empty).migrate()
+        assertEquals(listOf(false), query(empty, "select count(*) > 0 from orders") { it.getBoolean(1) })
     }
 }

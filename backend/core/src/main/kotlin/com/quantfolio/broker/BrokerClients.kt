@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.StringRedisTemplate
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.readValue
-import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
 import java.util.UUID
@@ -90,8 +89,6 @@ internal class RateLimiter(private val minIntervalNanos: Long) {
         if (wait > 0) sleeper(wait / 1_000_000)
     }
 }
-
-internal fun Any?.decimal(): BigDecimal? = this?.toString()?.toBigDecimalOrNull()
 
 /** 원본 `int(body.get("expires_in", 86400))` — 숫자 문자열도 받는다. */
 internal fun expiresIn(data: Map<String, Any?>): Int =
