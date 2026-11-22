@@ -92,15 +92,31 @@ describe("MonitorPage 전략 시작/중지", () => {
     await waitFor(() => expect(stop).toHaveBeenCalledWith(7));
   });
 
-  it("시작 API 가 실패하면 오류 문구 없이 버튼만 복구되고 전략 목록은 다시 조회되지 않는다(현재 동작 고정)", async () => {
+  it("시작 API 가 실패하면 서버 오류 문구를 보이고 버튼은 복구되며 전략 목록은 다시 조회되지 않는다", async () => {
     const list = mockApi("stopped" as Strategy["status"]);
     const start = vi.spyOn(api, "startStrategy").mockRejectedValue(new ApiError("엔진 오류", 500));
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "시작" }));
     await waitFor(() => expect(start).toHaveBeenCalled());
+    expect(await screen.findByRole("alert")).toHaveTextContent("엔진 오류");
     expect(await screen.findByRole("button", { name: "시작" })).toBeEnabled();
-    expect(screen.queryByText("엔진 오류")).toBeNull();
     expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("중지 API 가 실패하면 오류 문구를 보이고 다음 시도가 시작되면 지운다", async () => {
+    const list = mockApi("live");
+    const stop = vi
+      .spyOn(api, "stopStrategy")
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValue({ status: "ok" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "중지" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("전략 중지에 실패했습니다");
+    expect(await screen.findByRole("button", { name: "중지" })).toBeEnabled();
+    expect(list).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "중지" }));
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });
 

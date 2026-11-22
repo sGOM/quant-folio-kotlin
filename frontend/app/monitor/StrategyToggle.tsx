@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Play, Square, Loader2 } from "lucide-react";
-import { api, Strategy } from "@/lib/api";
+import { api, ApiError, Strategy } from "@/lib/api";
 import { summarizeConfig } from "@/lib/strategy";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,20 +16,31 @@ import { cn } from "@/lib/utils";
 
 /**
  * 전략별 시작/중지 토글. 현재 상태(live 여부)에 따라 엔진 start/stop 을 호출하고,
- * 성공 시 전략 목록을 무효화해 상태 배지를 갱신한다.
+ * 성공 시 전략 목록을 무효화해 상태 배지를 갱신하고, 실패 시 오류 문구를 보인다.
  * @param strategy 토글 대상 전략
  */
 export function StrategyToggle({ strategy }: { strategy: Strategy }) {
   const qc = useQueryClient();
   const isLive = strategy.status === "live";
+  const [error, setError] = useState<string | null>(null);
   const toggle = useMutation({
     mutationFn: () =>
       isLive ? api.stopStrategy(strategy.id) : api.startStrategy(strategy.id),
+    onMutate: () => setError(null),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies"] }),
+    onError: (err) =>
+      setError(
+        err instanceof ApiError && err.message
+          ? err.message
+          : isLive
+            ? "전략 중지에 실패했습니다"
+            : "전략 시작에 실패했습니다",
+      ),
   });
 
   return (
-    <Card className="flex items-center justify-between px-4 py-3">
+    <Card className="px-4 py-3">
+      <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -74,6 +86,12 @@ export function StrategyToggle({ strategy }: { strategy: Strategy }) {
           </>
         )}
       </Button>
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-status-bad">
+          {error}
+        </p>
+      )}
     </Card>
   );
 }
