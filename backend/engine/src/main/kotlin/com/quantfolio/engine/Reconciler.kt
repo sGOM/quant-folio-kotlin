@@ -67,7 +67,7 @@ class Reconciler(
     fun reconcileOpenOrders(userId: Int? = null): Map<String, Int> {
         val p = MapSqlParameterSource("grace", Timestamp.from(clock.instant().minus(Duration.ofSeconds(PENDING_GRACE_SECONDS)))).addValue("u", userId)
         val userFilter = if (userId != null) " and user_id = :u" else ""
-        val open = jdbc.queryForList("select id from orders where status in ('submitted', 'partial') and kis_order_id is not null and kis_order_id <> '' and closed_at is null$userFilter order by id", p, Int::class.java)
+        val open = jdbc.queryForList("select id from orders where $OPEN_WITH_ORDER_NO$userFilter order by id", p, Int::class.java)
         // OrderExecutor 가 새 주문을 막는 접수불명 집합과 같게 — 잔고로 일부 회수돼 partial 이 된 주문이 정합·알림 없이 신규 주문만 막는 상태가 되지 않게.
         val stale = jdbc.queryForList("select id from orders where status in ('pending', 'submitted', 'partial') and coalesce(trim(kis_order_id), '') = '' and closed_at is null and created_at < :grace$userFilter order by id", p, Int::class.java)
         val ids = LinkedHashSet<Int>().apply { addAll(open.filterNotNull()); addAll(stale.filterNotNull()) }
@@ -98,7 +98,7 @@ class Reconciler(
     fun reconcileOrder(orderId: Int): Map<String, Int> {
         val pass = ReconcilePass()
         val open = jdbc.queryForObject(
-            "select count(*) from orders where id = :id and status in ('submitted', 'partial') and kis_order_id is not null and kis_order_id <> '' and closed_at is null",
+            "select count(*) from orders where id = :id and $OPEN_WITH_ORDER_NO",
             MapSqlParameterSource("id", orderId), Int::class.java,
         )!! > 0
         if (open) pass.processOne(orderId)
@@ -536,7 +536,7 @@ class Reconciler(
 
         /** 주문일(KST) 하루의 [시작, 끝) 경계 쿼리 인자 — 주문번호는 날짜가 다르면 다시 쓰일 수 있다. */
         private fun dayBounds(day: LocalDate) = mapOf(
-            "dayStart" to Timestamp.from(day.atStartOfDay(MarketClock.KST).toInstant()),
+            "dayStart" to Timestamp.from(MarketClock.kstStart(day)),
             "dayEnd" to Timestamp.from(day.plusDays(1).atStartOfDay(MarketClock.KST).toInstant()),
         )
 
@@ -824,6 +824,9 @@ class Reconciler(
     ) { row, _ -> row.getString("symbol") to row.getBigDecimal("sold") }.toMap()
 
     private companion object {
+        /** 정합 open 술어(주문번호 있는 미완료·미종결) — 주기 정합과 체결통보 정합이 같은 대상을 보게 한 곳에 둔다. 실행기 unknown·live, 정합 stale 술어와는 다르다. */
+        const val OPEN_WITH_ORDER_NO = "status in ('submitted', 'partial') and kis_order_id is not null and kis_order_id <> '' and closed_at is null"
+
         const val PENDING_GRACE_SECONDS = 300L
         const val UNCONFIRMED_ALERT_DEDUP_HOURS = 6.0
 

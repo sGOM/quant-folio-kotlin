@@ -92,7 +92,7 @@ class OrderExecutor(
                     val live = jdbc.queryForObject(
                         "select count(*) from orders where user_id = :u and symbol = :s and strategy_id = :st and broker_account_key = :a and status in ('submitted', 'partial') and coalesce(trim(kis_order_id), '') <> '' and closed_at is null and created_at >= :day",
                         p.addValue("a", accountKey)
-                            .addValue("day", Timestamp.from(MarketClock.todayKst(clock).atStartOfDay(MarketClock.KST).toInstant())),
+                            .addValue("day", Timestamp.from(MarketClock.kstStart(MarketClock.todayKst(clock)))),
                         Int::class.java,
                     )!!
                     // 판단 뒤 기록된 체결로 장부가 바뀌었으면 낡은 수량으로 정한 주문을 막는다(위 검사를 지난 뒤 종결된 주문 포함).

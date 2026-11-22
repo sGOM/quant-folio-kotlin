@@ -157,10 +157,13 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         setMddState(Cfg.num(s["hwm"]), s["killed"] == true, (s["kill_date"] as String?)?.let(LocalDate::parse), false)
     }
 
-    private fun hasHoldings(): Boolean = ctx.jdbc.queryForObject(
-        "select exists(select 1 from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0)",
-        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey), Boolean::class.java,
-    ) == true
+    /** 이 전략·주문 계좌의 보유(qty > 0) 포지션 (종목, 수량, 평단). 순서는 DB 반환 순서 그대로. */
+    private fun heldPositions(): List<Triple<String, BigDecimal, BigDecimal>> = ctx.jdbc.query(
+        "select symbol, qty, avg_price from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0",
+        MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey),
+    ) { rs, _ -> Triple(rs.getString(1), rs.getBigDecimal(2), rs.getBigDecimal(3)) }
+
+    private fun hasHoldings(): Boolean = heldPositions().isNotEmpty()
 
     // ── MDD 킬스위치 ──
 
@@ -178,10 +181,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             Tracking.Execution(MarketClock.kstDate(rs.getTimestamp(6).toInstant()), rs.getString(1), rs.getString(2), rs.getBigDecimal(3).toDouble(), rs.getBigDecimal(4).toDouble(), rs.getBigDecimal(5).toDouble())
         }.filter { it.qty > 0 && it.price > 0 }
         val cash = Tracking.replayCashBalance(execs, capital)
-        val positions = ctx.jdbc.query(
-            "select symbol, qty, avg_price from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey),
-        ) { rs, _ -> Triple(rs.getString(1), rs.getBigDecimal(2), rs.getBigDecimal(3)) }
+        val positions = heldPositions()
         if (positions.isEmpty()) return cash
         val prices = quotes(positions.map { it.first }.toSet())
         val missing = positions.map { it.first }.filter { it !in prices }

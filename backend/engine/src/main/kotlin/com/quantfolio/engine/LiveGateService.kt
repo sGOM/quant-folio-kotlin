@@ -37,7 +37,7 @@ class LiveGateService(
         val order = orderNotional?.let {
             val used = jdbc.queryForObject(
                 "select coalesce(sum(e.filled_qty * e.filled_price), 0) from executions e join orders o on e.order_id = o.id where o.user_id = :u and e.executed_at >= :t",
-                MapSqlParameterSource("u", userId).addValue("t", Timestamp.from(today.atStartOfDay(MarketClock.KST).toInstant())), BigDecimal::class.java,
+                MapSqlParameterSource("u", userId).addValue("t", Timestamp.from(MarketClock.kstStart(today))), BigDecimal::class.java,
             )!!
             LiveGate.OrderCheck(it, risk.limit(userId, strategyId)?.maxPositionSize, used, props.kis.dailyOrderNotionalCap?.toDouble())
         }

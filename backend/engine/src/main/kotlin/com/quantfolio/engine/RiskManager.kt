@@ -83,7 +83,7 @@ class RiskManager(
 
     /** 당일(KST) 손익 = 당일 체결의 실현 현금흐름(매도 − 매수 − 수수료) + 보유 평가손익(현재가 없는 종목은 제외). */
     private fun dailyPnl(userId: Int, prices: Map<String, BigDecimal>, strategyId: Int?, accountKey: String): BigDecimal {
-        val start = MarketClock.todayKst(clock).atStartOfDay(MarketClock.KST).toInstant()
+        val start = MarketClock.kstStart(MarketClock.todayKst(clock))
         val p = MapSqlParameterSource("u", userId).addValue("t", Timestamp.from(start)).addValue("s", strategyId).addValue("a", accountKey)
         val strat = if (strategyId != null) " and e.strategy_id = :s" else ""
         var realized = BigDecimal.ZERO

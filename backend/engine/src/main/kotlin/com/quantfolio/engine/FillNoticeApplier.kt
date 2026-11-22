@@ -105,7 +105,7 @@ class FillNoticeApplier(
     fun apply(userId: Int, n: FillNotice): Boolean {
         val accountKey = BrokerAccountKey.kisNotice(n.accountNo, props.kis.isPaperTrading) ?: return false
         val day = MarketClock.todayKst(clock)
-        val start = Timestamp.from(day.atStartOfDay(MarketClock.KST).toInstant())
+        val start = Timestamp.from(MarketClock.kstStart(day))
         val end = Timestamp.from(day.plusDays(1).atStartOfDay(MarketClock.KST).toInstant())
         val p = mapOf("u" to userId, "a" to accountKey, "o" to n.odno, "s" to n.symbol, "side" to n.side, "start" to start, "end" to end)
         fun matchId() = jdbc.queryForList(
