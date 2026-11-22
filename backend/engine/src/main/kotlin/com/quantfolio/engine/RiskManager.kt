@@ -46,19 +46,11 @@ class RiskManager(
         return Decision(true, qty)
     }
 
-    /**
-     * 매도: 보유 전량 청산. strategyId 를 주면 그 전략 귀속 수량만 — 같은 종목을 다른 전략이 보유해도 함께 팔지 않는다.
-     * null 이면 계좌 합산.
-     */
-    fun evaluateSell(userId: Int, symbol: String, strategyId: Int?, accountKey: String): Decision {
-        if (strategyId != null) {
-            val qty = positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(userId, accountKey, strategyId, symbol)?.qty
-            if (qty == null || qty.signum() <= 0) return Decision(false, 0, "보유 수량 없음")
-            return Decision(true, qty.toInt())
-        }
-        val held = aggregate(userId, symbol, accountKey)
-        if (held == null || held.qty.signum() <= 0) return Decision(false, 0, "보유 수량 없음")
-        return Decision(true, held.qty.toInt())
+    /** 매도: 보유 전량 청산. 그 전략 귀속 수량만 — 같은 종목을 다른 전략이 보유해도 함께 팔지 않는다. */
+    fun evaluateSell(userId: Int, symbol: String, strategyId: Int, accountKey: String): Decision {
+        val qty = positions.findByUserIdAndBrokerAccountKeyAndStrategyIdAndSymbol(userId, accountKey, strategyId, symbol)?.qty
+        if (qty == null || qty.signum() <= 0) return Decision(false, 0, "보유 수량 없음")
+        return Decision(true, qty.toInt())
     }
 
     /**

@@ -74,7 +74,7 @@ class RiskManagerTest(
         positions.save(Position(uid, a, "005930", d("2"), d("1"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         positions.save(Position(uid, b, "005930", d("5"), d("1"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         assertEquals(RiskManager.Decision(true, 2, ""), risk.evaluateSell(uid, "005930", a, TEST_KIS_ACCOUNT_KEY))
-        assertEquals(RiskManager.Decision(true, 7, ""), risk.evaluateSell(uid, "005930", null, TEST_KIS_ACCOUNT_KEY))
+        assertEquals(RiskManager.Decision(true, 5, ""), risk.evaluateSell(uid, "005930", b, TEST_KIS_ACCOUNT_KEY))
         assertEquals(RiskManager.Decision(false, 0, "보유 수량 없음"), risk.evaluateSell(uid, "000660", a, TEST_KIS_ACCOUNT_KEY))
     }
 

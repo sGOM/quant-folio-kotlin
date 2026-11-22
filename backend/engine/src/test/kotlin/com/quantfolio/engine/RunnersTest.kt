@@ -213,7 +213,7 @@ class RunnersTest(
         positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
         broker.quotes[code] = BigDecimal("1200")
         val prodProps = QuantfolioProperties(kis = QuantfolioProperties.Kis(env = "prod", prodApproved = true))
-        val prod = ctx.copy(props = prodProps, liveGate = LiveGateService(reports, ctx.risk, ctx.jdbc, prodProps, ctx.clock, users))
+        val prod = ctx.copy(liveGate = LiveGateService(reports, ctx.risk, ctx.jdbc, prodProps, ctx.clock, users))
         single(sid, prod).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
         val a = alerts.findAll().single { it.code == "live_gate_blocked" && it.strategyId == sid }

@@ -63,6 +63,4 @@ class MarketHaltMonitor(
         }
         return state
     }
-
-    fun canTrade(now: Double): Boolean = evaluate(now) == MarketState.NORMAL
 }

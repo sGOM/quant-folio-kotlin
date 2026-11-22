@@ -5,7 +5,6 @@ import com.quantfolio.alert.pyIsoformat
 import com.quantfolio.broker.BrokerClient
 import com.quantfolio.broker.BrokerCredentials
 import com.quantfolio.common.MarketClock
-import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.common.withLockOrElse
 import com.quantfolio.domain.alert.AlertSeverity
@@ -65,7 +64,6 @@ data class RunnerContext(
     val redis: StringRedisTemplate,
     val liveGate: LiveGateService,
     val monitor: MarketHaltMonitor,
-    val props: QuantfolioProperties,
     val clock: Clock,
     val risk: RiskManager,
     val calendar: MarketCalendar,

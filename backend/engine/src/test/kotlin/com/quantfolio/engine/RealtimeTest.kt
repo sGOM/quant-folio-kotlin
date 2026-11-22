@@ -17,13 +17,13 @@ class RealtimeTest {
         assertEquals(MarketState.NORMAL, m.evaluate(0.0)) // 표본 3 < 5 — 판정 보류
         listOf("d", "e").forEach { m.observe(it, false, 0.0) } // 3/5 = 60%
         assertEquals(MarketState.HALTED, m.evaluate(1.0))
-        assertFalse(m.canTrade(1.0))
+        assertEquals(MarketState.HALTED, m.evaluate(1.0))
         listOf("a", "b", "c").forEach { m.observe(it, false, 10.0) }
         assertEquals(MarketState.COOLDOWN, m.evaluate(10.0))
         assertEquals(MarketState.COOLDOWN, m.evaluate(189.0))
         m.observe("a", true, 100.0) // 표본은 여전히 5 지만 비율 20% — 재발 아님
         assertEquals(MarketState.NORMAL, m.evaluate(190.0)) // 180초 유예 후 재개
-        assertTrue(m.canTrade(190.0))
+        assertEquals(MarketState.NORMAL, m.evaluate(190.0))
         // 오래된 관측(120초 초과)은 무시 → 표본 부족으로 판정 보류
         val n = MarketHaltMonitor()
         listOf("a", "b", "c", "d", "e").forEach { n.observe(it, true, 0.0) }
