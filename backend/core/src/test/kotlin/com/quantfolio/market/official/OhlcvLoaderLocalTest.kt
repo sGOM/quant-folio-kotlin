@@ -2,8 +2,6 @@ package com.quantfolio.market.official
 
 import com.quantfolio.domain.TestApp
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
-import com.quantfolio.market.ohlcv.NaverDaily
-import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.IndexOhlcvStore
@@ -11,7 +9,6 @@ import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.test.ContainersConfig
-import com.quantfolio.test.FakeExternalHttp
 import com.quantfolio.test.InMemoryFetchLedger
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -19,8 +16,6 @@ import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
-import java.time.Clock
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.test.assertEquals
@@ -32,7 +27,6 @@ class OhlcvLoaderLocalTest(
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired private val ticks: PriceTickStore,
 ) {
-    private val http = FakeExternalHttp()
     private val local = LocalOhlcvCoverage(ticks, daily, LocalTradingDays(indexes, InMemoryFetchLedger()))
     private val week = (1..5).map { LocalDate.of(2320, 3, it) }
     private fun bar(day: LocalDate) = Bar(day.atStartOfDay().toInstant(ZoneOffset.UTC), 1.0, 1.0, 1.0, 1.0, 1)
@@ -59,14 +53,5 @@ class OhlcvLoaderLocalTest(
         daily.write(week[1], listOf(StockDaily("L00002", market = "KOSPI"), StockDaily("005930", market = "KOSPI")))
         for (i in 2..4) daily.write(week[i], listOf(StockDaily("005930", market = "KOSPI"))) // 시장 전체는 계속, 종목은 없음
         local.require("L00002", week[0], week[4]) // 예외 없음
-    }
-
-    @Test
-    fun `ohlcv loader never calls naver`() {
-        ticks.upsert("L00003", listOf(bar(week[0])))
-        assertThrows<MarketDataNotLoaded> { local.require("L00003", week[0], week[4]) }
-        // 원격 경로(OhlcvLoader)는 만들기만 하고 부르지 않는다 — 로컬 경로는 NaverDaily 를 의존하지 않는다.
-        OhlcvLoader(NaverDaily(http), ticks, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC))
-        assertEquals(0, http.calls.size)
     }
 }

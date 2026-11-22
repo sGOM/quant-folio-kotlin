@@ -14,17 +14,20 @@ import java.time.format.DateTimeFormatter
  */
 @Component
 class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger: FetchLedger) {
-    /** [start, end] 의 기대 거래일(오름차순). */
+    /** [start, end] 의 기대 거래일(오름차순). 적재 구간 앞·뒤의 평일(휴장 확정 제외)은 아직 모르는 날이라 결측 후보다. */
     fun expected(start: LocalDate, end: LocalDate): List<LocalDate> {
-        val loaded = indexes.read(KOSPI_INDEX, start, FAR_FUTURE).map { it.date }
-        val inRange = loaded.filter { !it.isAfter(end) }
-        val tailFrom = loaded.lastOrNull()?.plusDays(1) ?: start
-        val tail = generateSequence(tailFrom) { it.plusDays(1) }
-            .takeWhile { !it.isAfter(end) }
+        val span = indexes.span(KOSPI_INDEX) ?: return unknownWeekdays(start, end)
+        val head = unknownWeekdays(start, minOf(end, span.first.minusDays(1)))
+        val inRange = indexes.read(KOSPI_INDEX, start, end).map { it.date }
+        val tail = unknownWeekdays(maxOf(start, span.second.plusDays(1)), end)
+        return head + inRange + tail
+    }
+
+    private fun unknownWeekdays(from: LocalDate, to: LocalDate): List<LocalDate> =
+        generateSequence(from) { it.plusDays(1) }
+            .takeWhile { !it.isAfter(to) }
             .filter { it.dayOfWeek != DayOfWeek.SATURDAY && it.dayOfWeek != DayOfWeek.SUNDAY && !isHoliday(it) }
             .toList()
-        return inRange + tail
-    }
 
     /** 원장에 휴장 확정(`krx_open`, `stk_bydd_trd|yyyyMMdd|KOSPI`, 0행·final)이 있는 날. */
     fun isHoliday(day: LocalDate): Boolean =
@@ -33,7 +36,6 @@ class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger:
     companion object {
         const val KOSPI_INDEX = "1001"
         private const val LEDGER_SOURCE = "krx_open"
-        private val FAR_FUTURE = LocalDate.of(2999, 12, 31)
         private val YMD = DateTimeFormatter.ofPattern("yyyyMMdd")
     }
 }

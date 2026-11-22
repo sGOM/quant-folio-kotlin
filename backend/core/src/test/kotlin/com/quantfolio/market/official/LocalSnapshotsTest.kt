@@ -24,7 +24,7 @@ class LocalSnapshotsTest(@Autowired private val daily: StockDailyStore, @Autowir
     private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger))
 
     // 2310-03-01 ~ 03-05 (공유 DB 의 다른 테스트와 겹치지 않는 먼 미래). 요일은 무관하게 평일 가정이 필요하므로 아래에서 검증한다.
-    private val week = (1..5).map { LocalDate.of(2310, 3, it) }
+    private val week = generateSequence(LocalDate.of(2310, 3, 1)) { it.plusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(8).toList()
 
     @BeforeEach
     fun clean() {
@@ -56,6 +56,46 @@ class LocalSnapshotsTest(@Autowired private val daily: StockDailyStore, @Autowir
         val e = assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], tail[2], "1001") }
         assertEquals(listOf(tail[1] to tail[2]), e.missing)
         assertNull(snaps.marketOhlcvSnapshot(tail[0], "KOSPI")) // 휴장일은 null
+    }
+
+    @Test
+    fun `range before first loaded index day is missing`() {
+        loadIndex(week[2], week[3], week[4])
+        val e = assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "1001") }
+        assertEquals(listOf(week[0] to week[1]), e.missing)
+        // 전체가 적재 이전: 빈 리스트·null 이 아니라 예외
+        assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[1], "1001") }
+        assertThrows<MarketDataNotLoaded> { snaps.priceChange(week[0], week[1], listOf("KOSPI")) }
+    }
+
+    @Test
+    fun `price change uses prev diff returns so a split is not a crash`() {
+        loadIndex(week[0], week[1], week[2])
+        daily.write(week[0], listOf(StockDaily("005930", market = "KOSPI", close = 50000.0)))
+        daily.write(week[1], listOf(StockDaily("005930", market = "KOSPI", close = 1000.0, prevDiff = 0.0))) // 1/50 분할, 기준가 조정
+        daily.write(week[2], listOf(StockDaily("005930", market = "KOSPI", close = 1010.0, prevDiff = 10.0)))
+        val p = snaps.priceChange(week[0], week[2], listOf("KOSPI")).single()
+        assertEquals(1.0, p.changePct!!, 1e-9)
+    }
+
+    @Test
+    fun `price change falls back to raw ratio when prev diff is null`() {
+        loadIndex(week[0], week[1])
+        daily.write(week[0], listOf(StockDaily("005930", market = "KOSPI", close = 100.0)))
+        daily.write(week[1], listOf(StockDaily("005930", market = "KOSPI", close = 105.0)))
+        assertEquals(5.0, snaps.priceChange(week[0], week[1], listOf("KOSPI")).single().changePct!!, 1e-9)
+    }
+
+    @Test
+    fun `symbol delisted during period gets close 0 and minus 100 percent`() {
+        loadIndex(week[0], week[1])
+        daily.write(week[0], listOf(StockDaily("111111", market = "KOSPI", close = 100.0), StockDaily("222222", market = "KOSPI", close = 10.0)))
+        daily.write(week[1], listOf(StockDaily("222222", market = "KOSPI", close = 11.0, prevDiff = 1.0))) // 시장은 계속, 111111 만 끝
+        val gone = snaps.priceChange(week[0], week[1], listOf("KOSPI")).single { it.symbol == "111111" }
+        assertEquals(0.0, gone.close)
+        assertEquals(-100.0, gone.changePct)
+        assertEquals(0L, gone.volume)
+        assertEquals(0L, gone.tradingValue)
     }
 
     @Test

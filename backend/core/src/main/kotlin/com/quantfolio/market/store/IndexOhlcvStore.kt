@@ -58,6 +58,15 @@ class IndexOhlcvStore(private val jdbc: NamedParameterJdbcTemplate, private val 
         )
     }
 
+    /** 적재된 첫·마지막 거래일. 없으면 null. */
+    fun span(code: String): Pair<LocalDate, LocalDate>? = jdbc.query(
+        "SELECT min(trade_date), max(trade_date) FROM index_ohlcv WHERE index_code = :code",
+        mapOf("code" to code),
+    ) { rs, _ ->
+        val min = rs.getObject(1, LocalDate::class.java) ?: return@query null
+        min to rs.getObject(2, LocalDate::class.java)
+    }.firstOrNull()
+
     /** 지수 일봉과 확보 구간을 함께 지운다(재적재용). */
     fun delete(code: String) {
         tx.executeWithoutResult {
