@@ -84,7 +84,7 @@ DSR 은 `같은 strategy_id + 같은 기간 + 같은 universe_fingerprint` 인 �
 
 - [ ] **Step 1:** 학습 구간 최고 Sharpe 시행 각 가설별 1개 = 후보. 각 후보의 `GET /api/backtests/{id}/dsr` 기록 — DSR ≥ 0.95 아니면 탈락.
 - [ ] **Step 2:** 살아남은 후보만 같은 전략에 config PATCH → 확인 구간 백테스트 **1회씩**.
-- [ ] **Step 3:** 판정: KOSPI200 대비 초과수익 > 0 / Sharpe ≥ 학습 Sharpe × 0.5 / MDD ≤ 같은 기간 KOSPI200 MDD. 동률이면 회전율 낮은 쪽.
+- [ ] **Step 3:** 판정: Sharpe ≥ 같은 기간 KOSPI200 Sharpe / Sharpe ≥ 학습 Sharpe × 0.5 / MDD ≤ 같은 기간 KOSPI200 MDD. 동률이면 회전율 낮은 쪽.
 - [ ] **Step 4:** 통과 후보 없음 → 결과를 사용자에게 보고하고 Task 3 으로(새 가설은 날짜 붙여 추가, 기존 시행 수는 이어서 센다). 통과 → 최종 config 를 hypotheses.md 에 기록.
 
 ### Task 6: 모의 기동
