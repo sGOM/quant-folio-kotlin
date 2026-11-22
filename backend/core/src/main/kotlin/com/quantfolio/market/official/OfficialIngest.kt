@@ -209,7 +209,7 @@ class OfficialIngest(
         val symbols = rows.map { it.symbol }
         val prev = ticks.lastBars(symbols, time)
         val later = ticks.symbolsWithBarsAfter(symbols, time)
-        val prevTime = previousTradingDay(day)?.atStartOfDay()?.toInstant(ZoneOffset.UTC)
+        val prevTime = previousForAppend(day)?.atStartOfDay()?.toInstant(ZoneOffset.UTC)
         val bars = mutableListOf<Pair<String, Bar>>()
         for (raw in rows) {
             val r = AdjustedBars.flatIfHalted(raw)
@@ -231,8 +231,24 @@ class OfficialIngest(
         ticks.upsertMany(bars)
     }
 
-    /** day 의 바로 앞 거래일 — [LocalTradingDays] 한 곳. 원장에 없는 평일(실패·미적재)이 끼면 null — 공백이다. */
-    private fun previousTradingDay(day: LocalDate): LocalDate? = tradingDays.previous(day)
+    /**
+     * appendPrices 의 비교용 직전일. 공용 [LocalTradingDays.previous] 와 달리 원장에 있고 5호출이 모두 0행인 평일(미확정 휴장 포함)도 건너뛴다.
+     * 휴장이 아니라 결손이었다면 기준가(종가-전일대비)와 저장된 직전 종가가 어긋나 어차피 dirty 로 잡히므로 안전하다.
+     * 원장에 기록이 없거나 일부만 0행인 날을 만나면 null(비교 불가 -> dirty).
+     */
+    private fun previousForAppend(day: LocalDate): LocalDate? {
+        var d = day
+        repeat(PREV_DAY_LOOKBACK) {
+            d = d.minusDays(1)
+            if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) return@repeat
+            when (tradingDays.isTradingDay(d)) {
+                true -> return d
+                false -> Unit
+                null -> if (!tradingDays.allCallsZero(d)) return null
+            }
+        }
+        return null
+    }
 
     private fun stockKey(day: LocalDate) = key(STOCK_SERVICES.getValue("KOSPI"), day, "KOSPI")
 
@@ -317,6 +333,7 @@ class OfficialIngest(
             MARKETS.map { STOCK_SERVICES.getValue(it) to it } + INDEX_SERVICES.map { (family, svc) -> svc to family }
 
         private const val DAY_CALLS = 5
+        private const val PREV_DAY_LOOKBACK = 10
 
         /** KRX Open API 일별 데이터 제공 시작일. */
         val API_START: LocalDate = LocalDate.of(2010, 1, 4)

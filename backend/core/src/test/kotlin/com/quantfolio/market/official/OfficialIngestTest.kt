@@ -11,6 +11,7 @@ import com.quantfolio.market.krxopen.OpenIndexRow
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.SourceQuotaError
 import com.quantfolio.market.source.SourceUnavailableError
+import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.CacheKeys
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.IndexOhlcvStore
@@ -166,8 +167,8 @@ class OfficialIngestTest(
         assertEquals(LedgerEntry(0, true), ledger.get("krx_open", key("stk_bydd_trd", oldDay, "KOSPI")))
         assertEquals(LedgerEntry(0, false), ledger.get("krx_open", key("stk_bydd_trd", recent, "KOSPI")))
         assertEquals(LedgerEntry(0, true), ledger.get("krx_open", key("kospi_dd_trd", oldDay, "KOSPI")))
-        assertTrue(LocalTradingDays(ledger).isHoliday(oldDay))
-        assertFalse(LocalTradingDays(ledger).isHoliday(recent))
+        assertEquals(false, LocalTradingDays(ledger).isTradingDay(oldDay))
+        assertNull(LocalTradingDays(ledger).isTradingDay(recent))
     }
 
     @Test
@@ -206,6 +207,36 @@ class OfficialIngestTest(
         ingest().rebuildAdjusted("000001")
         val r = ticks.bars("000001", Instant.parse("2320-01-01T00:00:00Z"), Instant.parse("2320-12-31T00:00:00Z")).last()
         assertEquals(listOf(1000.0, 1000.0, 1000.0), listOf(r.open, r.high, r.low))
+    }
+
+    /** 오늘(KST) 직전 평일 3개 a < h < n — 7일 안이라 h 의 0행은 미확정으로 남는다. */
+    private val recent3 = generateSequence(today.minusDays(1)) { it.minusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(3).toList().reversed()
+    private val allRange = Instant.parse("2320-01-01T00:00:00Z") to Instant.parse("2320-12-31T00:00:00Z")
+
+    /** a 를 적재하고 그 봉의 거래량을 표식(999)으로 바꾼다 — 전체 재계산(dirty)이 돌면 10 으로 돌아간다. */
+    private fun ingestWithSentinel(a: LocalDate, h: LocalDate, n: LocalDate, nClose: Pair<Double, Double>): Long {
+        open.prices[a] = 1000.0 to 0.0
+        open.prices[n] = nClose
+        ingest().backfill(a, a, 1000)
+        ticks.upsert("000001", listOf(Bar(a.atStartOfDay().toInstant(ZoneOffset.UTC), 1000.0, 1000.0, 1000.0, 1000.0, 999)))
+        ingest().backfill(h, h, 1000) // 0행·미확정
+        assertEquals(LedgerEntry(0, false), ledger.get("krx_open", key("stk_bydd_trd", h, "KOSPI")))
+        ingest().backfill(n, n, 1000)
+        return ticks.bars("000001", allRange.first, allRange.second).first().volume
+    }
+
+    @Test
+    fun `next day after an unconfirmed holiday does not trigger a full rebuild`() {
+        val (a, h, n) = recent3
+        // n 의 기준가(종가-전일대비) = 1000 = a 의 저장 종가 -> 어긋남 없음 -> dirty 아님.
+        assertEquals(999L, ingestWithSentinel(a, h, n, 1100.0 to 100.0))
+    }
+
+    @Test
+    fun `if the skipped zero-row day was actually a missing trading day the base price mismatch still marks dirty`() {
+        val (a, h, n) = recent3
+        // h 가 실제로는 거래일이었다면 n 의 기준가(1050)가 a 종가(1000)와 어긋나 dirty -> 재계산으로 표식이 사라진다.
+        assertEquals(10L, ingestWithSentinel(a, h, n, 1100.0 to 50.0))
     }
 
     @Test

@@ -13,11 +13,12 @@ class InMemoryFetchLedger : FetchLedger {
     override fun get(source: String, key: String) = rows[source to key]?.copy(fetchedAt = times[source to key])
 
     fun putAt(source: String, key: String, rowCount: Int, final: Boolean, at: java.time.Instant) {
-        put(source, key, rowCount, final)
+        rows[source to key] = LedgerEntry(rowCount, final)
         times[source to key] = at
     }
 
     override fun put(source: String, key: String, rowCount: Int, final: Boolean) {
+        times.remove(source to key)
         rows[source to key] = LedgerEntry(rowCount, final)
     }
 

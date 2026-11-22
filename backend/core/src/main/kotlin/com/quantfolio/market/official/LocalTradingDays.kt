@@ -46,8 +46,9 @@ class LocalTradingDays(private val ledger: FetchLedger) : PastTradingDays {
         return null
     }
 
-    /** 원장에 휴장 확정(0행·final)이 있는 날. */
-    fun isHoliday(day: LocalDate): Boolean = ledger.get(SOURCE, key(day))?.let { it.rowCount == 0 && it.final } == true
+    /** 그날 5개 호출의 원장 기록이 모두 있고 모두 0행인가(확정 여부는 묻지 않는다). */
+    fun allCallsZero(day: LocalDate): Boolean =
+        CALLS.all { (svc, market) -> ledger.get(SOURCE, "$svc|${day.format(YMD)}|$market")?.rowCount == 0 }
 
     private fun state(day: LocalDate, e: LedgerEntry?): Boolean? = when {
         e == null -> null
@@ -64,8 +65,7 @@ class LocalTradingDays(private val ledger: FetchLedger) : PastTradingDays {
      */
     private fun provisionalHoliday(day: LocalDate, e: LedgerEntry): Boolean {
         val at = e.fetchedAt ?: return false
-        val all = CALLS.map { (svc, market) -> ledger.get(SOURCE, "$svc|${day.format(YMD)}|$market") }
-        if (all.any { it == null || it.rowCount != 0 }) return false
+        if (!allCallsZero(day)) return false
         val later = generateSequence(day.plusDays(1)) { it.plusDays(1) }.take(MAX_FORWARD).filter { !isWeekend(it) }
             .firstNotNullOfOrNull { d -> ledger.get(SOURCE, key(d))?.takeIf { it.rowCount > 0 } } ?: return false
         return later.fetchedAt?.let { !at.isBefore(it) } == true
