@@ -48,7 +48,7 @@ paths:
 | `KrxMdc.rows` | `krx_index._krx_rows` | 응답 원인 분류(HTML=Auth, 키 없음=Schema) |
 | `KrxMdc.pykrx` | pykrx `KrxWebIo` | 분류 없음, 730일 분할. 호출자가 Unavailable 로 감싼다 |
 | `KrxStockApi` | pykrx `stock.*` 9종 | 같은 bld·파라미터·숫자 정리 규칙 |
-| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총·업종(PIT 스냅샷 우선)·ETF |
+| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총·업종(PIT 스냅샷 우선) |
 | `KrxSnapshots` | `metrics/fetch.py` | 위를 `StoreCache` 로 감싼 로컬 우선 조회 |
 
 - `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.

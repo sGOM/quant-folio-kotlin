@@ -137,7 +137,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 배포: 원본 `docker-compose.override.yml`(uvicorn `--reload`)은 옮기지 않았다 — JVM 에 해당 없음. 소스 볼륨 마운트(`./backend:/app`)도 제거(이미지에 jar 포함).
 - 배포: worker 가 원본은 redis 만 기다렸지만 Kotlin 은 `web` healthy(=Flyway 완료) 뒤에 기동한다. engine 도 같다.
 - frontend `Dockerfile`: 원본 `npm install`(lockfile 미사용)은 현재 레지스트리에서 `edgesOut` null 오류로 재현 가능하게 실패 → `package-lock.json` + `npm ci`. 앱 코드는 무수정.
-- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성(V6 이후 `credential_enc_key` 를 빼 12개). `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
+- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성(이후 `credential_enc_key`·`secret_key`·`s3_backup_*` 를 지워 현재 9개). `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
 - Caddy 의 `/docs`·`/openapi.json`·`/redoc` 라우트는 남겼지만 Kotlin web 은 해당 문서를 제공하지 않는다(404).
 - 요청 DTO 의 `@Size`(전략 이름 255·설명 2000·비밀번호 8~128)는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
 - KIS WS 종료: 원본은 `async with websockets.connect()` 종료 시 closing handshake 를 close_timeout(기본 10초)까지 기다린 뒤 TCP 를 닫는다. Kotlin `KisSocket.close()` 는 close 프레임 전송과 서버 close 대기에 각 2초 상한(측정값 아님)을 두고, 그 뒤 `abort` 와 HttpClient `shutdownNow` 로 소켓을 닫는다. 인터럽트되면 대기 없이 즉시 닫는다. JDK HttpClient 는 핸드셰이크 응답 없이 끊기면 한 번 재시도해 시도당 TCP 연결을 2개 만든다(원본 websockets 는 재시도 없음 — 바꾸지 않음).
