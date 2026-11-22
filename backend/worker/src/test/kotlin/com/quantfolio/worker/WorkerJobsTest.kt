@@ -1,6 +1,7 @@
 package com.quantfolio.worker
 
 import com.quantfolio.backtest.FillQualityReport
+import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
@@ -28,6 +29,7 @@ import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.eq
 import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willThrow
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
@@ -64,6 +66,7 @@ class WorkerJobsTest(
     @MockitoBean lateinit var krx: KrxIndexService
     @MockitoBean lateinit var fills: FillQualityReport
     @MockitoBean lateinit var news: NewsIngestor
+    @MockitoSpyBean lateinit var alertPublisher: AlertPublisher
 
     private fun <T> anyK(c: Class<T>): T = any(c) ?: when (c) { LocalDate::class.java -> LocalDate.MIN as T; else -> throw IllegalStateException() }
 
@@ -92,6 +95,29 @@ class WorkerJobsTest(
         assertEquals(6, r["ok"])
         assertEquals(1, r["failed"])
         assertEquals("야간 스냅샷 선적재 실패율 1/7(14%)가 임계치를 초과했습니다: 시가총액", latest("snapshot_ingest_failure_rate")!!.message)
+    }
+
+    /** 실패율 알림 발행이 던지게 한다. 일봉은 전파·스냅샷은 삼키는 차이는 원본 그대로라 통합 금지(worker.md). */
+    private fun publishThrows(code: String) =
+        willThrow(IllegalStateException("redis down")).given(alertPublisher)
+            .publish(any<Int>(), anyInt(), eqK(AlertSeverity.warning), any(String::class.java) ?: "", eqK(code), any<Double>())
+
+    @Test
+    fun ohlcvIngestPropagatesAlertPublishFailure_doNotMergeWithSnapshots() {
+        given(universe.build("KOSPI200")).willReturn(listOf("000010", "000020", "000030"))
+        willThrow(IllegalStateException("db down")).given(loader).ensureCoverage(eqK("000020"), anyK(LocalDate::class.java), anyK(LocalDate::class.java))
+        publishThrows("ohlcv_ingest_failure_rate")
+        assertThrows<IllegalStateException> { jobs.ingestDailyOhlcv() }
+    }
+
+    @Test
+    fun snapshotIngestSwallowsAlertPublishFailure_doNotMergeWithOhlcv() {
+        given(snapshots.marketCap(anyK(LocalDate::class.java), anyList())).willThrow(SourceAuthError("krx", "차단"))
+        publishThrows("snapshot_ingest_failure_rate")
+        val r = jobs.ingestDailySnapshots()
+        assertEquals(6, r["ok"])
+        assertEquals(1, r["failed"])
+        assertEquals(null, latest("snapshot_ingest_failure_rate")) // 스텁이 실제로 걸려 발행이 DB 에 닿지 않았다
     }
 
     @Test

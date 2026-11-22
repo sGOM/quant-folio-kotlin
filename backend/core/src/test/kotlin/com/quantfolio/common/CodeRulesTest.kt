@@ -56,6 +56,24 @@ class CodeRulesTest {
         assertTrue(hits.isEmpty(), "@Scheduled 는 zone 필수(컨테이너 TZ 는 UTC):\n${report(hits)}")
     }
 
+    /** `kis_balance_reconcile_blocked` 는 세우기만 하고 해제하지 않는다(trading-safety.md). 운영 코드는 읽는 곳(Reconciler)뿐이어야 한다. */
+    @Test
+    fun reconcileBlockedFlagNeverReleased() {
+        val readerFile = "engine/src/main/kotlin/com/quantfolio/engine/Reconciler.kt"
+        val users = mainCodeLines().filter { (_, _, l) -> BLOCKED_COLUMN in l }
+        val strays = users.filter { (f, _, _) -> f != readerFile }
+        assertTrue(strays.isEmpty(), "차단 컬럼을 읽는 곳은 Reconciler 뿐이어야 한다:\n${report(strays)}")
+        val releases = users.filter { (_, _, l) -> BLOCKED_RELEASE.containsMatchIn(l) }
+        assertTrue(releases.isEmpty(), "차단 표시 해제 금지:\n${report(releases)}")
+
+        val migrations = Files.walk(backend.resolve("core/src/main/resources/db/migration")).use { s ->
+            s.filter { it.extension == "sql" }.sorted().toList()
+        }
+        assertTrue(migrations.isNotEmpty(), "마이그레이션 SQL 을 못 찾음")
+        val sqlHits = migrations.flatMap { f -> f.readLines().mapIndexedNotNull { i, l -> if (BLOCKED_RELEASE.containsMatchIn(l)) Triple(f.fileName.toString(), i + 1, l) else null } }
+        assertTrue(sqlHits.isEmpty(), "마이그레이션에서 차단 표시 해제 금지:\n${report(sqlHits)}")
+    }
+
     /** 정규식이 아무것도 못 잡게 망가지면 위 테스트들이 조용히 통과한다 — 그걸 막는다. */
     @Test
     fun patternsCatchViolations() {
@@ -69,9 +87,22 @@ class CodeRulesTest {
             listOf(true, true, false, false),
             listOf("""redis.get("engine:heartbeat")""", "\"lock:order:\$k\"", "RedisKeys.ENGINE_HEARTBEAT", "\"engine\" to 1").map { literal.containsMatchIn(it) },
         )
+        assertEquals(
+            listOf(true, true, true, false, false, false),
+            listOf(
+                "UPDATE users SET kis_balance_reconcile_blocked = false",
+                "SET kis_balance_reconcile_blocked=FALSE",
+                "NEW.kis_balance_reconcile_blocked := false;",
+                "ADD COLUMN kis_balance_reconcile_blocked boolean NOT NULL DEFAULT false;",
+                "SET kis_balance_reconcile_blocked = true",
+                "select not kis_balance_reconcile_blocked from users",
+            ).map { BLOCKED_RELEASE.containsMatchIn(it) },
+        )
     }
 
     companion object {
+        private const val BLOCKED_COLUMN = "kis_balance_reconcile_blocked"
+        private val BLOCKED_RELEASE = Regex("""kis_balance_reconcile_blocked\s*:?=\s*false""", RegexOption.IGNORE_CASE)
         private val SYSTEM_ZONE_DATE = Regex("""\b(LocalDate|LocalDateTime|LocalTime|ZonedDateTime|OffsetDateTime|YearMonth|Year)\.now\(\)|systemDefault""")
         private fun redisLiteral(namespaces: Set<String>) = Regex("\"(${namespaces.joinToString("|")}):")
     }
