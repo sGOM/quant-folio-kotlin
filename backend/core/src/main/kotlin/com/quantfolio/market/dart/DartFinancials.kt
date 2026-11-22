@@ -71,6 +71,10 @@ class DartFinancials(
         return null
     }
 
+    /** 원격 없이 이미 확정돼 있는지(원장 확정 또는 저장소 확정본). 백필이 이미 받은 조합을 건너뛰는 데 쓴다. */
+    fun accountsFinal(corp: String, year: Int, reprt: String, fsDiv: String): Boolean =
+        ledger.get(LEDGER_SOURCE, CacheKeys.of(corp, year, reprt, fsDiv))?.final == true || store.read(corp, year, reprt, fsDiv)?.second == true
+
     /** 원격 허용 경로. 받을 때마다 로컬 테이블에 upsert 해 로컬 전용 경로([corpCodeMapLocal])가 읽게 한다. */
     fun corpCodeMap(): Map<String, String>? = corpMap ?: client.corpCodeMap()?.also {
         store.writeCorpCodes(it)

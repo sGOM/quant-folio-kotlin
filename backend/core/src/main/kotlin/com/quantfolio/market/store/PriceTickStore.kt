@@ -3,6 +3,7 @@ package com.quantfolio.market.store
 import com.quantfolio.quant.Series
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.sql.Timestamp
 import java.time.Instant
@@ -19,7 +20,7 @@ data class Bar(val time: Instant, val open: Double, val high: Double, val low: D
 fun List<Bar>.closeSeries(): Series = Series(map { it.date }, DoubleArray(size) { this[it].close })
 
 @Component
-class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate) {
+class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val tx: TransactionTemplate) {
     /** 같은 (time, symbol) 은 새 값으로 덮어쓴다(소스가 수정주가를 갱신하므로). 적재 행 수 반환. */
     fun upsert(symbol: String, bars: List<Bar>): Int {
         if (bars.isEmpty()) return 0
@@ -40,6 +41,24 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate) {
             }.toTypedArray(),
         )
         return bars.size
+    }
+
+    /** [bars] 의 첫 시각 이후 이 종목 봉을 지우고 [bars] 로 바꾼다(수정주가 재계산용). 그 앞 봉은 건드리지 않는다. */
+    fun replaceFrom(symbol: String, bars: List<Bar>) {
+        if (bars.isEmpty()) return
+        tx.executeWithoutResult {
+            jdbc.update("DELETE FROM price_ticks WHERE symbol = :symbol AND time >= :from", mapOf("symbol" to symbol, "from" to Timestamp.from(bars.first().time)))
+            upsert(symbol, bars)
+        }
+    }
+
+    /** 종목별 [before] 이전의 가장 최근 종가. 봉이 없는 종목은 결과에 없다. */
+    fun lastCloses(symbols: List<String>, before: Instant): Map<String, Double> {
+        if (symbols.isEmpty()) return emptyMap()
+        return jdbc.query(
+            "SELECT DISTINCT ON (symbol) symbol, close FROM price_ticks WHERE symbol IN (:symbols) AND time < :before ORDER BY symbol, time DESC",
+            mapOf("symbols" to symbols, "before" to Timestamp.from(before)),
+        ) { rs, _ -> rs.getString(1) to rs.getBigDecimal(2).toDouble() }.toMap()
     }
 
     /** [start, end] 구간 일봉, 시간순. */

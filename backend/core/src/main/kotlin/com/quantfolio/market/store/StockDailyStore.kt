@@ -104,6 +104,34 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         }
     }
 
+    /** 한 종목의 전 기간 행(날짜 오름차순). 수정주가 재계산용. */
+    fun readSymbol(symbol: String): List<Pair<LocalDate, StockDaily>> = jdbc.query(
+        "SELECT * FROM stock_daily_snapshots WHERE symbol = :symbol ORDER BY trade_date",
+        mapOf("symbol" to padSymbol(symbol)),
+    ) { rs, _ ->
+        rs.getObject("trade_date", LocalDate::class.java) to StockDaily(
+            symbol = rs.getString("symbol"), market = rs.getString("market"),
+            open = rs.double("open"), high = rs.double("high"), low = rs.double("low"), close = rs.double("close"),
+            volume = rs.long("volume"), prevDiff = rs.double("prev_diff"), stockKind = rs.getString("stock_kind"),
+        )
+    }
+
+    /** 주권 종류가 적재된 가장 최근 거래일. 없으면 null. */
+    fun latestKindDay(): LocalDate? = jdbc.query(
+        "SELECT max(trade_date) FROM stock_daily_snapshots WHERE stock_kind IS NOT NULL", emptyMap<String, Any>(),
+    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }.firstOrNull()
+
+    /** 종목별 **최신** 주권 종류가 [kind] 인 [market] 종목(코드 오름차순). */
+    fun symbolsWithKind(market: String, kind: String): List<String> = jdbc.query(
+        """
+        SELECT symbol FROM (
+          SELECT DISTINCT ON (symbol) symbol, market, stock_kind FROM stock_daily_snapshots
+           WHERE stock_kind IS NOT NULL ORDER BY symbol, trade_date DESC) t
+         WHERE market = :market AND stock_kind = :kind ORDER BY symbol
+        """,
+        mapOf("market" to market, "kind" to kind),
+    ) { rs, _ -> rs.getString(1) }
+
     fun delete(day: LocalDate) {
         jdbc.update("DELETE FROM stock_daily_snapshots WHERE trade_date = :day", mapOf("day" to day))
     }

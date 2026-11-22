@@ -25,14 +25,12 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
         }
     }
 
-    @Scheduled(cron = "0 30 18 * * *", zone = KST)
-    fun ingestDailyOhlcv() = run("ingest_daily_ohlcv") { jobs.ingestDailyOhlcv() }
+    // 공개 시각은 Task 1 실측(차단 해제 후) 으로 확인한다. 그 전까지 보수적으로 다음 날 10:00.
+    @Scheduled(cron = "0 0 10 * * *", zone = KST)
+    fun ingestOfficialDaily() = run("ingest_official_daily") { jobs.ingestOfficialDaily() }
 
     @Scheduled(cron = "0 40 18 * * *", zone = KST)
     fun snapshotKisStockMaster() = run("snapshot_kis_stock_master") { jobs.snapshotKisStockMaster() }
-
-    @Scheduled(cron = "0 50 18 * * *", zone = KST)
-    fun ingestDailySnapshots() = run("ingest_daily_snapshots") { jobs.ingestDailySnapshots() }
 
     @Scheduled(cron = "0 0 9 * * MON", zone = KST)
     fun checkFillQualityDrift() = run("check_fill_quality_drift") { jobs.checkFillQualityDrift() }

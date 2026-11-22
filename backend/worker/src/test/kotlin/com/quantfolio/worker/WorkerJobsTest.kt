@@ -14,8 +14,8 @@ import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.kis.KisStockMaster
-import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.official.IngestReport
+import com.quantfolio.market.official.OfficialIngest
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.news.NewsIngestor
 import com.quantfolio.test.ContainersConfig
@@ -58,9 +58,7 @@ class WorkerJobsTest(
     @Autowired private val orders: OrderRepository,
     @Autowired private val redis: StringRedisTemplate,
 ) {
-    @MockitoBean lateinit var universe: UniverseBuilder
-    @MockitoBean lateinit var loader: OhlcvLoader
-    @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean lateinit var official: OfficialIngest
     @MockitoBean lateinit var kisMaster: KisStockMaster
     @MockitoBean lateinit var fills: FillQualityReport
     @MockitoBean lateinit var news: NewsIngestor
@@ -78,44 +76,18 @@ class WorkerJobsTest(
     }
 
     @Test
-    fun ohlcvIngestAlertsAboveTenPercentFailure() {
-        given(universe.build("KOSPI200")).willReturn(listOf("000010", "000020", "000030"))
-        willThrow(IllegalStateException("db down")).given(loader).ensureCoverage(eqK("000020"), anyK(LocalDate::class.java), anyK(LocalDate::class.java))
-        val r = jobs.ingestDailyOhlcv()
-        assertEquals(listOf("000020"), r["failed"])
-        assertEquals("야간 일봉 적재 실패율 1/3(33%)가 임계치를 초과했습니다: 000020", latest("ohlcv_ingest_failure_rate")!!.message)
+    fun officialDailyAlertsOnFailures() {
+        given(official.daily(anyK(LocalDate::class.java))).willReturn(IngestReport(1, 5, false, listOf("2026-01-05: 503")))
+        val r = jobs.ingestOfficialDaily()
+        assertEquals(1, r["done"])
+        assertEquals("KRX Open API 일일 적재 실패 1건: 2026-01-05: 503", latest("official_ingest_failure")!!.message)
     }
 
     @Test
-    fun snapshotStepFailureIsCountedAndAlerted() {
-        given(snapshots.marketCap(anyK(LocalDate::class.java), anyList())).willThrow(SourceAuthError("krx", "차단"))
-        val r = jobs.ingestDailySnapshots()
-        assertEquals(6, r["ok"])
-        assertEquals(1, r["failed"])
-        assertEquals("야간 스냅샷 선적재 실패율 1/7(14%)가 임계치를 초과했습니다: 시가총액", latest("snapshot_ingest_failure_rate")!!.message)
-    }
-
-    /** 실패율 알림 발행이 던지게 한다. 일봉은 전파·스냅샷은 삼키는 차이는 원본 그대로라 통합 금지(worker.md). */
-    private fun publishThrows(code: String) =
-        willThrow(IllegalStateException("redis down")).given(alertPublisher)
-            .publish(any<Int>(), anyInt(), eqK(AlertSeverity.warning), any(String::class.java) ?: "", eqK(code), any<Double>())
-
-    @Test
-    fun ohlcvIngestPropagatesAlertPublishFailure_doNotMergeWithSnapshots() {
-        given(universe.build("KOSPI200")).willReturn(listOf("000010", "000020", "000030"))
-        willThrow(IllegalStateException("db down")).given(loader).ensureCoverage(eqK("000020"), anyK(LocalDate::class.java), anyK(LocalDate::class.java))
-        publishThrows("ohlcv_ingest_failure_rate")
-        assertThrows<IllegalStateException> { jobs.ingestDailyOhlcv() }
-    }
-
-    @Test
-    fun snapshotIngestSwallowsAlertPublishFailure_doNotMergeWithOhlcv() {
-        given(snapshots.marketCap(anyK(LocalDate::class.java), anyList())).willThrow(SourceAuthError("krx", "차단"))
-        publishThrows("snapshot_ingest_failure_rate")
-        val r = jobs.ingestDailySnapshots()
-        assertEquals(6, r["ok"])
-        assertEquals(1, r["failed"])
-        assertEquals(null, latest("snapshot_ingest_failure_rate")) // 스텁이 실제로 걸려 발행이 DB 에 닿지 않았다
+    fun officialDailyIsQuietWithoutFailures() {
+        given(official.daily(anyK(LocalDate::class.java))).willReturn(IngestReport(1, 5, false, emptyList()))
+        jobs.ingestOfficialDaily()
+        assertEquals(null, latest("official_ingest_failure"))
     }
 
     @Test
