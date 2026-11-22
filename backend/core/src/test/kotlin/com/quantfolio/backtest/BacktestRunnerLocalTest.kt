@@ -196,8 +196,12 @@ class BacktestRunnerLocalTest(
     fun `empty universe day skips the coverage check`() {
         val rule = mapOf("source" to "KOSPI_MCAP", "pick" to 4, "lookback" to 100_000) // 이력 부족으로 전 종목 제외 -> 후보 0
         val cfg = config(qualityWeights).let { it + ("selection" to (it["selection"] as Map<*, *> + ("universe_rule" to rule))) }
-        val e = runCatching { runner.run(cfg, start, end) }.exceptionOrNull()
-        assertTrue(e !is MarketDataNotLoaded || e.kind != "factor_coverage", "빈 유니버스를 미적재로 보고했다: $e")
+        // 후보가 없는 날에도 provider 는 불린다(quality 가중치) — 그때 0/0 을 미적재로 보면 여기서 factor_coverage 로 던진다.
+        // 정상 종료하면 빈 후보 경로를 지났다는 뜻이다: 거래·리밸런싱 0건, 수익률 0.
+        val r = runner.run(cfg, start, end)
+        assertEquals(0, r["num_rebalances"])
+        assertEquals(0, r["num_trades"])
+        assertEquals(0.0, r["total_return"])
     }
 
     @Test
