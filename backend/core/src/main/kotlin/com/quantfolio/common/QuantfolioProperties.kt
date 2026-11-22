@@ -20,6 +20,7 @@ data class QuantfolioProperties(
     val toss: Toss = Toss(),
     val krx: Krx = Krx(),
     val opendart: OpenDart = OpenDart(),
+    val krxOpen: KrxOpen = KrxOpen(),
     val frontendOrigin: String = "http://localhost:3000",
     val debugErrors: Boolean = false,
     /** 파일 캐시 디렉터리(패닉 브레드스 등, 원본 backend/.cache). */
@@ -84,6 +85,9 @@ data class QuantfolioProperties(
     )
 
     data class Krx(val id: String = "", val pw: String = "")
+
+    /** KRX Open API(공식). 키는 `krx_openapi_key` 시크릿. */
+    data class KrxOpen(val apiKey: String = "", val baseUrl: String = "https://data-dbg.krx.co.kr/svc/apis")
 
     data class OpenDart(val apiKey: String = "", val baseUrl: String = "https://opendart.fss.or.kr/api") {
         val enabled: Boolean get() = apiKey.isNotBlank()

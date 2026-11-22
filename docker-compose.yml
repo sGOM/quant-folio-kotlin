@@ -14,6 +14,7 @@ x-backend-secrets: &backend-secrets
   - krx_id
   - krx_pw
   - opendart_api_key
+  - krx_openapi_key
 
 x-backend: &backend
   # image: 고정 태그를 두지 않는다 — 태그는 프로젝트 전역이라 qf-smoke 빌드가 운영 스택 이미지를 덮어쓴다.
@@ -150,6 +151,8 @@ secrets:
     file: ./secrets/krx_pw.txt
   opendart_api_key:
     file: ./secrets/opendart_api_key.txt
+  krx_openapi_key:
+    file: ./secrets/krx_openapi_key.txt
 
 volumes:
   pgdata:
