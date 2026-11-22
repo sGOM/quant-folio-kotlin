@@ -4,6 +4,7 @@ import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.PanicDay
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Panel
@@ -140,7 +141,8 @@ object PortfolioBacktest {
         if (method == "score") {
             val cols = factorFrameOf(hist, universe)
             var sector: List<String?>? = null
-            val fdf = ctx.fundamentals?.let { runCatching { it(d, universe) }.getOrNull() }
+            // 미적재·커버리지 부족(MarketDataNotLoaded)은 점수를 조용히 중립으로 만들지 않고 올린다. 그 밖의 실패만 컬럼 결측으로 저하.
+            val fdf = ctx.fundamentals?.let { f -> try { f(d, universe) } catch (e: MarketDataNotLoaded) { throw e } catch (e: Exception) { null } }
             if (!fdf.isNullOrEmpty()) {
                 for (col in FactorScores.FUNDAMENTAL_COLS) {
                     if (fdf.values.none { col in it }) continue

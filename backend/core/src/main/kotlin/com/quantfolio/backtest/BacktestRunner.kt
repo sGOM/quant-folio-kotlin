@@ -9,19 +9,19 @@ import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.DividendFeed
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
-import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
+import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.metrics.PanicService
-import com.quantfolio.metrics.UniverseScores
 import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
-import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.security.MessageDigest
 import java.time.Clock
@@ -34,20 +34,21 @@ class BacktestInputError(message: String) : RuntimeException(message)
 class BacktestFailed(cause: Throwable) : RuntimeException("백테스트 실패: ${cause.message}", cause)
 
 /**
- * 전략 백테스트 실행(원본 `routes/backtests.py` 의 데이터 준비 + 엔진 호출). 시세는 price_ticks 가 단일 출처이고
- * 모자라면 외부에서 보충한다. 기간 경계는 KST(시작 00:00, 끝 23:59:59).
+ * 전략 백테스트 실행(원본 `routes/backtests.py` 의 데이터 준비 + 엔진 호출). **로컬 데이터만** 읽는다 — 시세는 price_ticks,
+ * 시총·펀더멘털·지수는 로컬 DB, 재무는 로컬 DART. 원격(KRX·Naver·DART)으로 내려가지 않고 비면 [MarketDataNotLoaded](HTTP 409)로
+ * 멈춘다(조용한 저하 금지). 기간 경계는 KST(시작 00:00, 끝 23:59:59).
  */
 @Component
 class BacktestRunner(
-    private val loader: OhlcvLoader,
+    private val coverage: LocalOhlcvCoverage,
     private val ticks: PriceTickStore,
-    private val snapshots: SnapshotSource,
+    @Qualifier("local") private val snapshots: SnapshotSource,
     private val dart: DartFinancials,
     private val krx: KrxIndexService,
     private val mcap: McapUniverse,
     private val constituents: IndexConstituentStore,
+    private val daily: StockDailyStore,
     private val panic: PanicService,
-    private val scores: UniverseScores,
     private val dividendFeed: DividendFeed,
     private val clock: Clock,
 ) {
@@ -57,7 +58,7 @@ class BacktestRunner(
         if (config["type"] == "rebalance") rebalance(config, start, end) else single(config, start, end)
 
     private fun bars(symbol: String, start: LocalDate, end: LocalDate): List<Bar> {
-        loader.ensureCoverage(symbol, start, end)
+        coverage.require(symbol, start, end)
         return ticks.bars(symbol, MarketClock.kstStart(start), MarketClock.kstEnd(end))
     }
 
@@ -82,6 +83,8 @@ class BacktestRunner(
         throw BacktestInputError(e.message ?: "")
     } catch (e: BacktestInputError) {
         throw e
+    } catch (e: MarketDataNotLoaded) {
+        throw e // 미적재는 실행 실패(500)가 아니라 409 로 그대로 알린다
     } catch (e: DataSourceError) {
         throw BacktestFailed(e)
     } catch (e: Exception) {
@@ -92,6 +95,7 @@ class BacktestRunner(
     private fun rebalance(config: Map<String, Any?>, start: LocalDate, end: LocalDate): Map<String, Any?> {
         val warmup = start.minusDays(500)
         val selection = Cfg.map(config, "selection")
+        rejectUnsupportedFactors(selection)
         @Suppress("UNCHECKED_CAST")
         val rule = selection["universe_rule"] as? Map<String, Any?>
         val (pitUnion, pool) = pitPool(rule, warmup, end)
@@ -129,6 +133,8 @@ class BacktestRunner(
         val panicDays = if (Cfg.truthy(po["enabled"])) {
             try {
                 panic.series(Cfg.get(po, "market", "KOSPI").toString(), warmup, end).ifEmpty { null }
+            } catch (e: MarketDataNotLoaded) {
+                throw e
             } catch (e: Exception) {
                 log.warn("패닉 오버레이 시계열 적재 실패(오버레이 미적용): {}", e.message)
                 null
@@ -146,7 +152,6 @@ class BacktestRunner(
                 )
             },
         )
-        factorCoverageWarnings(config, universe, end).takeIf { it.isNotEmpty() }?.let { result["factor_warnings"] = it }
         (dividends.warnings + (result["dividend_warnings"] as? List<*> ?: emptyList<Any?>())).takeIf { it.isNotEmpty() }?.let { result["dividend_warnings"] = it }
         result["assumptions"] = dividends.assumptions + "벤치마크는 배당 제외"
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
@@ -181,16 +186,11 @@ class BacktestRunner(
 
     /**
      * 원본 `portfolio._with_sector_map` — 섹터 한도(max_sector_pct)용 종목→업종 매핑을 백테스트 전체에 1회 조회해 config 에 싣는다.
-     * 기준일은 원본 `date.today()`(컨테이너 UTC 날짜, migration-notes #8·#12). 실패(ERROR)와 매핑 없음(WARNING)은 로그를 나누고 둘 다 캡 미적용.
+     * 기준일은 원본 `date.today()`(컨테이너 UTC 날짜, migration-notes #8·#12). 스냅샷 없음은 MarketDataNotLoaded 로 전파하고, 스냅샷은 있는데 매핑이 비면 WARNING 후 캡 미적용.
      */
     private fun withSectorMap(config: Map<String, Any?>): Map<String, Any?> {
         if (!Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) || Cfg.truthy(config["_sector_map"])) return config
-        val smap = try {
-            krx.sectorMap(MarketClock.todayUtcLegacy(clock))
-        } catch (e: DataSourceError) {
-            log.error("섹터 집중 한도용 업종 매핑 조회 실패 — 섹터 캡 미적용: {}", e.message)
-            return config
-        }
+        val smap = krx.sectorMap(MarketClock.todayUtcLegacy(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
         if (smap.isEmpty()) {
             log.warn("섹터 한도 설정됨(max_sector_pct)이나 업종 매핑 미확보 — 섹터 캡 미적용.")
             return config
@@ -203,6 +203,8 @@ class BacktestRunner(
         snapshots.indexOhlcv(from, to, ticker)?.takeIf { it.isNotEmpty() }?.let { b ->
             Series(b.map { it.date }, DoubleArray(b.size) { b[it].close ?: Double.NaN })
         }
+    } catch (e: MarketDataNotLoaded) {
+        throw e
     } catch (e: Exception) {
         log.warn("{}: {}", failLog, e.message)
         null
@@ -222,8 +224,8 @@ class BacktestRunner(
         while (!d.isAfter(end.withDayOfMonth(1))) {
             var members = localMembers(source, d)
             if (minCapWon > 0 && members.isNotEmpty()) {
-                val caps = krx.marketCaps(d)
-                if (caps.isNotEmpty()) members = members.filter { (caps[it] ?: 0L) >= minCapWon }
+                val caps = localCaps(members, d)
+                members = members.filter { (caps[it] ?: 0L) >= minCapWon }
             }
             byMonth[d.year to d.monthValue] = members
             d = d.plusMonths(1)
@@ -233,6 +235,13 @@ class BacktestRunner(
             log.error("PIT 후보풀이 비었다(source={}, {}~{}, {}개월 전부 0종목) — 로컬 index_constituents 적재 확인. 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", source, start, end, byMonth.size)
         }
         return union to { day -> byMonth[day.year to day.monthValue].orEmpty() }
+    }
+
+    /** 월 시작일 [day] 직전(10일 이내) 마지막 스냅샷의 시총(미래참조 방지: 당일 제외). 시총을 한 종목도 못 구하면 [MarketDataNotLoaded]. */
+    private fun localCaps(members: List<String>, day: LocalDate): Map<String, Long> {
+        val caps = daily.latestUpTo(members, day.minusDays(1), CAP_LOOKBACK_DAYS).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
+        if (caps.isEmpty()) throw MarketDataNotLoaded("stock_daily", "min_market_cap", listOf(day to day))
+        return caps
     }
 
     /** KOSPI_MCAP: 결정일마다 직전 거래일 시총 상위 pick(월 단위 아님). min_market_cap 은 이 소스에서 적용하지 않는다. */
@@ -246,16 +255,35 @@ class BacktestRunner(
     private fun localMembers(index: String, day: LocalDate): List<String> =
         constituents.read(index, day).ifEmpty { throw MarketDataNotLoaded("index_constituents", "$index $day", listOf(day to day)) }
 
+    /** 1단계 공식 경로에 입력이 없는 팩터(flow: 투자자별 순매수, pead: 공시 달력)는 가중치를 주면 즉시 거절한다. */
+    private fun rejectUnsupportedFactors(selection: Map<String, Any?>) {
+        if (Cfg.get(selection, "method", "momentum") != "score") return
+        val w = factorWeights(selection)
+        for (k in listOf("flow", "pead")) {
+            if ((w[k] as? Number)?.toDouble()?.let { it > 0 } == true) {
+                val input = if (k == "flow") "투자자별 순매수" else "공시 달력"
+                throw BacktestInputError("$k 팩터는 1단계(공식 경로)에서 지원하지 않습니다: 입력 데이터($input)를 공식 출처에서 구할 수 없습니다. 가중치를 0 으로 두세요.")
+            }
+        }
+    }
+
+    /** [FactorScores.compute] 와 같은 유효 가중치: 비었으면 기본값 전체, 아니면 없는 키만 기본값. */
+    private fun factorWeights(selection: Map<String, Any?>): Map<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        val fw = (selection["factor_weights"] as? Map<String, Any?>).orEmpty()
+        return if (fw.isEmpty()) FactorScores.DEFAULT_WEIGHTS else FactorScores.DEFAULT_WEIGHTS + fw
+    }
+
     /**
-     * score 선정용 시점별 펀더멘털: 밸류(KRX) + 퀄리티(OpenDART, PIT) [+ 중립화 축 시총·업종] [+ flow·잔차 모멘텀·PEAD].
-     * 각 조회 실패는 그 컬럼만 빠진다(스코어러가 중립 처리) — 원본과 같은 저하 규칙.
+     * score 선정용 시점별 펀더멘털(로컬 전용): 밸류(로컬 시총·DART 로 계산) + 퀄리티(로컬 DART, PIT) [+ 중립화 축 시총·업종] [+ 잔차 모멘텀].
+     * 가중치가 있는 팩터는 리밸런싱일마다 후보의 [MIN_FACTOR_COVERAGE] 이상이 입력을 가져야 한다 — 미달이면 [MarketDataNotLoaded]
+     * (후보의 절반 이상 점수가 없으면 순위가 결측 패턴에 좌우된다. 임계값은 측정 후 조정 가능). 조회 실패는 숨기지 않고 전파한다.
      */
     private fun fundamentalsProvider(config: Map<String, Any?>, panel: Panel, benchmark: Series?): FundamentalsProvider {
         val sel = Cfg.map(config, "selection")
         val useTtm = Cfg.get(config, "financial_period", "annual") == "ttm"
         val neutralize = Cfg.get(sel, "neutralize", "none").toString()
-        @Suppress("UNCHECKED_CAST")
-        val fw = (sel["factor_weights"] as? Map<String, Any?>).orEmpty()
+        val fw = factorWeights(sel)
         fun weight(k: String) = (fw[k] as? Number)?.toDouble() ?: 0.0
         val closes = panel.symbols.associateWith { panel.column(it) }
         return { asOf, codes ->
@@ -266,43 +294,37 @@ class BacktestRunner(
                 rows.getOrPut(code) { linkedMapOf() }[k] = v
                 any = true
             }
-            runCatching { snapshots.fundamentals(asOf, listOf("KOSPI", "KOSDAQ")) }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { raw ->
-                val byCode = raw.associateBy { it.symbol }
+            fun requireCoverage(factor: String, have: Int) {
+                val coverage = if (norm.isEmpty()) 0.0 else have.toDouble() / norm.size
+                if (coverage < MIN_FACTOR_COVERAGE) {
+                    throw MarketDataNotLoaded("factor_coverage", "$factor $asOf coverage=${(coverage * 100).toInt()}% ($have/${norm.size}, 최소 ${(MIN_FACTOR_COVERAGE * 100).toInt()}%)")
+                }
+            }
+            if (weight("value") > 0) {
+                val byCode = snapshots.fundamentals(asOf, listOf("KOSPI", "KOSDAQ")).associateBy { it.symbol }
+                requireCoverage("value", norm.count { c -> byCode[c]?.let { it.per != null || it.pbr != null || it.div != null } == true })
                 for (c in norm) {
                     put(c, "PER", byCode[c]?.per)
                     put(c, "PBR", byCode[c]?.pbr)
                     put(c, "DIV", byCode[c]?.div)
                 }
             }
-            val quality = runCatching { dart.metricsBySymbol(norm, asOf, useTtm) }.getOrDefault(emptyMap())
-            if (quality.isNotEmpty()) {
+            if (weight("quality") > 0 || weight("growth") > 0) {
+                val quality = dart.metricsBySymbol(norm, asOf, useTtm, remote = false)
+                if (weight("quality") > 0) requireCoverage("quality", norm.count { c -> FactorScores.QUALITY_COLS.any { quality[c]?.get(it) != null } })
+                if (weight("growth") > 0) requireCoverage("growth", norm.count { c -> GROWTH_COLS.any { quality[c]?.get(it) != null } })
                 for (k in FactorScores.QUALITY_COLS) {
                     if (quality.values.none { k in it }) continue
                     for (c in norm) put(c, k, quality[c]?.get(k))
                 }
             }
             if (neutralize == "size" || neutralize == "size_sector") {
-                val caps = try {
-                    krx.marketCaps(asOf)
-                } catch (e: DataSourceError) {
-                    log.error("사이즈 중립화 생략 — 시가총액 조회 실패: {}", e.message)
-                    emptyMap()
-                }
+                val caps = snapshots.marketCap(asOf, listOf("KOSPI", "KOSDAQ")).associate { it.symbol to it.marketCap }
                 if (caps.isNotEmpty()) for (c in norm) put(c, "market_cap", caps[c]?.toDouble())
             }
             if (neutralize == "sector" || neutralize == "size_sector") {
-                val smap = try {
-                    krx.sectorMap(asOf)
-                } catch (e: DataSourceError) {
-                    log.error("섹터 중립화 생략 — 업종분류 조회 실패: {}", e.message)
-                    emptyMap()
-                }
+                val smap = krx.sectorMap(asOf) // 로컬 KIS 마스터 스냅샷 — 없으면 MarketDataNotLoaded
                 if (smap.isNotEmpty()) for (c in norm) put(c, "sector", smap[c])
-            }
-            if (weight("flow") > 0) {
-                // 실패는 전파(명시 요청한 팩터가 조용히 빠지면 안 된다). 빈 결과(순매수 실적 없음)만 컬럼 생략.
-                val flow = scores.flowNorm(norm, asOf, Cfg.int(Cfg.get(sel, "flow_window", 90)), Cfg.get(sel, "flow_denom", "mcap").toString())
-                if (flow.isNotEmpty()) for (c in norm) put(c, "flow_norm", flow[c])
             }
             if (weight("residual_momentum") > 0 && benchmark != null) {
                 val rm = runCatching {
@@ -313,38 +335,16 @@ class BacktestRunner(
                 }.getOrNull()
                 if (!rm.isNullOrEmpty()) for (c in norm) put(c, "resid_mom", rm[c])
             }
-            if (weight("pead") > 0) {
-                val pead = runCatching { dart.peadSueBySymbol(norm, asOf, Cfg.int(Cfg.get(sel, "pead_lookback_q", 8))) }.getOrNull()
-                if (!pead.isNullOrEmpty()) for (c in norm) put(c, "pead_sue", pead[c])
-            }
             if (any) rows else null
         }
-    }
-
-    /** quality·growth 가중치가 있는데 OpenDART 커버리지가 30% 미만이면 경고 문구. 조회 실패는 경고하지 않는다(오탐 방지). */
-    private fun factorCoverageWarnings(config: Map<String, Any?>, universe: List<String>, asOf: LocalDate): List<String> {
-        @Suppress("UNCHECKED_CAST")
-        val fw = (Cfg.map(config, "selection")["factor_weights"] as? Map<String, Any?>).orEmpty()
-        val need = listOf("quality", "growth").filter { ((fw[it] as? Number)?.toDouble() ?: 0.0) > 0 }
-        if (need.isEmpty() || universe.isEmpty()) return emptyList()
-        val sample = universe.take(40)
-        val metrics = try {
-            dart.metricsBySymbol(sample, asOf)
-        } catch (e: Exception) {
-            return emptyList()
-        }
-        val coverage = sample.count { !metrics[it].isNullOrEmpty() }.toDouble() / sample.size
-        if (coverage >= 0.3) return emptyList()
-        return listOf(
-            "OpenDART 재무 커버리지 ${pyFixed(coverage * 100, 0)}% (표본 ${sample.size}종목) — " +
-                "가중치를 준 ${need.joinToString("·")} 팩터가 대부분 중립(0) 처리되어 점수에 거의 반영되지 " +
-                "않습니다. OPENDART API 키·응답을 확인하거나 해당 가중치를 재검토하세요.",
-        )
     }
 
     companion object {
         private val REGIME_TICKER = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")
         private const val MAX_DIVIDEND_WARNINGS = 20
+        private const val CAP_LOOKBACK_DAYS = 10L
+        private const val MIN_FACTOR_COVERAGE = 0.5
+        private val GROWTH_COLS = listOf("op_growth", "net_growth", "turnaround")
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
 
         /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */

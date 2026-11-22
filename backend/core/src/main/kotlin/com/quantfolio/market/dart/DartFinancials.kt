@@ -87,41 +87,47 @@ class DartFinancials(
         localCorpMap ?: store.readCorpCodes().ifEmpty { throw MarketDataNotLoaded("dart_corp_map", "corp_code") }.also { localCorpMap = it }
 
     /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. */
-    fun annualMetrics(corp: String, year: Int): Map<String, Double?> {
+    fun annualMetrics(corp: String, year: Int, remote: Boolean = true): Map<String, Double?> {
         annualCache[corp to year]?.let { return it }
-        val accounts = firstAvailable(corp, year, DartMetrics.REPORT_ANNUAL)
+        val accounts = firstAvailable(corp, year, DartMetrics.REPORT_ANNUAL, remote)
         return DartMetrics.deriveMetrics(accounts.orEmpty()).also { if (accounts != null) annualCache[corp to year] = it }
     }
 
-    fun periodMetrics(corp: String, year: Int, reprt: String): Map<String, Double?> {
+    fun periodMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true): Map<String, Double?> {
         val key = Triple(corp, year, reprt)
         periodCache[key]?.let { return it }
-        val accounts = firstAvailable(corp, year, reprt)
+        val accounts = firstAvailable(corp, year, reprt, remote)
         return DartMetrics.deriveMetrics(accounts.orEmpty()).also { if (accounts != null) periodCache[key] = it }
     }
 
     /** 최근 4분기 합산(TTM). 당해 분기가 아직 없으면 직전 연간, 합성이 불가하면 당해 분기 그대로. */
-    fun ttmMetrics(corp: String, year: Int, reprt: String): Map<String, Double?> {
-        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL)
-        val cur = periodMetrics(corp, year, reprt)
-        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL)
-        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL))
+    fun ttmMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true): Map<String, Double?> {
+        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL, remote)
+        val cur = periodMetrics(corp, year, reprt, remote)
+        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote)
+        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt, remote), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote))
         return if (combined.values.all { it == null }) cur else combined
     }
 
-    /** 종목별 재무 지표 + 성장률·흑자전환·F-score·3년 적자 횟수. 전량 실패면 대표 예외, 일부 실패는 로그 후 부분 결과. */
-    fun metricsBySymbol(codes: List<String>, asOf: LocalDate, useTtm: Boolean = false): Map<String, Map<String, Any?>> {
-        if (!client.enabled() || codes.isEmpty()) return emptyMap()
-        val map = corpCodeMap() ?: return emptyMap()
+    /**
+     * 종목별 재무 지표 + 성장률·흑자전환·F-score·3년 적자 횟수. 전량 실패면 대표 예외, 일부 실패는 로그 후 부분 결과.
+     * [remote] false 면 로컬(원장·저장소)만 읽는다: 키 설정과 무관, corp 매핑은 [corpCodeMapLocal]. 미적재 연도는 빈 지표로 두어
+     * 그 종목의 해당 값이 결측이 된다(호출자가 커버리지로 판정). corp 매핑 자체가 비면 [MarketDataNotLoaded].
+     */
+    fun metricsBySymbol(codes: List<String>, asOf: LocalDate, useTtm: Boolean = false, remote: Boolean = true): Map<String, Map<String, Any?>> {
+        if (codes.isEmpty() || (remote && !client.enabled())) return emptyMap()
+        val map = if (remote) corpCodeMap() ?: return emptyMap() else corpCodeMapLocal()
+        fun lenient(f: () -> Map<String, Double?>): Map<String, Double?> =
+            try { f() } catch (e: MarketDataNotLoaded) { if (remote) throw e else DartMetrics.deriveMetrics(emptyList()) }
         val (year, reprt) = if (useTtm) DartMetrics.latestReportPeriod(asOf) else DartMetrics.announcementLaggedYear(asOf) to DartMetrics.REPORT_ANNUAL
         val partial = { ok: Int, errors: List<DataSourceError> ->
             log.error("OpenDART 부분 실패 — 성공 {} / 실패 {} / 전체 {}(대표: {})", ok, errors.size, codes.size, errors.first().message)
         }
         return perSymbol(codes, map, partial) { corp ->
             val (m, prev, prev2) = if (useTtm) {
-                Triple(ttmMetrics(corp, year, reprt), ttmMetrics(corp, year - 1, reprt), ttmMetrics(corp, year - 2, reprt))
+                Triple(lenient { ttmMetrics(corp, year, reprt, remote) }, lenient { ttmMetrics(corp, year - 1, reprt, remote) }, lenient { ttmMetrics(corp, year - 2, reprt, remote) })
             } else {
-                Triple(annualMetrics(corp, year), annualMetrics(corp, year - 1), annualMetrics(corp, year - 2))
+                Triple(lenient { annualMetrics(corp, year, remote) }, lenient { annualMetrics(corp, year - 1, remote) }, lenient { annualMetrics(corp, year - 2, remote) })
             }
             val result: MutableMap<String, Any?> = LinkedHashMap(m)
             result["op_growth"] = DartMetrics.yoyGrowth(m["op_income"], prev["op_income"])
@@ -220,8 +226,8 @@ class DartFinancials(
         return cur - prev
     }
 
-    private fun firstAvailable(corp: String, year: Int, reprt: String): List<Map<String, Any?>>? =
-        listOf(FS_CONSOLIDATED, FS_SEPARATE).firstNotNullOfOrNull { fs -> cachedAccounts(corp, year, reprt, fs)?.takeIf { it.isNotEmpty() } }
+    private fun firstAvailable(corp: String, year: Int, reprt: String, remote: Boolean = true): List<Map<String, Any?>>? =
+        listOf(FS_CONSOLIDATED, FS_SEPARATE).firstNotNullOfOrNull { fs -> cachedAccounts(corp, year, reprt, fs, remote)?.takeIf { it.isNotEmpty() } }
 
     companion object {
         const val FS_CONSOLIDATED = "CFS"

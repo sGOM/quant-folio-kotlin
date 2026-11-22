@@ -6,6 +6,7 @@ import com.quantfolio.market.krx.KrxMdc
 import com.quantfolio.market.krx.KrxSession
 import com.quantfolio.market.krx.KrxStockApi
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.store.Bar
@@ -47,9 +48,10 @@ class MetricsServicesTest {
         var indexError: Exception? = null
         var snapshot: List<StockDaily>? = null
         var tickers: () -> List<String> = { emptyList() }
+        var periodError: Exception? = null
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = emptyList<StockDaily>()
         override fun marketCap(asOf: LocalDate, markets: List<String>) = caps
-        override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periods
+        override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periodError?.let { throw it } ?: periods
         override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = emptyList<StockPeriod>()
         override fun marketOhlcvSnapshot(day: LocalDate, market: String) = snapshot
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = indexError?.let { throw it } ?: index
@@ -113,6 +115,18 @@ class MetricsServicesTest {
         Files.writeString(file, tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(hist))
         val second = service.compute("KOSPI", asOf).items.single()
         assertEquals(0.5, second.signals.single { it.key == "nlr" }.value)
+    }
+
+    /** 로컬 데이터 미적재는 브레드스 결측(null)으로 뭉개지 않고 호출자(백테스트 409·UI)에게 올라간다. */
+    @Test
+    fun panicPropagatesMarketDataNotLoadedFromBreadth(@TempDir dir: Path) {
+        val src = FakeSource().apply {
+            index = (0 until 30).map { IndexBar(asOf.minusDays(30L - it), high = 101.0, low = 99.0, close = 100.0, tradingValue = 1_000) }
+            periodError = MarketDataNotLoaded("stock_daily", "KOSPI")
+        }
+        val service = PanicService(src, common, QuantfolioProperties(cacheDir = dir.toString()))
+        assertThrows<MarketDataNotLoaded> { service.compute("KOSPI", asOf) }
+        assertThrows<MarketDataNotLoaded> { service.series("KOSPI", asOf.minusDays(10), asOf) }
     }
 
     @Test

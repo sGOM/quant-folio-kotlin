@@ -13,8 +13,8 @@ import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.ohlcv.OhlcvLoader
-import com.quantfolio.market.source.SourceUnavailableError
+import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.security.Passwords
@@ -30,6 +30,7 @@ import org.mockito.BDDMockito.willReturn
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
@@ -63,8 +64,8 @@ class BacktestsControllerTest(
     @Autowired private val ticks: PriceTickStore,
     @Autowired private val clock: Clock,
 ) {
-    @MockitoBean lateinit var loader: OhlcvLoader
-    @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean lateinit var coverage: LocalOhlcvCoverage // 로컬 시세 커버리지 점검은 통과(적재는 seed 가 한다)
+    @Qualifier("local") @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
     @MockitoBean lateinit var krx: KrxIndexService
     @MockitoSpyBean lateinit var props: QuantfolioProperties
@@ -165,7 +166,7 @@ class BacktestsControllerTest(
         return LocalDate.MIN
     }
 
-    /** 원본 `_with_sector_map`: max_sector_pct 가 있을 때만 업종 매핑을 조회해 섹터 캡을 건다. 조회 실패는 캡 없이 진행. */
+    /** 원본 `_with_sector_map`: max_sector_pct 가 있을 때만 업종 매핑을 조회해 섹터 캡을 건다. */
     @Test
     fun sectorCapLooksUpSectorMapOnlyWhenLimitSet() {
         val me = Me()
@@ -190,8 +191,9 @@ class BacktestsControllerTest(
         verify(krx).sectorMap(dateThat { it == before || it == after }) // 원본 date.today()(UTC)
         assertTrue(withCap < 0.5, "한 업종 30% 상한이면 나머지는 현금: $withCap")
 
-        given(krx.sectorMap(anyDate())).willThrow(SourceUnavailableError("krx", "down"))
-        assertEquals(uncapped, invested(capped), 1e-9)
+        // 업종 스냅샷 미적재는 캡을 조용히 빼지 않고 409 로 멈춘다(로컬 전용 — 원격 조회 실패라는 사건이 없다).
+        given(krx.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "2026-01-01"))
+        run(me, me.strategy(capped), "2023-01-02", "2023-12-29").andExpect { status { isConflict() } }
     }
 
     @Test

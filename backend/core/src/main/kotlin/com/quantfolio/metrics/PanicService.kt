@@ -3,7 +3,9 @@ package com.quantfolio.metrics
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.source.DataSourceError
+import com.quantfolio.market.official.MarketDataNotLoaded
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.readValue
@@ -19,7 +21,7 @@ private val YMD: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
  * 52주 신저가 비율(S9)과 시계열 브레드스는 원본처럼 파일 캐시(`{cacheDir}/panic_breadth_*.json`)에 누적한다.
  */
 @Component
-class PanicService(private val snapshots: SnapshotSource, private val common: MetricsCommon, props: QuantfolioProperties) {
+class PanicService(@Qualifier("local") private val snapshots: SnapshotSource, private val common: MetricsCommon, props: QuantfolioProperties) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val cacheDir: Path = Path.of(props.cacheDir)
     private val json = JsonMapper.builder().build()
@@ -33,6 +35,8 @@ class PanicService(private val snapshots: SnapshotSource, private val common: Me
             val ticker = INDEX_TICKER[mkt] ?: continue
             val item = try {
                 oneMarket(mkt, ticker, asOf, prev, histStart)
+            } catch (e: MarketDataNotLoaded) {
+                throw e
             } catch (e: Exception) {
                 log.warn("패닉 지표 계산 오류 (market={}): {}", mkt, e.message)
                 null
@@ -51,6 +55,8 @@ class PanicService(private val snapshots: SnapshotSource, private val common: Me
         val sig = PanicScoring.indexSignals(bars)
         val pc = try {
             snapshots.priceChange(prev, asOf, listOf(mkt))
+        } catch (e: MarketDataNotLoaded) {
+            throw e
         } catch (e: Exception) {
             log.warn("패닉 지표: 브레드스 조회 예외 (market={}): {}", mkt, e.message)
             null
@@ -146,6 +152,8 @@ class PanicService(private val snapshots: SnapshotSource, private val common: Me
             val breadth = cache[key] ?: run {
                 val pc = try {
                     snapshots.priceChange(common.prevBusinessDay(d), d, listOf(mkt))
+                } catch (e: MarketDataNotLoaded) {
+                    throw e
                 } catch (e: Exception) {
                     log.warn("패닉 시계열: 브레드스 조회 실패 ({}): {}", key, e.message)
                     null
