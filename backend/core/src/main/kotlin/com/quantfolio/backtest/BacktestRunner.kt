@@ -5,11 +5,13 @@ import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.KrxSession
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.MarketDataNotLoaded
+import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.Bar
+import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.PanicService
 import com.quantfolio.metrics.UniverseScores
@@ -41,7 +43,8 @@ class BacktestRunner(
     private val snapshots: SnapshotSource,
     private val dart: DartFinancials,
     private val krx: KrxIndexService,
-    private val session: KrxSession,
+    private val mcap: McapUniverse,
+    private val constituents: IndexConstituentStore,
     private val panic: PanicService,
     private val scores: UniverseScores,
     private val clock: Clock,
@@ -176,18 +179,17 @@ class BacktestRunner(
 
     /**
      * universe_rule.source 가 지수명이면 월별 실제 구성종목(PIT)으로 (합집합, 리밸런싱일별 후보풀). "fixed" 면 (null, null).
-     * 지수 소스인데 KRX 인증이 없으면 시작 전에 막는다 — 인증 없이 돌면 빈 패널 위에서 '성공'한다.
+     * 지수 소스는 index_constituents 로컬 캐시만 읽고(없으면 MarketDataNotLoaded), KOSPI_MCAP 은 시총 상위 pick 종목이다.
      */
     private fun pitPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> {
         val source = Cfg.get(rule, "source", "fixed").toString()
         if (source == "fixed") return null to null
-        session.requireAuth()
         val minCapWon = rule?.get("min_market_cap")?.takeIf { Cfg.truthy(it) }?.let { Cfg.num(it).toLong() * 100_000_000L } ?: 0L
         val byMonth = LinkedHashMap<Pair<Int, Int>, List<String>>()
         var d = start.withDayOfMonth(1)
         while (!d.isAfter(end.withDayOfMonth(1))) {
-            var members = krx.indexMembers(d, source)
-            if (minCapWon > 0 && members.isNotEmpty()) {
+            var members = if (source == "KOSPI_MCAP") mcap.members(d, (rule?.get("pick") as? Number)?.toInt() ?: 20) else localMembers(source, d)
+            if (source != "KOSPI_MCAP" && minCapWon > 0 && members.isNotEmpty()) {
                 val caps = krx.marketCaps(d)
                 if (caps.isNotEmpty()) members = members.filter { (caps[it] ?: 0L) >= minCapWon }
             }
@@ -200,6 +202,9 @@ class BacktestRunner(
         }
         return union to { day -> byMonth[day.year to day.monthValue].orEmpty() }
     }
+
+    private fun localMembers(index: String, day: LocalDate): List<String> =
+        constituents.read(index, day).ifEmpty { throw MarketDataNotLoaded("index_constituents", "$index $day", listOf(day to day)) }
 
     /**
      * score 선정용 시점별 펀더멘털: 밸류(KRX) + 퀄리티(OpenDART, PIT) [+ 중립화 축 시총·업종] [+ flow·잔차 모멘텀·PEAD].

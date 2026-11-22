@@ -24,6 +24,9 @@ data class StockDaily(
     val stockKind: String? = null,
 )
 
+/** [StockDailyStore.capsWithKind] 한 행: 시총과, 그 종목의 기준일 이하 최신 주권 종류(없으면 null). */
+data class CapKind(val symbol: String, val marketCap: Long, val stockKind: String?)
+
 @Component
 class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
     /** upsert 는 **들어온 값이 null 이면 기존값을 보존**한다 — 시총만 적재된 행을 펀더멘털 적재가 null 로 덮지 않게. */
@@ -137,6 +140,19 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         """,
         mapOf("market" to market, "kind" to kind),
     ) { rs, _ -> rs.getString(1) }
+
+    /** [day] 의 [market] 시총이 있는 종목과 각 종목의 [day] 이하 최신 주권 종류(한 번의 조회). */
+    fun capsWithKind(day: LocalDate, market: String): List<CapKind> = jdbc.query(
+        """
+        SELECT s.symbol, s.market_cap, k.stock_kind FROM stock_daily_snapshots s
+          LEFT JOIN LATERAL (
+            SELECT stock_kind FROM stock_daily_snapshots
+             WHERE symbol = s.symbol AND stock_kind IS NOT NULL AND trade_date <= :day
+             ORDER BY trade_date DESC LIMIT 1) k ON true
+         WHERE s.trade_date = :day AND s.market = :market AND s.market_cap IS NOT NULL
+        """,
+        mapOf("day" to day, "market" to market),
+    ) { rs, _ -> CapKind(rs.getString("symbol"), rs.getLong("market_cap"), rs.getString("stock_kind")) }
 
     fun delete(day: LocalDate) {
         jdbc.update("DELETE FROM stock_daily_snapshots WHERE trade_date = :day", mapOf("day" to day))

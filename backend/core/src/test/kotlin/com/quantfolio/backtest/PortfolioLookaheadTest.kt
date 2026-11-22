@@ -3,6 +3,7 @@ package com.quantfolio.backtest
 import com.quantfolio.metrics.PanicDay
 import com.quantfolio.quant.Panel
 import com.quantfolio.quant.Series
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import java.time.LocalDate
@@ -32,7 +33,7 @@ class PortfolioLookaheadTest {
         return DoubleArray(n) { if (dates[it].isAfter(cut)) a[it] * (0.5 + r.nextDouble()) else a[it] }
     }
 
-    private fun run(config: Map<String, Any?>, future: Int?): Map<String, Any?> {
+    private fun run(config: Map<String, Any?>, future: Int?, capPool: Boolean = false): Map<String, Any?> {
         fun f(a: DoubleArray, s: Int) = if (future == null) a else perturb(a, future * 100 + s)
         val panel = Panel(dates, symbols, symbols.withIndex().associate { (k, s) -> s to f(walk(k, 5000.0 + 3000 * k), k) })
         val volume = Panel(dates, symbols, symbols.withIndex().associate { (k, s) -> s to f(walk(50 + k, 10_000.0), 50 + k) })
@@ -45,6 +46,7 @@ class PortfolioLookaheadTest {
             panel, config, dates[260], dates.last(),
             fundamentals = { _, codes -> codes.withIndex().associate { (k, c) -> c to mapOf("PER" to 5.0 + k, "PBR" to 1.0, "DIV" to 2.0) } },
             regime = Series(dates, index), benchmark = Series(dates, index), panic = panic, volume = volume,
+            pool = if (capPool) mcapPool(future) else null,
         )
     }
 
@@ -68,5 +70,34 @@ class PortfolioLookaheadTest {
             for (key in listOf("equity_curve", "trades", "markers")) assertEquals(upToCut(base, key), upToCut(alt, key), "$method/$key seed=$seed")
             assertTrue(upToCut(base, "trades").isNotEmpty())
         }
+    }
+
+    /**
+     * 시총 상위 후보풀(McapUniverse 와 같은 규칙: 결정일 d 는 직전 거래일의 시총만 본다)의 fake.
+     * cut 이후 시총만 교란한다 — d 가 cut 이하면 직전일도 cut 이하라 풀이 같아야 한다.
+     */
+    private fun mcapPool(future: Int?): PoolProvider {
+        fun cap(k: Int, i: Int): Double {
+            val base = ((k * 7 + i / 5) % 10 + 1).toDouble()
+            return if (future != null && dates[i].isAfter(cut)) base * (0.1 + Random(future * 1000 + k * n + i).nextDouble() * 10) else base
+        }
+        return { d ->
+            val i = dates.indexOf(d)
+            if (i <= 0) symbols.take(4) else symbols.indices.sortedWith(compareByDescending<Int> { cap(it, i - 1) }.thenBy { symbols[it] }).take(4).map { symbols[it] }
+        }
+    }
+
+    @Test
+    fun capUniversePoolFutureCapsDoNotChangePast() {
+        val config = mapOf(
+            "universe" to symbols, "selection" to mapOf("method" to "momentum", "lookback" to 40, "top_n" to 3),
+            "cadence" to "weekly", "weighting" to "equal",
+        )
+        val base = run(config, null, capPool = true)
+        for (seed in 1..3) {
+            val alt = run(config, seed, capPool = true)
+            for (key in listOf("equity_curve", "trades", "markers")) assertEquals(upToCut(base, key), upToCut(alt, key), "cap-pool/$key seed=$seed")
+        }
+        assertTrue(upToCut(base, "trades").isNotEmpty())
     }
 }
