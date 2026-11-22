@@ -308,7 +308,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         factorWeights, Cfg.get(selection, "neutralize", "none").toString(), Cfg.get(cfg, "financial_period", "annual").toString(),
         Cfg.int(Cfg.get(selection, "flow_window", 90)), Cfg.get(selection, "flow_denom", "mcap").toString(),
         Cfg.int(Cfg.get(selection, "resid_mom_reg_window", 36)), Cfg.int(Cfg.get(selection, "resid_mom_window", 11)),
-        Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)),
+        Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)), requireCoverage = true,
     )
 
     private fun sectors(): Map<String, String> {
@@ -428,6 +428,10 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 해당 경로(국면·계획)가 다시 정상 반환하면 초기화. */
     private fun alertDataGap(e: MarketDataNotLoaded, what: String, regime: Boolean) {
+        if (awaitingPreviousDay(e)) {
+            log.info("리밸런싱 전략 {} 직전 거래일 데이터 적재 대기 중(dataReadyBy 전) — 이번 점검은 매매 없이 넘김, 경보 없음: {}", strategyId, e.message)
+            return
+        }
         log.error("리밸런싱 전략 {} 시장데이터 미적재 — 주문 없이 중단: {}", strategyId, e.message)
         if (if (regime) regimeGapAlerted else planGapAlerted) return
         if (regime) regimeGapAlerted = true else planGapAlerted = true

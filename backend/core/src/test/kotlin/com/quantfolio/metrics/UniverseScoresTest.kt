@@ -66,4 +66,32 @@ class UniverseScoresTest {
         assertEquals(setOf("000010", "000020", "000030"), out.keys)
         assertTrue(out.getValue("000010") > out.getValue("000020"))
     }
+
+    private fun gated(inputs: FactorInputs, src: Src) = UniverseScores(src, noTech, inputs) { _, _, _ -> emptyList() }
+    private fun inputsWith(q: Map<String, Map<String, Any?>>) = object : FactorInputs by noInputs {
+        override fun qualityMetrics(codes: List<String>, asOf: LocalDate, useTtm: Boolean) = q
+    }
+    private val qualityWeights = mapOf("momentum" to 1.0, "value" to 0.0, "quality" to 1.0)
+
+    @Test
+    fun `coverage gate rejects quality below half of the universe`() {
+        val src = Src(listOf("1", "2", "3", "4").map { StockPeriod(it.padStart(6, '0'), changePct = 1.0) })
+        val q = mapOf("000001" to mapOf<String, Any?>("roe" to 10.0)) // 1/4 = 25%
+        val e = assertThrows<com.quantfolio.market.official.MarketDataNotLoaded> {
+            gated(inputsWith(q), src).compute(listOf("1", "2", "3", "4"), asOf, UniverseScoreParams(factorWeights = qualityWeights, requireCoverage = true))
+        }
+        assertEquals("factor_coverage", e.kind)
+        // 관문이 꺼져 있으면(웹·기존 호출자) 기존 동작 — 점수가 나온다
+        gated(inputsWith(q), src).compute(listOf("1", "2", "3", "4"), asOf, UniverseScoreParams(factorWeights = qualityWeights))
+    }
+
+    @Test
+    fun `coverage gate passes at half and skips weightless factors and empty universe`() {
+        val src = Src(listOf("1", "2", "3", "4").map { StockPeriod(it.padStart(6, '0'), changePct = 1.0) })
+        val q = mapOf("000001" to mapOf<String, Any?>("roe" to 10.0), "000002" to mapOf<String, Any?>("roe" to 5.0)) // 2/4 = 50%
+        val p = UniverseScoreParams(factorWeights = qualityWeights, requireCoverage = true)
+        gated(inputsWith(q), src).compute(listOf("1", "2", "3", "4"), asOf, p)
+        gated(inputsWith(emptyMap()), src).compute(listOf("1", "2", "3", "4"), asOf, UniverseScoreParams(factorWeights = mapOf("momentum" to 1.0), requireCoverage = true))
+        assertEquals(emptyMap(), gated(inputsWith(emptyMap()), src).compute(emptyList(), asOf, p))
+    }
 }

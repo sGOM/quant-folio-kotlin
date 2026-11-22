@@ -1,5 +1,6 @@
 package com.quantfolio.metrics
 
+import com.quantfolio.factor.FactorCoverage
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
@@ -44,6 +45,8 @@ data class UniverseScoreParams(
     val residWindow: Int = 11,
     val residSkip: Int = 1,
     val peadLookbackQ: Int = 8,
+    /** true 면 가중치가 걸린 value·quality·growth 의 입력 커버리지가 [FactorCoverage.MIN] 미만일 때 [MarketDataNotLoaded](실매매 경로). */
+    val requireCoverage: Boolean = false,
 )
 
 /**
@@ -77,6 +80,9 @@ class UniverseScores(
         fun put(name: String, f: (String) -> Double?) {
             cols[name] = DoubleArray(codes.size) { f(codes[it]) ?: Double.NaN }
         }
+        if (p.requireCoverage && weighted("value")) {
+            FactorCoverage.require("value", asOf, codes.count { c -> fund[c]?.let { it.per != null || it.pbr != null || it.div != null } == true }, codes.size)
+        }
         put("PER") { fund[it]?.per }
         put("PBR") { fund[it]?.pbr }
         put("DIV") { fund[it]?.div }
@@ -99,6 +105,10 @@ class UniverseScores(
                 log.error("OpenDART 퀄리티 팩터 조회 실패 — 중립 처리: {}", e.message)
                 emptyMap()
             }
+        }
+        if (p.requireCoverage) {
+            if (weighted("quality")) FactorCoverage.require("quality", asOf, codes.count { c -> FactorScores.QUALITY_INPUTS.any { quality[c]?.get(it) != null } }, codes.size)
+            if (weighted("growth")) FactorCoverage.require("growth", asOf, codes.count { c -> FactorScores.GROWTH_INPUTS.any { quality[c]?.get(it) != null } }, codes.size)
         }
         if (quality.isNotEmpty()) {
             for (k in FactorScores.QUALITY_COLS) {

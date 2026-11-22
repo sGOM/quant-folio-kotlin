@@ -1,6 +1,7 @@
 package com.quantfolio.backtest
 
 import com.quantfolio.common.MarketClock
+import com.quantfolio.factor.FactorCoverage
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
@@ -280,7 +281,7 @@ class BacktestRunner(
 
     /**
      * score 선정용 시점별 펀더멘털(로컬 전용): 밸류(로컬 시총·DART 로 계산) + 퀄리티(로컬 DART, PIT) [+ 중립화 축 시총·업종] [+ 잔차 모멘텀].
-     * 가중치가 있는 팩터는 리밸런싱일마다 후보의 [MIN_FACTOR_COVERAGE] 이상이 입력을 가져야 한다 — 미달이면 [MarketDataNotLoaded]
+     * 가중치가 있는 팩터는 리밸런싱일마다 후보의 [FactorCoverage.MIN] 이상이 입력을 가져야 한다 — 미달이면 [MarketDataNotLoaded]
      * (후보의 절반 이상 점수가 없으면 순위가 결측 패턴에 좌우된다. 임계값은 측정 후 조정 가능). 후보가 없는 날은 검사하지 않는다.
      * 미적재([MarketDataNotLoaded])는 숨기지 않고 전파하고, 잔차 모멘텀 계산 실패만 그 컬럼 결측으로 저하한다.
      */
@@ -299,13 +300,7 @@ class BacktestRunner(
                 rows.getOrPut(code) { linkedMapOf() }[k] = v
                 any = true
             }
-            fun requireCoverage(factor: String, have: Int) {
-                if (norm.isEmpty()) return // 후보 없음은 미적재가 아니다(빈 유니버스는 기존 동작)
-                val coverage = have.toDouble() / norm.size
-                if (coverage < MIN_FACTOR_COVERAGE) {
-                    throw MarketDataNotLoaded("factor_coverage", "$factor $asOf coverage=${(coverage * 100).toInt()}% ($have/${norm.size}, 최소 ${(MIN_FACTOR_COVERAGE * 100).toInt()}%)")
-                }
-            }
+            fun requireCoverage(factor: String, have: Int) = FactorCoverage.require(factor, asOf, have, norm.size)
             if (weight("value") > 0) {
                 val byCode = snapshots.fundamentals(asOf, listOf("KOSPI", "KOSDAQ")).associateBy { it.symbol }
                 for (c in norm) {
@@ -349,7 +344,6 @@ class BacktestRunner(
         private val REGIME_TICKER = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")
         private const val MAX_DIVIDEND_WARNINGS = 20
         private const val CAP_LOOKBACK_DAYS = 10L
-        private const val MIN_FACTOR_COVERAGE = 0.5
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
 
         /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */

@@ -55,5 +55,9 @@ class McapUniverse(private val daily: StockDailyStore, private val days: LocalTr
 
     /** 직전 거래일. 원장이 모르면(미적재) 추측하지 않고 미적재. */
     private fun previousTradingDay(asOf: LocalDate): LocalDate =
-        days.previous(asOf) ?: throw MarketDataNotLoaded("trading_days", "KOSPI", listOf(asOf.minusDays(1) to asOf.minusDays(1)))
+        days.previous(asOf) ?: days.expected(asOf.minusDays(10), asOf.minusDays(1)).lastOrNull().let { gap ->
+            // previous 가 null 이면 직전 기대 거래일(원장이 모르는 날)이 빠진 것 - 그 날을 알려야 호출자가 "T-1 만 빠짐"을 판별한다
+            val day = gap ?: asOf.minusDays(1)
+            throw MarketDataNotLoaded("trading_days", "KOSPI", listOf(day to day))
+        }
 }

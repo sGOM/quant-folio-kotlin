@@ -13,6 +13,8 @@ import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.MarketCalendar
+import com.quantfolio.market.official.LocalTradingDays
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.StockDailyStore
@@ -22,6 +24,7 @@ import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.Logger
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -32,6 +35,7 @@ import java.text.DecimalFormat
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalTime
 import java.time.ZoneOffset
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -74,6 +78,9 @@ data class RunnerContext(
     val mcap: McapUniverse,
     val constituents: IndexConstituentStore,
     val daily: StockDailyStore,
+    val days: LocalTradingDays,
+    // 미실측 - KRX Open API 공개 시각은 Task 1 실측으로 확정한다. 이 시각(KST) 전에는 직전 거래일(T-1) 미적재를 경보 없이 기다린다.
+    @Value("\${quantfolio.engine.dataReadyBy:10:30}") val dataReadyBy: String,
 )
 
 /**
@@ -197,6 +204,20 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
         val bars = ctx.ticks.bars(symbol, start, end)
         if (bars.size < minBars) log.warn("{} {} 로컬 일봉 부족({}<{}) — 외부 보충 없음", symbol, failLogLabel, bars.size, minBars)
         return bars
+    }
+
+    /**
+     * 적재 대기 중인가 - [MarketDataNotLoaded] 가 "직전 기대 거래일(T-1) 하나"만 빠진 것이고 아직 `dataReadyBy`(KST) 전이면 true.
+     * T-1 = 오늘 앞의 평일 중 휴장 확정이 아닌 마지막 날(원장이 모르는 날 포함). 빠진 구간이 그 하루로만 이뤄졌을 때만 대기로 본다 -
+     * 더 오래된 결손·날짜 없는 미적재(업종·커버리지·DART)·구간이 T-1 밖으로 번진 경우는 대기가 아니라 경보 대상이다.
+     */
+    protected fun awaitingPreviousDay(e: MarketDataNotLoaded): Boolean {
+        val now = MarketClock.nowKst(ctx.clock)
+        if (!now.toLocalTime().isBefore(LocalTime.parse(ctx.dataReadyBy))) return false
+        if (e.missing.isEmpty()) return false
+        val today = now.toLocalDate()
+        val t1 = ctx.days.expected(today.minusDays(10), today.minusDays(1)).lastOrNull() ?: return false
+        return e.missing.all { it.first == t1 && it.second == t1 }
     }
 
     /** 이 전략에 귀속된 (사용자, 종목) 포지션. 없으면 null. */

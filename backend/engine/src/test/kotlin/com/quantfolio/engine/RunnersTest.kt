@@ -7,6 +7,7 @@ import com.quantfolio.broker.Fill
 import com.quantfolio.broker.OrderResult
 import com.quantfolio.broker.Quote
 import com.quantfolio.common.QuantfolioProperties
+import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertRepository
 import com.quantfolio.domain.strategy.Strategy
@@ -82,6 +83,7 @@ class RunnersTest(
     @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
     @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoBean lateinit var mcap: McapUniverse
+    @MockitoBean lateinit var dart: com.quantfolio.market.dart.DartFinancials
 
     /** 종목별 고정 시세, 주문은 즉시 전량 체결. */
     class Broker(val quotes: MutableMap<String, BigDecimal> = mutableMapOf(), var halted: Set<String> = emptySet()) : BrokerClient {
@@ -631,5 +633,149 @@ class RunnersTest(
         broker.quoteDelayMs = 0
         assertTrue(ordersOf(sid).isEmpty())
         assertEquals(false, redis.hasKey(RedisKeys.rebalanceLast(sid)))
+    }
+
+    // ── 적재 대기 시각(dataReadyBy)·커버리지 관문·전략 시드 검사 ──
+
+    private val today get() = MarketClock.todayKst(ctx.clock)
+    private fun kstClock(h: Int, m: Int) = java.time.Clock.fixed(ZonedDateTime.of(today, java.time.LocalTime.of(h, m), MarketClock.KST).toInstant(), ZoneOffset.UTC)
+    private fun at(h: Int, m: Int) = ctx.copy(clock = kstClock(h, m))
+    private fun lastExpected() = ctx.days.expected(today.minusDays(10), today.minusDays(1)).last() // 직전 기대 거래일 T-1
+    private fun gapAlerts(sid: Int) = alerts.findAll().filter { it.code == "market_data_not_loaded" && it.strategyId == sid && it.severity == AlertSeverity.critical }
+    private fun anyInt() = org.mockito.ArgumentMatchers.anyInt()
+
+    @Test
+    fun `previous day not yet loaded before ready time stops quietly then alerts after`() {
+        val fixed = listOf(sym())
+        seed(fixed[0], 30) { i -> 1000.0 + i }
+        val t1 = lastExpected()
+        given(mcap.members(anyDate(), anyInt())).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI", listOf(t1 to t1)))
+        val (_, sid) = strategy(mcapCfg(fixed))
+        RebalanceRunner(sid, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertTrue(gapAlerts(sid).isEmpty(), "적재 대기 시각 전 T-1 미적재는 경보가 아니다")
+        assertEquals(false, redis.hasKey(RedisKeys.rebalanceLast(sid))) // 주기를 소비하지 않는다
+        val late = RebalanceRunner(sid, at(10, 31)).also { assertTrue(it.load()) }
+        late.tickOnce()
+        late.tickOnce()
+        assertEquals(1, gapAlerts(sid).size)
+        assertTrue(ordersOf(sid).isEmpty())
+    }
+
+    @Test
+    fun `older gap before ready time still alerts immediately`() {
+        val fixed = listOf(sym())
+        seed(fixed[0], 30) { i -> 1000.0 + i }
+        val t1 = lastExpected()
+        given(mcap.members(anyDate(), anyInt())).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI", listOf(t1.minusDays(3) to t1)))
+        val (_, sid) = strategy(mcapCfg(fixed))
+        RebalanceRunner(sid, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertEquals(1, gapAlerts(sid).size)
+        // 날짜 없는 미적재(업종·커버리지 등)도 대기 대상이 아니다
+        val (_, sid2) = strategy(rebalCfg(listOf(fixed[0]), mapOf("risk_layer" to mapOf("max_sector_pct" to 0.3))))
+        given(sectorMaps.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "x"))
+        RebalanceRunner(sid2, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertEquals(1, gapAlerts(sid2).size)
+    }
+
+    @Test
+    fun `regime index gap of previous day only waits quietly before ready time`() {
+        val codes = listOf(sym())
+        seed(codes[0], 30) { 1000.0 }
+        val t1 = lastExpected()
+        given(snapshots.indexOhlcv(anyDate(), anyDate(), anyString())).willThrow(MarketDataNotLoaded("index_ohlcv", "1001", listOf(t1 to t1)))
+        val (uid, sid) = strategy(rebalCfg(codes, mapOf("regime_filter" to mapOf("enabled" to true, "ma_period" to 20))))
+        positions.save(Position(uid, sid, codes[0], BigDecimal("7"), BigDecimal("900"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        RebalanceRunner(sid, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty() && gapAlerts(sid).isEmpty())
+        RebalanceRunner(sid, at(10, 31)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, gapAlerts(sid).size)
+    }
+
+    @Test
+    fun `mdd kill liquidation is unaffected by waiting for previous day data`() {
+        val codes = listOf(sym())
+        val t1 = lastExpected()
+        given(mcap.members(anyDate(), anyInt())).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI", listOf(t1 to t1)))
+        val (uid, sid) = strategy(mcapCfg(codes, mdd))
+        heldKilled(uid, sid, codes[0])
+        RebalanceRunner(sid, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).single { it.side == "sell" }.idempotencyKey.endsWith(":mdd"))
+    }
+
+    @Test
+    fun `quality weight with local dart coverage below half stops with critical once and no orders`() {
+        val codes = (1..4).map { sym() }
+        codes.forEach { seed(it, 30) { i -> 1000.0 + i } }
+        given(snapshots.priceChange(anyDate(), anyDate(), anyList())).willReturn(codes.map { StockPeriod(it, changePct = 5.0) })
+        // dart 는 모의(미적재) -> 모든 종목 지표가 비어 커버리지 0%
+        val (_, sid) = strategy(rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0, "quality" to 1.0)))))
+        val r = rebal(sid)
+        r.tickOnce()
+        r.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, gapAlerts(sid).size)
+        assertTrue(gapAlerts(sid).single().message.contains("factor_coverage quality"), gapAlerts(sid).single().message)
+        assertEquals(false, redis.hasKey(RedisKeys.rebalanceLast(sid)))
+    }
+
+    private fun entryCfg(code: String, extra: Map<String, Any?> = emptyMap()) = mapOf(
+        "type" to "custom", "symbol" to code, "cash" to 100_000,
+        "entry" to listOf(mapOf("left" to mapOf("kind" to "price", "source" to "close"), "op" to ">", "right" to mapOf("kind" to "const", "value" to 1000))),
+        "exit" to listOf(mapOf("left" to mapOf("kind" to "price", "source" to "close"), "op" to "<", "right" to mapOf("kind" to "const", "value" to 500))),
+    ) + extra
+
+    private fun coverageGap(code: String, vararg ranges: Pair<LocalDate, LocalDate>) =
+        org.mockito.Mockito.doThrow(MarketDataNotLoaded("price_ticks", code, ranges.toList())).`when`(coverage).require(anyString(), anyDate(), anyDate())
+
+    @Test
+    fun `strategy seeding gap stops entries with critical once and later ticks retry seeding`() {
+        val code = sym()
+        seed(code, 10) { 900.0 }
+        val (_, sid) = strategy(entryCfg(code))
+        redis.opsForValue().set(RedisKeys.price(code), "1100")
+        coverageGap(code, lastExpected().minusDays(3) to lastExpected())
+        val r = StrategyRunner(sid, at(10, 31)).also { assertTrue(it.load()) }
+        r.tickOnce()
+        r.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, gapAlerts(sid).size)
+        org.mockito.Mockito.doNothing().`when`(coverage).require(anyString(), anyDate(), anyDate()) // 데이터 도착
+        r.tickOnce() // onLoad 1회 시드가 아니라 틱마다 재시도
+        assertEquals("buy", ordersOf(sid).single().side)
+        // 회복했으니 다음 결손은 새 에피소드
+        coverageGap(code, lastExpected().minusDays(3) to lastExpected())
+        val r2 = StrategyRunner(sid, at(10, 31)).also { assertTrue(it.load()) }
+        r2.tickOnce()
+        assertEquals(2, gapAlerts(sid).size)
+    }
+
+    @Test
+    fun `strategy waits quietly for previous day before ready time only`() {
+        val code = sym()
+        seed(code, 10) { 900.0 }
+        val (_, sid) = strategy(entryCfg(code))
+        redis.opsForValue().set(RedisKeys.price(code), "1100")
+        val t1 = lastExpected()
+        coverageGap(code, t1 to t1)
+        StrategyRunner(sid, at(9, 30)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty() && gapAlerts(sid).isEmpty())
+        StrategyRunner(sid, at(10, 31)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, gapAlerts(sid).size)
+    }
+
+    @Test
+    fun `stop loss on a held position still works while history is missing`() {
+        val code = sym()
+        seed(code, 10) { 900.0 }
+        val (uid, sid) = strategy(entryCfg(code, mapOf("stop_loss_pct" to 0.1)))
+        positions.save(Position(uid, sid, code, BigDecimal("5"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        broker.quotes[code] = BigDecimal("800")
+        coverageGap(code, lastExpected().minusDays(3) to lastExpected())
+        StrategyRunner(sid, at(10, 31)).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(ordersOf(sid).single().idempotencyKey.endsWith(":sl"), ordersOf(sid).toString())
+        assertEquals(1, gapAlerts(sid).size) // 청산은 하되 이력 결손은 여전히 알린다
     }
 }
