@@ -6,6 +6,7 @@ import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.DividendFeed
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.ohlcv.OhlcvLoader
@@ -47,6 +48,7 @@ class BacktestRunner(
     private val constituents: IndexConstituentStore,
     private val panic: PanicService,
     private val scores: UniverseScores,
+    private val dividendFeed: DividendFeed,
     private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -135,17 +137,43 @@ class BacktestRunner(
             null
         }
 
+        val dividends = withDividends(closes.keys.toList(), start, end)
         val result = LinkedHashMap(
             engine {
                 PortfolioBacktest.run(
-                    closePanel = panel, config = withSectorMap(config), simStart = start, simEnd = end, fundamentals = provider,
+                    closePanel = panel, config = withSectorMap(config) + dividends.config, simStart = start, simEnd = end, fundamentals = provider,
                     regime = regime, pool = pool, benchmark = benchmark, panic = panicDays, volume = volume,
                 )
             },
         )
         factorCoverageWarnings(config, universe, end).takeIf { it.isNotEmpty() }?.let { result["factor_warnings"] = it }
+        dividends.warnings.takeIf { it.isNotEmpty() }?.let { result["dividend_warnings"] = it }
+        result["assumptions"] = dividends.assumptions + "벤치마크는 배당 제외"
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
         return result
+    }
+
+
+    private class DividendSetup(val config: Map<String, Any?>, val warnings: List<String>, val assumptions: List<String>)
+
+    /**
+     * `_dividends` 를 config 에 싣는다(`withSectorMap` 과 같은 방식). 배당 전체 적재 전이면 가격수익률만 낸다 —
+     * 조용히 넘어가지 않도록 가정 문구에 남긴다. 조회 실패는 백테스트를 막지 않고 경고로 남긴다.
+     */
+    private fun withDividends(symbols: List<String>, start: LocalDate, end: LocalDate): DividendSetup {
+        if (!dividendFeed.ingested()) return DividendSetup(emptyMap(), emptyList(), listOf("배당 미반영: 배당 데이터 미적재(가격수익률)"))
+        val inputs = try {
+            dividendFeed.forBacktest(symbols, start, end)
+        } catch (e: Exception) {
+            log.warn("배당 조회 실패(배당 미반영): {}", e.message)
+            return DividendSetup(emptyMap(), listOf("배당 조회 실패: ${e.message}"), listOf("배당 미반영: 배당 조회 실패(가격수익률)"))
+        }
+        val warnings = inputs.warnings.take(MAX_DIVIDEND_WARNINGS) +
+            (if (inputs.warnings.size > MAX_DIVIDEND_WARNINGS) listOf("배당 경고 ${inputs.warnings.size - MAX_DIVIDEND_WARNINGS}건 생략") else emptyList())
+        return DividendSetup(
+            if (inputs.events.isEmpty()) emptyMap() else mapOf("_dividends" to inputs.events), warnings,
+            listOf("현금배당 반영: 배당락일 종가에 세후(dividend_tax) 현금 적립, 재투자 없음"),
+        )
     }
 
     /**
@@ -313,6 +341,7 @@ class BacktestRunner(
 
     companion object {
         private val REGIME_TICKER = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")
+        private const val MAX_DIVIDEND_WARNINGS = 20
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
 
         /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */

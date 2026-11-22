@@ -14,6 +14,8 @@ import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.kis.KisStockMaster
+import com.quantfolio.market.official.DividendIngest
+import com.quantfolio.market.official.DividendIngestReport
 import com.quantfolio.market.official.IngestReport
 import com.quantfolio.market.official.OfficialIngest
 import com.quantfolio.market.source.SourceAuthError
@@ -59,6 +61,7 @@ class WorkerJobsTest(
     @Autowired private val redis: StringRedisTemplate,
 ) {
     @MockitoBean lateinit var official: OfficialIngest
+    @MockitoBean lateinit var dividendIngest: DividendIngest
     @MockitoBean lateinit var kisMaster: KisStockMaster
     @MockitoBean lateinit var fills: FillQualityReport
     @MockitoBean lateinit var news: NewsIngestor
@@ -88,6 +91,16 @@ class WorkerJobsTest(
         given(official.daily(anyK(LocalDate::class.java))).willReturn(IngestReport(1, 5, false, emptyList()))
         jobs.ingestOfficialDaily()
         assertEquals(null, latest("official_ingest_failure"))
+    }
+
+    @Test
+    fun dividendIngestReportsAndAlertsThenRethrowsOnFailure() {
+        given(dividendIngest.run()).willReturn(DividendIngestReport(8, 71_663, 100, 60_000, 2))
+        assertEquals(60_000, jobs.ingestDividends()["stored"])
+        assertEquals(null, latest("dividend_ingest_failure"))
+        given(dividendIngest.run()).willThrow(SourceAuthError("datagokr", "키 거부"))
+        assertThrows<SourceAuthError> { jobs.ingestDividends() }
+        assertTrue(latest("dividend_ingest_failure")!!.message.startsWith("배당 이력 적재 실패"))
     }
 
     @Test

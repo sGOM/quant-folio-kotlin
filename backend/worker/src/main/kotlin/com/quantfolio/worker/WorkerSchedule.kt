@@ -29,6 +29,9 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
     @Scheduled(cron = "0 0 10 * * *", zone = KST)
     fun ingestOfficialDaily() = run("ingest_official_daily") { jobs.ingestOfficialDaily() }
 
+    @Scheduled(cron = "0 0 7 * * SUN", zone = KST)
+    fun ingestDividends() = run("ingest_dividends") { jobs.ingestDividends() }
+
     @Scheduled(cron = "0 40 18 * * *", zone = KST)
     fun snapshotKisStockMaster() = run("snapshot_kis_stock_master") { jobs.snapshotKisStockMaster() }
 

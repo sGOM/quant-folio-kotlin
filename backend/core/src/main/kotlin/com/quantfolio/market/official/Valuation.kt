@@ -4,6 +4,7 @@ import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.DartMetrics
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.DividendStore
+import com.quantfolio.market.store.FetchLedger
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
 import org.springframework.stereotype.Component
@@ -14,7 +15,7 @@ import java.time.LocalDate
  *
  * - PER = 시가총액 / 지배주주 당기순이익, PBR = 시가총액 / 지배주주 자본. 적자·자본잠식이면 null(0 아님).
  * - 재무 = 접수일 <= asOf 인 최신 사업보고서(11011), 연결 우선·별도 폴백. 접수일 > asOf 인 보고서는 못 본다(미래참조 금지).
- * - 배당수익률(%) = 최근 365일 주당 현금배당 합 / 종가 * 100. 알려진 배당이 없으면 null, 합이 0 이면 0.0.
+ * - 배당수익률(%) = 최근 365일 주당 현금배당 합 / 종가 * 100. 알려진 배당이 없으면 null(단 전체 적재 완료 후엔 0.0), 합이 0 이면 0.0.
  * - 시총·종가 = asOf 이하 가장 최근 스냅샷 행.
  */
 @Component
@@ -23,6 +24,7 @@ class Valuation(
     private val dart: DartFinancials,
     private val dartStore: DartFinancialStore,
     private val dividends: DividendStore,
+    private val ledger: FetchLedger,
 ) {
     /** 한 종목의 재무 조회 결과. 미적재와 '쓸 보고서 없음'은 다른 사건이다. */
     private sealed interface Fin {
@@ -44,6 +46,8 @@ class Valuation(
         val queried = fins.values.filter { it !is Fin.Absent }
         if (queried.isNotEmpty() && queried.all { it is Fin.NotLoaded }) throw (queried.first() as Fin.NotLoaded).error
         val dps = dpsBySymbol(snaps.keys.toList(), asOf)
+        // 전체 배당 적재가 끝난 뒤의 무기록은 무배당(원본 KRX DVD_YLD 도 0). 적재 전이면 모른다(null).
+        val dividendsLoaded = ledger.get(DividendIngest.SOURCE, DividendIngest.LEDGER_KEY)?.final == true
         return codes.map { c ->
             val s = snaps[c] ?: return@map StockDaily(c)
             val f = fins[c] as? Fin.Loaded
@@ -52,7 +56,7 @@ class Valuation(
                 c, market = s.market,
                 per = ratio(cap, f?.netIncome),
                 pbr = ratio(cap, f?.equity),
-                div = dps[c]?.let { d -> s.close?.takeIf { it > 0 }?.let { d / it * 100 } },
+                div = (dps[c] ?: 0.0.takeIf { dividendsLoaded })?.let { d -> s.close?.takeIf { it > 0 }?.let { d / it * 100 } },
             )
         }
     }

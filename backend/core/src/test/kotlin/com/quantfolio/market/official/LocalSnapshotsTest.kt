@@ -47,7 +47,7 @@ class LocalSnapshotsTest(
         dartStore.writeCorpCodes(mapOf("999999" to "00000001"))
     }
 
-    private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger), Valuation(daily, dart, dartStore, dividends))
+    private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger), Valuation(daily, dart, dartStore, dividends, ledger))
 
     // 2310-03-01 ~ 03-05 (공유 DB 의 다른 테스트와 겹치지 않는 먼 미래). 요일은 무관하게 평일 가정이 필요하므로 아래에서 검증한다.
     private val week = generateSequence(LocalDate.of(2310, 3, 1)) { it.plusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(8).toList()

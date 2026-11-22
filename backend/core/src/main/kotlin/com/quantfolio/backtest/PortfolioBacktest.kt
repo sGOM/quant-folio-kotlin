@@ -164,6 +164,20 @@ object PortfolioBacktest {
         return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
     }
 
+    /** `_dividends`(종목 → [{ex_date, dps}]) → 배당락일별 (종목, dps), 종목 오름차순. 없거나 비면 빈 맵. */
+    private fun dividendEvents(config: Map<String, Any?>): Map<LocalDate, List<Pair<String, Double>>> {
+        val raw = config["_dividends"] as? Map<*, *> ?: return emptyMap()
+        val byDay = HashMap<LocalDate, MutableList<Pair<String, Double>>>()
+        for (sym in raw.keys.map { it.toString() }.sorted()) {
+            for (e in raw[sym] as List<*>) {
+                e as Map<*, *>
+                val ex = e["ex_date"].let { it as? LocalDate ?: LocalDate.parse(it.toString()) }
+                byDay.getOrPut(ex) { mutableListOf() } += sym to Cfg.num(e["dps"])
+            }
+        }
+        return byDay
+    }
+
     fun run(
         closePanel: Panel,
         config: Map<String, Any?>,
@@ -233,6 +247,9 @@ object PortfolioBacktest {
         val overlay = if (panicEnabled) PanicOverlay.build(dates, panic, pov) else null
         if (panicEnabled && overlay == null) log.warn("패닉 오버레이가 켜져 있으나 유효한 패닉 시계열을 확보하지 못해 오버레이를 적용하지 않는다.")
 
+        val dividendsByDay = dividendEvents(config)
+        val dividendTax = Cfg.num(Cfg.get(config, "dividend_tax", 0.154))
+        var dividendIncome = 0.0
         val book = Book(1.0)
         var prevPrices: Map<String, Double>? = null
         var prevRiskOff = false
@@ -270,6 +287,7 @@ object PortfolioBacktest {
             val limitRef = prevPrices
             // 1) 마크투마켓 + 상장폐지(terminal gap) 확정
             prevPrices?.let { markToMarket(book, it, prices, d, lastValid, delistRecovery, journal) }
+            dividendsByDay[d]?.let { dividendIncome += accrueDividends(book, it, prices, dividendTax) }
             prevPrices = prices
             // 2) 전일 결정의 지연 체결
             pending?.let {
@@ -321,16 +339,19 @@ object PortfolioBacktest {
             prevRiskOff = riskOff
         }
 
-        return summarize(
+        val result = summarize(
             journal, book, simDates, dates, dateIdx, benchmark, rfAnnual, snapshots, panel, numKills, overlay?.numEvents ?: 0,
         )
+        // 배당 이벤트가 있을 때만 키를 더한다(없으면 이전 결과와 동일). 금액은 원화(자본 × 비율).
+        if (dividendsByDay.isNotEmpty()) result["dividend_income"] = Num.safe(dividendIncome * ex.capital)
+        return result
     }
 
     /** 일별 기록 → 결과(성과지표·곡선·마커·보유·거래). 키 순서가 응답 계약. */
     private fun summarize(
         journal: Journal, book: Book, simDates: List<LocalDate>, dates: List<LocalDate>, dateIdx: Map<LocalDate, Int>,
         benchmark: Series?, rfAnnual: Double, snapshots: List<ScoreSnapshot>?, panel: Panel, numKills: Int, numPanicEvents: Int,
-    ): Map<String, Any?> {
+    ): LinkedHashMap<String, Any?> {
         val series = DoubleArray(journal.equities.size + 1) { if (it == 0) 1.0 else journal.equities[it - 1] }
         val rets = DoubleArray(series.size - 1) { series[it + 1] / series[it] - 1.0 }
         val totalReturn = Num.safe(series.last() - 1.0)

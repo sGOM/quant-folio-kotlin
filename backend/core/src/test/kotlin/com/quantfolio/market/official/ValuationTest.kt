@@ -40,7 +40,7 @@ class ValuationTest(
     private val client = OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock)
     private val ledger = InMemoryFetchLedger()
     private val dart = DartFinancials(client, dartStore, ledger, cooldowns, clock)
-    private val valuation = Valuation(daily, dart, dartStore, dividends)
+    private val valuation = Valuation(daily, dart, dartStore, dividends, ledger)
 
     private val asOf = LocalDate.of(2021, 6, 15)
     private val id = UUID.randomUUID().toString().filter { it.isDigit() }.padEnd(6, '7')
@@ -193,5 +193,15 @@ class ValuationTest(
         val out = valuation.compute(asOf, listOf(ok, unmapped)).associateBy { it.symbol }
         assertEquals(10.0, out.getValue(ok).per)
         assertNull(out.getValue(unmapped).per)
+    }
+
+    @Test
+    fun `no dividend rows is zero only after the full dividend ingest ran`() {
+        val s = newSymbol(); serveCorpMap()
+        snapshot(s, close = 1000.0)
+        report(s, 2020, LocalDate.of(2021, 3, 10), netIncome = 10_000L, equity = 50_000L)
+        assertNull(one(s).div) // 전체 적재 전: 모른다
+        ledger.put("datagokr", "dividends_full", 100, true)
+        assertEquals(0.0, one(s).div) // 적재 후 기록 없음 = 무배당
     }
 }

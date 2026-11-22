@@ -100,4 +100,31 @@ class PortfolioLookaheadTest {
         }
         assertTrue(upToCut(base, "trades").isNotEmpty())
     }
+
+    /** 배당 이벤트: cut 이하 배당락은 고정, cut 이후 이벤트(금액·추가 종목)만 시드마다 바꾼다 — cut 까지의 결과는 같아야 한다. */
+    private fun dividends(future: Int?): Map<String, List<Map<String, Any?>>> = symbols.withIndex().associate { (k, s) ->
+        val past = listOf(mapOf<String, Any?>("ex_date" to dates[270 + k], "dps" to 100.0 + k), mapOf("ex_date" to dates[330], "dps" to 50.0))
+        val later = if (future == null) listOf(mapOf("ex_date" to dates[360 + k], "dps" to 80.0))
+        else listOf(mapOf("ex_date" to dates[350 + k], "dps" to 1000.0 * future), mapOf("ex_date" to dates[380 + k], "dps" to 7.0 * future))
+        s to past + later
+    }
+
+    @Test
+    fun dividendEventsAfterCutDoNotChangePast() {
+        val config = mapOf(
+            "universe" to symbols, "selection" to mapOf("method" to "momentum", "lookback" to 40, "top_n" to 4),
+            "cadence" to "weekly", "weighting" to "equal",
+        )
+        fun go(future: Int?): Map<String, Any?> {
+            val panel = Panel(dates, symbols, symbols.withIndex().associate { (k, s) -> s to walk(k, 5000.0 + 3000 * k) })
+            return PortfolioBacktest.run(panel, config + ("_dividends" to dividends(future)), dates[260], dates.last())
+        }
+        val base = go(null)
+        for (seed in 1..3) {
+            val alt = go(seed)
+            for (key in listOf("equity_curve", "trades", "markers")) assertEquals(upToCut(base, key), upToCut(alt, key), "dividends/$key seed=$seed")
+        }
+        assertTrue((base["dividend_income"] as Double) > 0.0)
+        assertTrue(upToCut(base, "trades").isNotEmpty())
+    }
 }

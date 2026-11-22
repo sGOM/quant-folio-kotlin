@@ -46,6 +46,8 @@ quantfolio:
     pw: ${krx_pw:${KRX_PW:}}
   krx-open:
     api-key: ${krx_openapi_key:${KRX_OPENAPI_KEY:}}
+  data-go-kr:
+    api-key: ${datagokr_api_key:${DATAGOKR_API_KEY:}}
   opendart:
     api-key: ${opendart_api_key:${OPENDART_API_KEY:}}
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}

@@ -192,3 +192,21 @@ internal class Journal {
         markers += linkedMapOf<String, Any?>("t" to iso(d), "type" to type).apply { putAll(extra) }
     }
 }
+
+/**
+ * 배당락일 [d] 의 현금배당 적립. 대상은 **전일까지 들고 있던** 보유(마크투마켓 직후·당일 체결 전 — 배당락일에 사서는 못 받고
+ * 배당락일에 팔아도 받는다). 수량 = 평가액 / 당일 종가이므로 받는 금액 = 평가액 × dps / 종가 × (1 - 배당세). 재투자하지 않고 현금으로 쌓는다.
+ * [events] 의 dps 는 백테스트 가격(수정주가) 단위여야 한다. 적립한 세후 금액(자본 대비 비율)을 돌려준다.
+ */
+internal fun accrueDividends(book: Book, events: List<Pair<String, Double>>, prices: Map<String, Double>, taxRate: Double): Double {
+    var income = 0.0
+    for ((sym, dps) in events) {
+        val held = book.value[sym] ?: continue
+        val price = prices[sym]
+        if (price == null || price.isNaN() || price <= 0 || !dps.isFinite() || dps <= 0) continue
+        val net = held * dps / price * (1.0 - taxRate)
+        book.cash += net
+        income += net
+    }
+    return income
+}

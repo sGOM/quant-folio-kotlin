@@ -307,6 +307,7 @@ object StrategySchemas {
             F("fill_mode", Lit(listOf("next_close", "same_close")), "next_close"),
             F("slippage_bps", FloatT, 5.0, ge = 0, le = 200),
             F("slippage_vol_scale", FloatT, 0.0, ge = 0, le = 5),
+            F("dividend_tax", FloatT, 0.154, ge = 0, le = 1),
             F("integer_shares", BoolT, true),
             F("adv_participation_cap", FloatT, null, nullable = true, ge = 0, le = 1),
             F("price_limit_model", BoolT, false),

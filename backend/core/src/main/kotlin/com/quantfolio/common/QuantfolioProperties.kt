@@ -21,6 +21,7 @@ data class QuantfolioProperties(
     val krx: Krx = Krx(),
     val opendart: OpenDart = OpenDart(),
     val krxOpen: KrxOpen = KrxOpen(),
+    val dataGoKr: DataGoKr = DataGoKr(),
     val frontendOrigin: String = "http://localhost:3000",
     val debugErrors: Boolean = false,
     /** 파일 캐시 디렉터리(패닉 브레드스 등, 원본 backend/.cache). */
@@ -88,6 +89,13 @@ data class QuantfolioProperties(
 
     /** KRX Open API(공식). 키는 `krx_openapi_key` 시크릿. */
     data class KrxOpen(val apiKey: String = "", val baseUrl: String = "https://data-dbg.krx.co.kr/svc/apis")
+
+    /** 공공데이터포털(금융위원회 주식배당정보). 키는 `datagokr_api_key` 시크릿(Decoding 키 — 클라이언트가 URL 인코딩한다). */
+    data class DataGoKr(
+        val apiKey: String = "",
+        val baseUrl: String = "https://apis.data.go.kr/1160100/GetStocDiviInfoService_V2",
+        val pageSize: Int = 10000,
+    )
 
     data class OpenDart(val apiKey: String = "", val baseUrl: String = "https://opendart.fss.or.kr/api") {
         val enabled: Boolean get() = apiKey.isNotBlank()

@@ -6,6 +6,7 @@ import com.quantfolio.backtest.SlippageCalibration
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.kis.KisStockMaster
+import com.quantfolio.market.official.DividendIngest
 import com.quantfolio.market.official.OfficialIngest
 import com.quantfolio.news.NewsIngestor
 import com.quantfolio.quant.pyFixed
@@ -30,6 +31,7 @@ import java.time.ZoneOffset
 @Component
 class WorkerJobs(
     private val official: OfficialIngest,
+    private val dividendIngest: DividendIngest,
     private val kisMaster: KisStockMaster,
     private val fills: FillQualityReport,
     private val news: NewsIngestor,
@@ -76,6 +78,12 @@ class WorkerJobs(
     } catch (e: Exception) {
         alerts.publish(null, 0, AlertSeverity.warning, "$label: ${e.message}", code, dedupWindowHours = dedupHours)
         throw e
+    }
+
+    /** 주식배당정보 전체 이력 적재(주 1회). 실패하면 warning(6일 dedup — 주간 재발이 창에 걸리지 않게) 후 예외 전파. */
+    fun ingestDividends(): Map<String, Any?> {
+        val r = withOutageAlert("dividend_ingest_failure", "배당 이력 적재 실패", dedupHours = 144.0) { dividendIngest.run() }
+        return linkedMapOf("pages" to r.pages, "fetched" to r.fetched, "skipped" to r.skipped, "stored" to r.stored, "conflicts" to r.conflicts)
     }
 
     fun snapshotKisStockMaster(): Map<String, Any?> =
