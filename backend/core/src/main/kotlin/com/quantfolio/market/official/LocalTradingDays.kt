@@ -1,5 +1,6 @@
 package com.quantfolio.market.official
 
+import com.quantfolio.market.PastTradingDays
 import com.quantfolio.market.store.FetchLedger
 import com.quantfolio.market.store.IndexOhlcvStore
 import org.springframework.stereotype.Component
@@ -13,7 +14,9 @@ import java.time.format.DateTimeFormatter
  * 단 원장에 휴장 확정(0행·final)이 있는 날은 제외.
  */
 @Component
-class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger: FetchLedger) {
+class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger: FetchLedger) : PastTradingDays {
+    override fun isTradingDay(day: LocalDate): Boolean = day in expected(day, day)
+
     /** [start, end] 의 기대 거래일(오름차순). 적재 구간 앞·뒤의 평일(휴장 확정 제외)은 아직 모르는 날이라 결측 후보다. */
     fun expected(start: LocalDate, end: LocalDate): List<LocalDate> {
         val span = indexes.span(KOSPI_INDEX) ?: return unknownWeekdays(start, end)

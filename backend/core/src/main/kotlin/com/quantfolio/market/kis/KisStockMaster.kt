@@ -22,6 +22,11 @@ import java.util.zip.ZipInputStream
 
 data class MasterRow(val symbol: String, val name: String, val raw: Map<String, String>)
 
+/** 시장("KOSPI"·"KOSDAQ")의 KIS 종목마스터 행. */
+fun interface MasterListing {
+    fun fetch(market: String): List<MasterRow>
+}
+
 /**
  * KIS 종목마스터(원본 `data/kis_master.py`) — KRX·FDR·DART 어디에도 없는 매매 상태 플래그(관리종목·정리매매 등)를
  * KIS 공개 CDN 의 시장 전체 zip 에서 받는다. 매일 18:40 KST 스냅샷.
@@ -34,10 +39,10 @@ class KisStockMaster(
     private val repo: KisStockMasterSnapshotRepository,
     private val clock: Clock,
     private val tx: org.springframework.transaction.support.TransactionTemplate,
-) {
+) : MasterListing {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    fun fetch(market: String): List<MasterRow> {
+    override fun fetch(market: String): List<MasterRow> {
         val name = FILE_NAMES[market] ?: throw IllegalArgumentException("지원하지 않는 시장: $market")
         val bytes = try {
             val r = http.get(BASE_URL.format(name), timeout = Duration.ofSeconds(30))

@@ -1,22 +1,18 @@
 package com.quantfolio.market.symbols
 
-import com.quantfolio.market.krx.ListedStocks
-import com.quantfolio.market.source.DataSourceError
-import com.quantfolio.market.source.ExternalHttp
+import com.quantfolio.market.kis.MasterListing
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
-import tools.jackson.databind.json.JsonMapper
 
 data class SymbolInfo(val code: String, val name: String, val nameEn: String, val market: String)
 
 /**
- * 종목 검색 카탈로그(원본 `services/symbols.py`). 이름의 신뢰 소스 우선순위: 내장 seed → KRX 전종목 → FDR 시총 목록.
- * 외부 소스가 하나도 안 되면 seed 만 돌려주고 **캐시하지 않는다**(다음 호출에서 다시 시도).
+ * 종목 검색 카탈로그(원본 `services/symbols.py`). 이름의 신뢰 소스 우선순위: 내장 seed → KIS 종목마스터(KOSPI·KOSDAQ).
+ * 마스터가 하나도 안 되면 seed 만 돌려주고 **캐시하지 않는다**(다음 호출에서 다시 시도).
  */
 @Component
-class SymbolCatalog(private val krx: ListedStocks, private val http: ExternalHttp) {
+class SymbolCatalog(private val master: MasterListing) {
     private val log = LoggerFactory.getLogger(javaClass)
-    private val json = JsonMapper.builder().build()
 
     @Volatile private var cache: List<SymbolInfo>? = null
 
@@ -24,7 +20,7 @@ class SymbolCatalog(private val krx: ListedStocks, private val http: ExternalHtt
         cache?.let { return it }
         val (catalog, externalOk) = build()
         if (!externalOk) {
-            log.warn("종목 카탈로그 외부 소스 실패 — seed({}) 만 사용, 캐시 보류", catalog.size)
+            log.warn("종목 카탈로그 KIS 마스터 실패 — seed({}) 만 사용, 캐시 보류", catalog.size)
             return catalog
         }
         cache = catalog
@@ -57,62 +53,29 @@ class SymbolCatalog(private val krx: ListedStocks, private val http: ExternalHtt
         val byCode = LinkedHashMap<String, SymbolInfo>()
         SEED.forEach { (code, name, en, market) -> byCode[code] = SymbolInfo(code, name, en, market) }
         var externalOk = false
-
-        fun merge(rawCode: String, name: String, market: String) {
-            val code = rawCode.trim()
-            if (code.length != 6 || !code.all { it.isDigit() } || name.isEmpty()) return
-            val existing = byCode[code]
-            if (existing == null) {
-                byCode[code] = SymbolInfo(code, name, "", market)
-            } else if (market.isNotEmpty() && existing.market.isEmpty()) {
-                byCode[code] = existing.copy(market = market)
+        for (market in MARKETS) {
+            try {
+                val rows = master.fetch(market)
+                rows.forEach { row ->
+                    val code = row.symbol.trim()
+                    if (code.length != 6 || !code.all { it.isDigit() } || row.name.isEmpty()) return@forEach
+                    val existing = byCode[code]
+                    if (existing == null) byCode[code] = SymbolInfo(code, row.name, "", market)
+                    else if (existing.market.isEmpty()) byCode[code] = existing.copy(market = market)
+                }
+                if (rows.isNotEmpty()) externalOk = true
+                log.info("종목 카탈로그: KIS 마스터 {} {}개 병합", market, rows.size)
+            } catch (e: Exception) {
+                log.warn("종목 카탈로그: KIS 마스터 {} 조회 실패 — 건너뜀: {}", market, e.message)
             }
-        }
-
-        try {
-            val stocks = krx.allListedStocks()
-            stocks.forEach { merge(it.code, it.name, it.market) }
-            if (stocks.isNotEmpty()) {
-                externalOk = true
-                log.info("종목 카탈로그: KRX MDC {}개 병합", stocks.size)
-            }
-        } catch (e: DataSourceError) {
-            log.error("종목 카탈로그: KRX 전종목 목록 조회 실패 — 폴백 소스로 진행: {}", e.message)
-        }
-        try {
-            val rows = fdrListing()
-            rows.forEach { (code, name, market) -> merge(code, name, market) }
-            if (rows.isNotEmpty()) {
-                externalOk = true
-                log.info("종목 카탈로그: FDR 병합 후 {}개", byCode.size)
-            }
-        } catch (e: Exception) {
-            log.warn("FDR 상장목록 조회 실패(무시): {}", e.message)
         }
         return byCode.values.toList() to externalOk
-    }
-
-    /** FinanceDataReader `StockListing('KRX')` 재현: 최근 영업일 → 전종목 시세(시총순). (코드, 이름, 시장) */
-    private fun fdrListing(): List<Triple<String, String, String>> {
-        val headers = mapOf("User-Agent" to "Chrome/78.0.3904.87 Safari/537.36", "Referer" to "http://data.krx.co.kr/")
-        val bundle = json.readTree(http.get(FDR_BUNDLE_URL, headers = headers).body)
-        val workDay = bundle.path("result").path("output").get(0).path("max_work_dt").asString()
-        val form = linkedMapOf(
-            "bld" to "dbms/MDC/STAT/standard/MDCSTAT01501", "mktId" to "ALL", "trdDd" to workDay,
-            "share" to "1", "money" to "1", "csvxls_isNo" to "false",
-        )
-        val rows = json.readTree(http.postForm(FDR_JSON_URL, form, headers).body).path("OutBlock_1")
-        return (0 until rows.size()).map { i ->
-            val r = rows.get(i)
-            Triple(r.path("ISU_SRT_CD").asString("").trim(), r.path("ISU_ABBRV").asString("").trim(), r.path("MKT_NM").asString("").trim())
-        }
     }
 
     private data class Seed(val code: String, val name: String, val nameEn: String, val market: String)
 
     private companion object {
-        const val FDR_BUNDLE_URL = "http://data.krx.co.kr/comm/bldAttendant/executeForResourceBundle.cmd?baseName=krx.mdc.i18n.component&key=B128.bld"
-        const val FDR_JSON_URL = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
+        val MARKETS = listOf("KOSPI", "KOSDAQ")
 
         /** 외부 소스 장애 시에도 검색이 동작하도록 내장한 주요 종목(원본 seed 그대로). */
         val SEED = listOf(

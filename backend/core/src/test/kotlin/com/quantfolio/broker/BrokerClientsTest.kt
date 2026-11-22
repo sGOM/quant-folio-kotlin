@@ -71,6 +71,26 @@ class BrokerClientsTest(@Autowired private val redis: StringRedisTemplate) {
     }
 
     @Test
+    fun holidaysParsesOpenFlagFromProd() {
+        val http = FakeHttp()
+        val kis = kisWithToken(http, env = "prod")
+        http.on({ it.url.endsWith("/quotations/chk-holiday") }) {
+            BrokerResponse(200, """{"rt_cd":"0","output":[{"bass_dt":"20261019","opnd_yn":"Y"},{"bass_dt":"20261020","opnd_yn":"N"}]}""")
+        }
+        assertEquals(mapOf(LocalDate.of(2026, 10, 19) to true, LocalDate.of(2026, 10, 20) to false), kis.holidays(LocalDate.of(2026, 10, 19)))
+        val c = http.calls.last { it.url.endsWith("/chk-holiday") }
+        assertEquals("CTCA0903R", c.headers["tr_id"])
+        assertEquals("20261019", c.query["BASS_DT"])
+    }
+
+    @Test
+    fun holidaysIsNotSupportedOnPaper() {
+        val http = FakeHttp()
+        assertThrows<KisError> { kisWithToken(http).holidays(LocalDate.of(2026, 10, 19)) }
+        assertTrue(http.calls.none { it.url.endsWith("/chk-holiday") })
+    }
+
+    @Test
     fun tokenLockIsReleasedAfterIssue() {
         val cacheKey = "tok-" + UUID.randomUUID()
         val lockKey = RedisKeys.tokenLock(cacheKey)

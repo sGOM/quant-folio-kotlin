@@ -6,7 +6,6 @@ import com.quantfolio.backtest.SlippageCalibration
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.kis.KisStockMaster
-import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.metrics.MetricsCommon
@@ -34,7 +33,6 @@ class WorkerJobs(
     private val loader: OhlcvLoader,
     private val snapshots: SnapshotSource,
     private val kisMaster: KisStockMaster,
-    private val krx: KrxIndexService,
     private val fills: FillQualityReport,
     private val news: NewsIngestor,
     private val alerts: AlertPublisher,
@@ -126,10 +124,6 @@ class WorkerJobs(
     fun snapshotKisStockMaster(): Map<String, Any?> =
         linkedMapOf<String, Any?>("snapshot_symbols" to withOutageAlert("kis_master_outage", "KIS 종목마스터 적재 실패") { kisMaster.snapshot() })
             .also { log.info("KIS 종목마스터 스냅샷 적재 완료: {}", it) }
-
-    fun snapshotSectorMap(): Map<String, Any?> =
-        linkedMapOf<String, Any?>("snapshot_symbols" to withOutageAlert("sector_map_outage", "업종분류 분기 스냅샷 적재 실패") { krx.snapshotSectorMap() })
-            .also { log.info("업종분류 분기 스냅샷 적재 완료: {}", it) }
 
     /**
      * 체결 정합 주간 점검(월 09:00): 최근 90일 체결이 있는 (사용자, 전략)마다 리포트를 다시 계산해 RED 면 critical,

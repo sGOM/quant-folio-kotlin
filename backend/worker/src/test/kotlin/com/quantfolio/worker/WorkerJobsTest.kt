@@ -14,7 +14,6 @@ import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.kis.KisStockMaster
-import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.source.SourceAuthError
@@ -63,7 +62,6 @@ class WorkerJobsTest(
     @MockitoBean lateinit var loader: OhlcvLoader
     @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var kisMaster: KisStockMaster
-    @MockitoBean lateinit var krx: KrxIndexService
     @MockitoBean lateinit var fills: FillQualityReport
     @MockitoBean lateinit var news: NewsIngestor
     @MockitoSpyBean lateinit var alertPublisher: AlertPublisher
@@ -125,8 +123,6 @@ class WorkerJobsTest(
         given(kisMaster.snapshot(null)).willThrow(IllegalStateException("zip 실패"))
         assertThrows<IllegalStateException> { jobs.snapshotKisStockMaster() }
         assertEquals("KIS 종목마스터 적재 실패: zip 실패", latest("kis_master_outage")!!.message)
-        given(krx.snapshotSectorMap(null, false)).willReturn(2400)
-        assertEquals(2400, jobs.snapshotSectorMap()["snapshot_symbols"])
     }
 
     @Test

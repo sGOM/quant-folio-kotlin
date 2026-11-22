@@ -112,6 +112,29 @@ class KisClient(
         )
     }
 
+    /**
+     * 국내휴장일조회(공식 예제 `chk_holiday.py`, TR `CTCA0903R`) — [from] 이후 날짜별 개장일 여부(`opnd_yn`). 한 페이지만 읽는다(연속조회 안 함).
+     * 원장 연동 API 라 KIS 는 하루 1회 이하 호출을 권한다 — 호출부가 캐시한다. 모의투자(vts) 미지원이라 호출하지 않고 [KisError].
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun holidays(from: LocalDate): Map<LocalDate, Boolean> {
+        if (kis.isPaperTrading) throw KisError("국내휴장일조회는 모의투자 미지원")
+        val rows = request(
+            "GET", "$baseUrl/uapi/domestic-stock/v1/quotations/chk-holiday", authHeaders("CTCA0903R"), "휴장일 조회",
+            linkedMapOf("BASS_DT" to from.format(DateTimeFormatter.BASIC_ISO_DATE), "CTX_AREA_NK" to "", "CTX_AREA_FK" to ""),
+        )["output"] as? List<Map<String, Any?>> ?: throw KisError("휴장일 조회 응답에 output 목록이 없습니다.")
+        return rows.associate { row ->
+            val day = runCatching { LocalDate.parse(row["bass_dt"].toString().trim(), DateTimeFormatter.BASIC_ISO_DATE) }.getOrNull()
+                ?: throw KisError("휴장일 조회 행의 bass_dt 를 읽을 수 없습니다: ${pyRepr(row["bass_dt"].toString())}")
+            val open = when (row["opnd_yn"]?.toString()?.trim()) {
+                "Y" -> true
+                "N" -> false
+                else -> throw KisError("휴장일 조회 행의 opnd_yn 을 해석할 수 없습니다: $day ${pyRepr(row["opnd_yn"].toString())}")
+            }
+            day to open
+        }
+    }
+
     override fun verifyConnection(): Boolean {
         accessToken()
         return true

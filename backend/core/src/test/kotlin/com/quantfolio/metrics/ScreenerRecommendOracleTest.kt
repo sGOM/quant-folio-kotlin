@@ -38,8 +38,8 @@ class ScreenerRecommendOracleTest {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val transport = FakeKrxTransport()
     private val cooldowns = Cooldowns(clock)
-    private val common = MetricsCommon(MarketCalendar(KrxStockApi(KrxMdc(transport, KrxSession(transport, QuantfolioProperties(), cooldowns, clock), cooldowns) {}), clock), clock)
-    private val catalog = SymbolCatalog({ throw SourceAuthError("krx", "x") }, FakeExternalHttp().apply { failWith { true } })
+    private val common = MetricsCommon(MarketCalendar({ true }, { emptyMap() }, clock), clock)
+    private val catalog = SymbolCatalog { throw SourceAuthError("kis_master", "x") }
 
     private fun num(n: JsonNode) = Oracle.num(n).takeIf { !it.isNaN() }
 

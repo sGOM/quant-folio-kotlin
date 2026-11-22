@@ -37,7 +37,7 @@ class KrxSnapshotsTest(
     private val cooldowns = Cooldowns(clock)
     private val ledger = InMemoryFetchLedger()
     private val api = KrxStockApi(KrxMdc(transport, KrxSession(transport, QuantfolioProperties(), cooldowns, clock), cooldowns) {})
-    private val snapshots = KrxSnapshots(api, StoreCache(ledger, clock), daily, periods, indexes, cooldowns, MarketCalendar(api, clock))
+    private val snapshots = KrxSnapshots(api, StoreCache(ledger, clock), daily, periods, indexes, cooldowns, MarketCalendar({ true }, { emptyMap() }, clock))
 
     private fun bld(code: String) = "dbms/MDC/STAT/standard/$code"
     private fun calls(code: String) = transport.calls.count { it.form["bld"] == bld(code) }
@@ -61,7 +61,7 @@ class KrxSnapshotsTest(
         assertEquals("KOSDAQ", first["200001"]!!.market)
         assertEquals(true, ledger.get("fundamentals", "20030502|KOSDAQ,KOSPI")!!.final)
 
-        val again = KrxSnapshots(api, StoreCache(ledger, clock), daily, periods, indexes, cooldowns, MarketCalendar(api, clock))
+        val again = KrxSnapshots(api, StoreCache(ledger, clock), daily, periods, indexes, cooldowns, MarketCalendar({ true }, { emptyMap() }, clock))
             .fundamentals(day, listOf("KOSPI", "KOSDAQ"))
         assertEquals(3, again.size)
         assertEquals(2, calls("MDCSTAT03501"))

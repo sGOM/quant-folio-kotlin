@@ -37,9 +37,6 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
     @Scheduled(cron = "0 0 9 * * MON", zone = KST)
     fun checkFillQualityDrift() = run("check_fill_quality_drift") { jobs.checkFillQualityDrift() }
 
-    @Scheduled(cron = "0 0 19 1 1,4,7,10 *", zone = KST)
-    fun snapshotSectorMap() = run("snapshot_sector_map") { jobs.snapshotSectorMap() }
-
     @Scheduled(cron = "0 0 3 * * *", zone = KST)
     fun backupDatabase() = run("backup_database") { backup.backup() }
 

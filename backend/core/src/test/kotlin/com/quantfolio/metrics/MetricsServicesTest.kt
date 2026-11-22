@@ -35,7 +35,7 @@ class MetricsServicesTest {
     private val cooldowns = Cooldowns(clock)
     // 거래소 응답이 없으므로 달력은 주말만 휴장으로 본다.
     private val common = MetricsCommon(
-        MarketCalendar(KrxStockApi(KrxMdc(transport, KrxSession(transport, QuantfolioProperties(), cooldowns, clock), cooldowns) {}), clock),
+        MarketCalendar({ true }, { emptyMap() }, clock),
         clock,
     )
     private val asOf = LocalDate.of(2026, 10, 16)
@@ -79,7 +79,7 @@ class MetricsServicesTest {
             )
         }
         val tech = TechIndicatorLoader { code, _, _ -> if (code == "000050") bars(100) else bars(300) }
-        val catalog = SymbolCatalog({ throw SourceAuthError("krx", "x") }, FakeExternalHttp().apply { failWith { true } })
+        val catalog = SymbolCatalog { throw SourceAuthError("kis_master", "x") }
         val out = StockMetricsService(src, common, tech, catalog).compute("ALL", asOf)
 
         assertEquals(listOf("000010", "000020"), out.items.map { it.code })
