@@ -420,7 +420,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         pitFallbackActive = false
         rule["min_market_cap"]?.takeIf { Cfg.truthy(it) }?.let { min ->
             val caps = ctx.daily.latestUpTo(members, asOf, 10).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
-            if (caps.isEmpty()) throw MarketDataNotLoaded("stock_daily", "min_market_cap", listOf(asOf to asOf))
+            if (caps.isEmpty()) throw MarketDataNotLoaded("min_market_cap", "stock_daily", listOf(asOf to asOf))
             members = members.filter { (caps[it] ?: 0L) >= Cfg.num(min).toLong() * 100_000_000L }
         }
         return members

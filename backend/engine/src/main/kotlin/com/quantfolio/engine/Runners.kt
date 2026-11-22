@@ -81,7 +81,10 @@ data class RunnerContext(
     val days: LocalTradingDays,
     // 미실측 - KRX Open API 공개 시각은 Task 1 실측으로 확정한다. 이 시각(KST) 전에는 직전 거래일(T-1) 미적재를 경보 없이 기다린다.
     @Value("\${quantfolio.engine.dataReadyBy:10:30}") val dataReadyBy: String,
-)
+) {
+    /** 기동(빈 생성) 때 한 번 파싱 - 잘못된 설정은 틱 안(손절·익절 경로 포함)이 아니라 기동 실패로 드러난다. */
+    val dataReadyByTime: LocalTime = LocalTime.parse(dataReadyBy)
+}
 
 /**
  * 러너 공통 골격(원본 `engine/base_runner.py`): 전략 적재·자격 검증 → 주기 틱(타임아웃 방어) → 헬스 기록·연속 실패 알림,
@@ -209,15 +212,19 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     /**
      * 적재 대기 중인가 - [MarketDataNotLoaded] 가 "직전 기대 거래일(T-1) 하나"만 빠진 것이고 아직 `dataReadyBy`(KST) 전이면 true.
      * T-1 = 오늘 앞의 평일 중 휴장 확정이 아닌 마지막 날(원장이 모르는 날 포함). 빠진 구간이 그 하루로만 이뤄졌을 때만 대기로 본다 -
+     * 추가 조건 - (1) T-1 앞 조회 창(오늘-10일~T-2)의 기대 거래일이 모두 원장에 known: McapUniverse 등은 "첫 모르는 날"만 (day,day) 로
+     * 보고하므로 며칠 끊겨도 [(T-1,T-1)] 로 보인다. (2) kind 가 날짜 결손(stock_daily·trading_days·price_ticks·index_ohlcv)일 때만 -
+     * 주권 종류(stock_kind)·min_market_cap 같은 날짜 무관 결손은 기다린다고 풀리지 않는다.
      * 더 오래된 결손·날짜 없는 미적재(업종·커버리지·DART)·구간이 T-1 밖으로 번진 경우는 대기가 아니라 경보 대상이다.
      */
     protected fun awaitingPreviousDay(e: MarketDataNotLoaded): Boolean {
         val now = MarketClock.nowKst(ctx.clock)
-        if (!now.toLocalTime().isBefore(LocalTime.parse(ctx.dataReadyBy))) return false
-        if (e.missing.isEmpty()) return false
+        if (!now.toLocalTime().isBefore(ctx.dataReadyByTime)) return false
+        if (e.kind !in WAITABLE_KINDS || e.missing.isEmpty()) return false
         val today = now.toLocalDate()
         val t1 = ctx.days.expected(today.minusDays(10), today.minusDays(1)).lastOrNull() ?: return false
-        return e.missing.all { it.first == t1 && it.second == t1 }
+        if (!e.missing.all { it.first == t1 && it.second == t1 }) return false
+        return ctx.days.expected(today.minusDays(10), t1.minusDays(1)).all { ctx.days.isTradingDay(it) != null }
     }
 
     /** 이 전략에 귀속된 (사용자, 종목) 포지션. 없으면 null. */
@@ -291,6 +298,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     protected val tickAbandoned: Boolean get() = tickAbort.get()?.get() == true
 
     private companion object {
+        val WAITABLE_KINDS = setOf("stock_daily", "trading_days", "price_ticks", "index_ohlcv")
         const val POSITION_LOCK_TTL = RedisKeys.POSITION_LOCK_TTL_SECONDS
     }
 }

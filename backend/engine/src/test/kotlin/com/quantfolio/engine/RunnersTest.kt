@@ -32,6 +32,7 @@ import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.StockPeriod
+import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.test.ContainersConfig
@@ -639,7 +640,8 @@ class RunnersTest(
 
     private val today get() = MarketClock.todayKst(ctx.clock)
     private fun kstClock(h: Int, m: Int) = java.time.Clock.fixed(ZonedDateTime.of(today, java.time.LocalTime.of(h, m), MarketClock.KST).toInstant(), ZoneOffset.UTC)
-    private fun at(h: Int, m: Int) = ctx.copy(clock = kstClock(h, m))
+    /** T-1 앞 평일은 원장에 모두 적재된 상태(T-1 만 모름) - 대기 판정의 "앞쪽 결손 없음" 조건을 만족시킨다. */
+    private fun at(h: Int, m: Int) = ctx.copy(clock = kstClock(h, m), days = com.quantfolio.market.official.LocalTradingDays(com.quantfolio.test.InMemoryFetchLedger().also { it.trading(weekdaysBack(12).drop(1)) }))
     private fun lastExpected() = ctx.days.expected(today.minusDays(10), today.minusDays(1)).last() // 직전 기대 거래일 T-1
     private fun gapAlerts(sid: Int) = alerts.findAll().filter { it.code == "market_data_not_loaded" && it.strategyId == sid && it.severity == AlertSeverity.critical }
     private fun anyInt() = org.mockito.ArgumentMatchers.anyInt()
@@ -777,5 +779,75 @@ class RunnersTest(
         StrategyRunner(sid, at(10, 31)).also { assertTrue(it.load()) }.tickOnce()
         assertTrue(ordersOf(sid).single().idempotencyKey.endsWith(":sl"), ordersOf(sid).toString())
         assertEquals(1, gapAlerts(sid).size) // 청산은 하되 이력 결손은 여전히 알린다
+    }
+
+    // ── 실제 McapUniverse + 가짜 원장 - 오래된 결손·마스터 미적재가 "T-1 대기" 로 오분류되지 않는다 ──
+
+    private fun weekdaysBack(n: Int) = generateSequence(today.minusDays(1)) { it.minusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(n).toList() // [T-1, T-2, ...]
+
+    /** 실제 [McapUniverse] 를 쓰는 컨텍스트. [loaded] 만 원장에 거래일로 적재돼 있다. */
+    private fun realMcapCtx(h: Int, m: Int, loaded: List<LocalDate>): RunnerContext {
+        val ledger = com.quantfolio.test.InMemoryFetchLedger().also { it.trading(loaded) }
+        val days = com.quantfolio.market.official.LocalTradingDays(ledger)
+        return at(h, m).copy(days = days, mcap = McapUniverse(ctx.daily, days))
+    }
+
+    private fun mcapGapSid(): Int {
+        val fixed = listOf(sym())
+        seed(fixed[0], 30) { i -> 1000.0 + i }
+        return strategy(mcapCfg(fixed)).second
+    }
+
+    @Test
+    fun `real mcap path three missing days before ready time alerts immediately`() {
+        val wd = weekdaysBack(12)
+        val sid = mcapGapSid()
+        RebalanceRunner(sid, realMcapCtx(9, 30, wd.drop(3))).also { assertTrue(it.load()) }.tickOnce() // T-3~T-1 미적재
+        assertEquals(1, gapAlerts(sid).size)
+        assertTrue(ordersOf(sid).isEmpty())
+    }
+
+    @Test
+    fun `real mcap path only previous day missing before ready time waits quietly`() {
+        val wd = weekdaysBack(12)
+        val sid = mcapGapSid()
+        RebalanceRunner(sid, realMcapCtx(9, 30, wd.drop(1))).also { assertTrue(it.load()) }.tickOnce()
+        assertTrue(gapAlerts(sid).isEmpty() && ordersOf(sid).isEmpty())
+    }
+
+    @Test
+    fun `real mcap path missing stock kind master before ready time alerts immediately`() {
+        val wd = weekdaysBack(12)
+        val sid = mcapGapSid()
+        val t1 = wd[0]
+        ctx.daily.write(t1, listOf(StockDaily("999991", market = "KOSPI", marketCap = 1000L, close = 1000.0))) // 주권 종류 없음
+        try {
+            RebalanceRunner(sid, realMcapCtx(9, 30, wd)).also { assertTrue(it.load()) }.tickOnce()
+        } finally {
+            ctx.daily.delete(t1)
+        }
+        assertEquals(1, gapAlerts(sid).size)
+    }
+
+    @Test
+    fun `min market cap gap is not waited for`() {
+        val e = MarketDataNotLoaded("min_market_cap", "x", listOf(lastExpected() to lastExpected()))
+        val probe = object : BaseRunner(0, at(9, 30)) {
+            override val log = org.slf4j.LoggerFactory.getLogger("test.probe")!!
+            override val label = "t"
+            override val tickWord = "t"
+            override val pollIntervalSec = 1L
+            override val tickTimeoutSec = 1L
+            override fun logStart() = Unit
+            override fun tickOnce() = Unit
+            fun waits(x: MarketDataNotLoaded) = awaitingPreviousDay(x)
+        }
+        assertEquals(false, probe.waits(e))
+        assertEquals(true, probe.waits(MarketDataNotLoaded("stock_daily", "KOSPI", listOf(lastExpected() to lastExpected()))))
+    }
+
+    @Test
+    fun `invalid dataReadyBy fails at construction not in the middle of a tick`() {
+        org.junit.jupiter.api.assertThrows<java.time.format.DateTimeParseException> { ctx.copy(dataReadyBy = "25:99") }
     }
 }
