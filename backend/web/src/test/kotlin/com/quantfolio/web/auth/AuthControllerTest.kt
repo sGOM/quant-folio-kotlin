@@ -183,26 +183,16 @@ class AuthControllerTest(
         }
     }
 
+    /** 닉네임 변경 API 는 삭제됐다 — GET /me 가 같은 경로에 남아 있어 404 가 아니라 405. 응답에도 닉네임이 없다. */
     @Test
-    fun patchMeTrims() {
+    fun patchMeIsGone() {
         val user = ownerUser()
         mvc.patch("/api/auth/me") {
             cookie(sessionFor(user))
             contentType = MediaType.APPLICATION_JSON
-            content = """{"display_name":"  닉네임  "}"""
-        }.andExpect { status { isOk() }; jsonPath("$.display_name") { value("닉네임") } }
-    }
-
-    @Test
-    fun patchMeBlankToNull() {
-        val user = ownerUser()
-        user.displayName = "old"
-        users.save(user)
-        mvc.patch("/api/auth/me") {
-            cookie(sessionFor(user))
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"display_name":"   "}"""
-        }.andExpect { status { isOk() }; jsonPath("$.display_name") { value(null) } }
+            content = """{"display_name":"닉네임"}"""
+        }.andExpect { status { isMethodNotAllowed() } }
+        mvc.get("/api/auth/me") { cookie(sessionFor(user)) }.andExpect { jsonPath("$.display_name") { doesNotExist() } }
     }
 
     @Test

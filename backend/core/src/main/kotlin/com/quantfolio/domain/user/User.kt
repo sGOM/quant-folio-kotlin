@@ -15,7 +15,6 @@ import java.time.Instant
 class User(
     @Column(nullable = false, unique = true) var email: String,
     @Column(nullable = false) var passwordHash: String,
-    var displayName: String? = null,
     /** "kis" | "toss" */
     @Column(nullable = false) var broker: String = "kis",
     @Column(nullable = false, updatable = false) var createdAt: Instant = Instant.now(),

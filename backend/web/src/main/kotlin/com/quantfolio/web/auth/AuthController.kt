@@ -8,16 +8,13 @@ import com.quantfolio.security.Passwords
 import com.quantfolio.web.api.ApiException
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import jakarta.validation.Valid
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseCookie
 import org.springframework.web.bind.annotation.CookieValue
 import org.springframework.web.bind.annotation.GetMapping
-import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PostMapping
-import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.ResponseStatus
@@ -78,12 +75,6 @@ class AuthController(
 
     @GetMapping("/me")
     fun me(@CurrentUser user: User) = user.toOut(brokers)
-
-    @PatchMapping("/me")
-    fun updateMe(@CurrentUser user: User, @Valid @RequestBody body: ProfileUpdate): UserOut {
-        user.displayName = body.displayName?.trim()?.ifEmpty { null }
-        return users.save(user).toOut(brokers)
-    }
 
     private fun sessionCookie(value: String, maxAge: Duration): String =
         ResponseCookie.from(SESSION_COOKIE, value)

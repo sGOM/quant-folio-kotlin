@@ -26,26 +26,13 @@ class Strategy(
     var description: String? = null,
     @JdbcTypeCode(SqlTypes.JSON) @Column(nullable = false) var config: Map<String, Any?> = emptyMap(),
     @Enumerated(EnumType.STRING) @Column(nullable = false) var status: StrategyStatus = StrategyStatus.draft,
-    var featuredBacktestId: Int? = null,
-    @Column(nullable = false) var isShared: Boolean = false,
-    var sharedAt: Instant? = null,
     @Column(nullable = false) var isFavorite: Boolean = false,
     @Column(nullable = false) var sortOrder: Int = 0,
-    var copiedFromId: Int? = null,
     @Column(nullable = false, updatable = false) var createdAt: Instant = Instant.now(),
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
 ) {
     @UpdateTimestamp @Column(nullable = false) var updatedAt: Instant? = null
 }
-
-@Entity
-@Table(name = "strategy_likes")
-class StrategyLike(
-    @Column(nullable = false) var strategyId: Int,
-    @Column(nullable = false) var userId: Int,
-    @Column(nullable = false, updatable = false) var createdAt: Instant = Instant.now(),
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Int? = null,
-)
 
 interface StrategyRepository : JpaRepository<Strategy, Int> {
     fun findByUserId(userId: Int): List<Strategy>
@@ -55,5 +42,3 @@ interface StrategyRepository : JpaRepository<Strategy, Int> {
     @org.springframework.data.jpa.repository.Query("update Strategy s set s.status = 'backtested', s.updatedAt = CURRENT_TIMESTAMP where s.id = :id and s.status = 'draft'")
     fun markBacktested(id: Int): Int
 }
-
-interface StrategyLikeRepository : JpaRepository<StrategyLike, Int>

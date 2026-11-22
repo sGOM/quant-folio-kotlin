@@ -37,7 +37,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @SpringBootTest
@@ -55,13 +54,13 @@ class StrategiesControllerTest(
     @MockitoSpyBean lateinit var props: QuantfolioProperties
     private val json = JsonMapper.builder().build()
 
-    private inner class Me(displayName: String? = null) {
-        val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1"), displayName = displayName))
+    private inner class Me {
+        val user: User = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = Passwords.hash("password-1")))
         private val session = Cookie(SESSION_COOKIE, sessions.create(user.id!!))
         /** 단일 소유자 서비스라 세션을 쓰는 사용자가 곧 설정된 소유자다(그 외 세션은 401) — 쿠키를 쓰는 순간 소유자로 지정한다. */
         val cookie: Cookie get() = session.also { willReturn(user.id).given(props).tradingOwnerUserId }
-        fun strategy(name: String = "s", config: Map<String, Any?> = mapOf("type" to "sma_crossover", "symbol" to "005930"), shared: Boolean = false) =
-            strategies.save(Strategy(user.id!!, name, config = config, isShared = shared, sharedAt = if (shared) Instant.now() else null))
+        fun strategy(name: String = "s", config: Map<String, Any?> = mapOf("type" to "sma_crossover", "symbol" to "005930")) =
+            strategies.save(Strategy(user.id!!, name, config = config))
     }
 
     private fun body(r: org.springframework.test.web.servlet.ResultActionsDsl) = json.readTree(r.andReturn().response.contentAsString)
@@ -78,7 +77,6 @@ class StrategiesControllerTest(
             jsonPath("$.status") { value("draft") }
             jsonPath("$.description") { value(null) }
             jsonPath("$.config.fast") { value(5) }
-            jsonPath("$.is_shared") { value(false) }
         }
         assertTrue(body(r).get("updated_at").isString)
 
@@ -145,7 +143,7 @@ class StrategiesControllerTest(
     }
 
     @Test
-    fun patchReorderShareFavorite() {
+    fun patchReorderFavorite() {
         val me = Me()
         val other = Me()
         val s1 = me.strategy("one")
@@ -174,66 +172,9 @@ class StrategiesControllerTest(
             content = """{"ordered_ids":[]}"""
         }.andExpect { status { isUnprocessableContent() } }
 
-        mvc.post("/api/strategies/${s1.id}/share") { cookie(me.cookie) }.andExpect { jsonPath("$.is_shared") { value(true) } }
-        assertTrue(strategies.findById(s1.id!!).get().sharedAt != null)
-        mvc.delete("/api/strategies/${s1.id}/share") { cookie(me.cookie) }.andExpect { jsonPath("$.is_shared") { value(false) } }
-        assertNull(strategies.findById(s1.id!!).get().sharedAt)
         mvc.post("/api/strategies/${s1.id}/favorite") { cookie(me.cookie) }.andExpect { jsonPath("$.is_favorite") { value(true) } }
         mvc.delete("/api/strategies/${s1.id}/favorite") { cookie(me.cookie) }.andExpect { jsonPath("$.is_favorite") { value(false) } }
-        mvc.post("/api/strategies/${foreign.id}/share") { cookie(me.cookie) }.andExpect { status { isNotFound() } }
-    }
-
-    @Test
-    fun copyLikeAndFeatured() {
-        val me = Me()
-        val other = Me()
-        val shared = other.strategy("공유", shared = true)
-        val private = other.strategy("비공개")
-        mvc.post("/api/strategies/${shared.id}/copy") { cookie(me.cookie) }.andExpect {
-            status { isCreated() }
-            jsonPath("$.name") { value("공유 (사본)") }
-            jsonPath("$.status") { value("draft") }
-            jsonPath("$.is_shared") { value(false) }
-        }
-        mvc.post("/api/strategies/${private.id}/copy") { cookie(me.cookie) }.andExpect { status { isNotFound() } }
-
-        repeat(2) {
-            mvc.post("/api/strategies/${shared.id}/like") { cookie(me.cookie) }.andExpect {
-                jsonPath("$.like_count") { value(1) }
-                jsonPath("$.liked_by_me") { value(true) }
-            }
-        }
-        mvc.post("/api/strategies/${shared.id}/like") { cookie(other.cookie) }.andExpect {
-            status { isBadRequest() }
-            jsonPath("$.detail") { value("자신의 전략에는 좋아요를 누를 수 없습니다.") }
-        }
-        mvc.post("/api/strategies/${private.id}/like") { cookie(me.cookie) }.andExpect { status { isNotFound() } }
-        mvc.delete("/api/strategies/${shared.id}/like") { cookie(me.cookie) }.andExpect {
-            jsonPath("$.like_count") { value(0) }
-            jsonPath("$.liked_by_me") { value(false) }
-        }
-
-        val mine = me.strategy()
-        val bt = backtests.save(Backtest(mine.id!!, Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-12-31T00:00:00Z")))
-        val foreignBt = backtests.save(Backtest(shared.id!!, Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-12-31T00:00:00Z")))
-        mvc.put("/api/strategies/${mine.id}/featured-backtest") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"backtest_id":${foreignBt.id}}"""
-        }.andExpect {
-            status { isNotFound() }
-            jsonPath("$.detail") { value("백테스트를 찾을 수 없습니다.") }
-        }
-        mvc.put("/api/strategies/${mine.id}/featured-backtest") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"backtest_id":${bt.id}}"""
-        }.andExpect { jsonPath("$.featured_backtest_id") { value(bt.id) } }
-        mvc.put("/api/strategies/${mine.id}/featured-backtest") {
-            cookie(me.cookie)
-            contentType = MediaType.APPLICATION_JSON
-            content = """{}"""
-        }.andExpect { jsonPath("$.featured_backtest_id") { value(null) } }
+        mvc.post("/api/strategies/${foreign.id}/favorite") { cookie(me.cookie) }.andExpect { status { isNotFound() } }
     }
 
     @Test
@@ -248,38 +189,30 @@ class StrategiesControllerTest(
         }
     }
 
+    /** 공유·좋아요·복사·대표 백테스트 API 는 삭제됐다. 응답에도 공유·대표 백테스트 필드가 없다. */
     @Test
-    fun sharedListFiltersSortsAndSummarizes() {
-        val tag = UUID.randomUUID().toString().take(8)
+    fun sharingEndpointsAreGone() {
         val me = Me()
-        val alice = Me("앨리스")
-        val anon = Me()
-        val single = alice.strategy("$tag 단일", mapOf("type" to "sma_crossover", "symbol" to "123456"), shared = true)
-        val rebal = anon.strategy("$tag 리밸", mapOf("type" to "rebalance", "universe" to listOf("123456", "654321")), shared = true)
-        alice.strategy("$tag 비공개", shared = false)
-        val bt = backtests.save(Backtest(single.id!!, Instant.parse("2024-01-01T00:00:00Z"), Instant.parse("2024-06-30T00:00:00Z"), totalReturn = BigDecimal("0.1234"), sharpe = BigDecimal("1.5")))
-        single.featuredBacktestId = bt.id
-        strategies.save(single)
-        mvc.post("/api/strategies/${rebal.id}/like") { cookie(me.cookie) }
-        mvc.post("/api/strategies/${rebal.id}/like") { cookie(alice.cookie) }
-
-        val r = mvc.get("/api/strategies/shared?q=$tag") { cookie(me.cookie) }.andExpect { status { isOk() } }
-        val list = body(r)
-        assertEquals(listOf(rebal.id, single.id), (0 until list.size()).map { list.get(it).get("id").asInt() })
-        assertEquals("익명", list.get(0).get("author_name").asString())
-        assertEquals(2, list.get(0).get("like_count").asInt())
-        assertTrue(list.get(0).get("liked_by_me").asBoolean())
-        assertFalse(list.get(0).get("is_mine").asBoolean())
-        assertTrue(list.get(0).get("backtest").isNull)
-        assertEquals("앨리스", list.get(1).get("author_name").asString())
-        assertEquals(0.1234, list.get(1).get("backtest").get("total_return").asDouble())
-        assertTrue(list.get(1).get("backtest").get("mdd").isNull)
-
-        val bySymbol = body(mvc.get("/api/strategies/shared?q=$tag&symbol=654321") { cookie(me.cookie) })
-        assertEquals(listOf(rebal.id), (0 until bySymbol.size()).map { bySymbol.get(it).get("id").asInt() })
-        val byName = body(mvc.get("/api/strategies/shared?q=$tag&sort=name") { cookie(me.cookie) })
-        assertEquals(listOf(single.id, rebal.id), (0 until byName.size()).map { byName.get(it).get("id").asInt() })
-        mvc.get("/api/strategies/shared?sort=bad") { cookie(me.cookie) }.andExpect { status { isUnprocessableContent() } }
+        val s = me.strategy()
+        val base = "/api/strategies/${s.id}"
+        for (path in listOf("$base/share", "$base/copy", "$base/like")) {
+            mvc.post(path) { cookie(me.cookie) }.andExpect { status { isNotFound() } }
+        }
+        for (path in listOf("$base/share", "$base/like")) {
+            mvc.delete(path) { cookie(me.cookie) }.andExpect { status { isNotFound() } }
+        }
+        mvc.put("$base/featured-backtest") {
+            cookie(me.cookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"backtest_id":null}"""
+        }.andExpect { status { isNotFound() } }
+        // "shared" 는 이제 GET /{id} 에 걸려 정수 변환 실패(422)가 된다 — 목록이 아니다.
+        mvc.get("/api/strategies/shared") { cookie(me.cookie) }.andExpect { status { isUnprocessableContent() } }
+        mvc.get(base) { cookie(me.cookie) }.andExpect {
+            status { isOk() }
+            jsonPath("$.is_shared") { doesNotExist() }
+            jsonPath("$.featured_backtest_id") { doesNotExist() }
+        }
     }
 
     @Test

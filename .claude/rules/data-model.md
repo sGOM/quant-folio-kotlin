@@ -27,9 +27,8 @@ paths:
 | 관계 | 정책 | 이유 |
 |---|---|---|
 | users → strategies·orders·positions·risk_limits·alerts | CASCADE | 사용자 소유물 |
-| strategies → backtests·strategy_likes·risk_limits | CASCADE | 전략 종속 산출물 |
+| strategies → backtests·risk_limits | CASCADE | 전략 종속 산출물 |
 | strategies → orders·executions·positions | **SET NULL** | 전략을 지워도 체결 이력은 감사용으로 남긴다 |
-| `strategies.featured_backtest_id`, `copied_from_id` | SET NULL | 대표 백테스트·복사 원본이 지워져도 전략은 산다 |
 
 ## 매핑 규칙
 

@@ -44,7 +44,7 @@ class BaselineMigrationTest {
                 "alerts", "backtests", "dart_financials", "executions", "external_fetches", "index_constituents",
                 "index_ohlcv", "index_ohlcv_coverage", "kis_stock_master_snapshots", "news_article_symbols",
                 "news_articles", "orders", "positions", "price_ticks", "risk_limits", "sector_map_snapshots",
-                "stock_daily_snapshots", "stock_period_stats", "strategies", "strategy_likes", "users",
+                "stock_daily_snapshots", "stock_period_stats", "strategies", "users",
             ),
             tables,
         )
@@ -68,7 +68,7 @@ class BaselineMigrationTest {
         flyway(url).migrate()
 
         val history = query(url, "select version, type from flyway_schema_history order by installed_rank") { it.getString(1) to it.getString(2) }
-        assertEquals(listOf("1" to "BASELINE", "2" to "SQL", "3" to "SQL", "4" to "SQL", "5" to "SQL", "6" to "SQL"), history)
+        assertEquals(listOf("1" to "BASELINE", "2" to "SQL", "3" to "SQL", "4" to "SQL", "5" to "SQL", "6" to "SQL", "7" to "SQL"), history)
         assertEquals(listOf(false), query(url, "select kis_balance_reconcile_blocked from users") { it.getBoolean(1) })
         assertEquals(listOf<String?>(null), query(url, "select broker_account_key from orders where idempotency_key = 'legacy-order'") { it.getString(1) })
         assertEquals(listOf<String?>(null), query(url, "select closed_at from orders where idempotency_key = 'legacy-order'") { it.getString(1) }) // 기존 주문은 미종결
@@ -94,7 +94,7 @@ class BaselineMigrationTest {
         )
         assertEquals(listOf(true, false), query(url, "select kis_balance_reconcile_blocked from users order by id") { it.getBoolean(1) })
 
-        flyway(url).migrate()
+        flyway(url, target = "6").migrate()
 
         assertEquals(
             listOf("id", "email", "password_hash", "created_at", "updated_at", "broker", "display_name", "kis_balance_reconcile_blocked"),
@@ -110,5 +110,47 @@ class BaselineMigrationTest {
         assertEquals(0, query(url, "select count(*) from pg_trigger where tgname = 'block_kis_balance_after_account_change'") { it.getInt(1) }.single())
         assertEquals(0, query(url, "select count(*) from pg_proc where proname = 'block_kis_balance_after_account_change'") { it.getInt(1) }.single())
         exec(url, "update users set broker = 'kis' where email = 'other@t.dev'") // 트리거 없이 갱신된다
+    }
+
+    /** V7 은 데이터가 있는 V6 DB 에서 공유·좋아요·복사·대표 백테스트·닉네임만 지우고 사용자·전략·백테스트 행은 남긴다. */
+    @Test
+    fun v7DropsStrategySharingButKeepsRows() {
+        val url = freshDb("bl_v7")
+        flyway(url, target = "6").migrate()
+        exec(
+            url,
+            "insert into users(email, password_hash, display_name) values ('owner@t.dev', 'h1', '소유자'), ('other@t.dev', 'h2', null)",
+            """insert into strategies(user_id, name, config, status, is_shared, shared_at, is_favorite, sort_order)
+               select id, '원본', '{}', 'draft', true, now(), true, 3 from users where email = 'owner@t.dev'""",
+            """insert into strategies(user_id, name, config, status, copied_from_id)
+               select u.id, '사본', '{}', 'draft', s.id from users u, strategies s where u.email = 'other@t.dev'""",
+            """insert into backtests(strategy_id, period_start, period_end)
+               select id, '2024-01-01', '2024-12-31' from strategies where name = '원본'""",
+            "update strategies set featured_backtest_id = (select id from backtests) where name = '원본'",
+            """insert into strategy_likes(strategy_id, user_id)
+               select s.id, u.id from strategies s, users u where s.name = '원본' and u.email = 'other@t.dev'""",
+        )
+
+        flyway(url).migrate()
+
+        assertEquals(0, query(url, "select count(*) from pg_tables where tablename = 'strategy_likes'") { it.getInt(1) }.single())
+        assertEquals(0, query(url, "select count(*) from pg_class where relname = 'strategy_likes_id_seq'") { it.getInt(1) }.single())
+        assertEquals(
+            listOf("id", "user_id", "name", "config", "status", "created_at", "updated_at", "is_favorite", "sort_order", "description"),
+            query(url, "select column_name from information_schema.columns where table_name = 'strategies' order by ordinal_position") { it.getString(1) },
+        )
+        assertEquals(
+            listOf("id", "email", "password_hash", "created_at", "updated_at", "broker", "kis_balance_reconcile_blocked"),
+            query(url, "select column_name from information_schema.columns where table_name = 'users' order by ordinal_position") { it.getString(1) },
+        )
+        assertEquals(
+            listOf("strategies_pkey", "strategies_user_id_fkey"),
+            query(url, "select conname from pg_constraint where conrelid = 'public.strategies'::regclass order by 1") { it.getString(1) },
+        )
+        assertEquals(listOf("owner@t.dev", "other@t.dev"), query(url, "select email from users order by id") { it.getString(1) })
+        assertEquals(listOf("원본|true|3", "사본|false|0"), query(url, "select name, is_favorite, sort_order from strategies order by id") {
+            "${it.getString(1)}|${it.getBoolean(2)}|${it.getInt(3)}"
+        })
+        assertEquals(1, query(url, "select count(*) from backtests") { it.getInt(1) }.single())
     }
 }
