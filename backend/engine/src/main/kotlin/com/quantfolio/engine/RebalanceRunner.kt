@@ -45,7 +45,8 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     private val json = JsonMapper.builder().build()
     private var pitFallbackActive = false
     private var panicAlerted = false
-    private var dataGapAlerted = false
+    private var regimeGapAlerted = false // 경로별 에피소드 플래그 — 각자 자기 경로가 정상 반환하면 초기화
+    private var planGapAlerted = false
     private var sectorMap: Map<String, String>? = null
 
     private val selection get() = Cfg.map(cfg, "selection")
@@ -85,10 +86,10 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         var reentry = false
         if (regimeEnabled && marketOpen) {
             riskOff = try {
-                isRiskOff()
+                isRiskOff().also { regimeGapAlerted = false }
             } catch (e: MarketDataNotLoaded) {
                 // 국면을 모른다 — 새 매수·리밸런싱을 멈추고 알린다. 청산도 하지 않는다(MDD 킬스위치는 위에서 이미 평가됨).
-                alertDataGap(e, "국면(레짐) 판정에 필요한 지수 데이터가 없어 이번 점검의 매매를 모두 중단합니다(청산·신규 매수 없음, MDD 킬스위치는 계속 동작)")
+                alertDataGap(e, "국면(레짐) 판정에 필요한 지수 데이터가 없어 이번 점검의 매매를 모두 중단합니다(청산·신규 매수 없음, MDD 킬스위치는 계속 동작)", regime = true)
                 return
             }
             val prev = getRegime()
@@ -328,9 +329,9 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             emptyList<String>() to emptyMap()
         } else {
             try {
-                computePlan(asOf).also { dataGapAlerted = false } // 해소 — 다음 결손은 새 에피소드
+                computePlan(asOf).also { planGapAlerted = false } // 해소 — 다음 결손은 새 에피소드
             } catch (e: MarketDataNotLoaded) {
-                alertDataGap(e, "시장데이터가 적재되지 않아 이번 리밸런싱을 건너뜁니다(주문 없음, 기존 보유는 그대로)")
+                alertDataGap(e, "시장데이터가 적재되지 않아 이번 리밸런싱을 건너뜁니다(주문 없음, 기존 보유는 그대로)", regime = false)
                 return false
             }
         }
@@ -425,11 +426,11 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         return members
     }
 
-    /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 계획이 다시 성공하면 초기화. */
-    private fun alertDataGap(e: MarketDataNotLoaded, what: String) {
+    /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 해당 경로(국면·계획)가 다시 정상 반환하면 초기화. */
+    private fun alertDataGap(e: MarketDataNotLoaded, what: String, regime: Boolean) {
         log.error("리밸런싱 전략 {} 시장데이터 미적재 — 주문 없이 중단: {}", strategyId, e.message)
-        if (dataGapAlerted) return
-        dataGapAlerted = true
+        if (if (regime) regimeGapAlerted else planGapAlerted) return
+        if (regime) regimeGapAlerted = true else planGapAlerted = true
         ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "$what: ${e.message}. 데이터 적재 후 다음 점검에서 재시도합니다.", "market_data_not_loaded")
     }
 

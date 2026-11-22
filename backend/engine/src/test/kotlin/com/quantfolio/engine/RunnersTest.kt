@@ -546,6 +546,21 @@ class RunnersTest(
     }
 
     @Test
+    fun `regime gap recovery does not suppress a later plan gap alert`() {
+        val fixed = listOf(sym())
+        seed(fixed[0], 30) { 1000.0 }
+        val (_, sid) = strategy(mcapCfg(fixed, mapOf("regime_filter" to mapOf("enabled" to true, "ma_period" to 20))))
+        org.mockito.BDDMockito.willThrow(MarketDataNotLoaded("index_ohlcv", "1001")).given(snapshots).indexOhlcv(anyDate(), anyDate(), anyString())
+        org.mockito.BDDMockito.willThrow(MarketDataNotLoaded("stock_daily", "KOSPI")).given(mcap).members(anyDate(), org.mockito.ArgumentMatchers.anyInt())
+        val r = rebal(sid)
+        r.tickOnce() // 국면 결손
+        val idx = (0 until 60).map { IndexBar(LocalDate.now().minusDays(60L - it), close = 3000.0) }
+        org.mockito.BDDMockito.willReturn(idx).given(snapshots).indexOhlcv(anyDate(), anyDate(), anyString())
+        r.tickOnce() // 국면 회복, 계획 결손
+        assertEquals(2, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid })
+    }
+
+    @Test
     fun `critical alert is raised once per episode even after it is read and again after recovery`() {
         val members = (1..2).map { sym() }
         val fixed = listOf(sym())
