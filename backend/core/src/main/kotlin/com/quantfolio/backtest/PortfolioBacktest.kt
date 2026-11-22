@@ -250,6 +250,7 @@ object PortfolioBacktest {
         val dividendsByDay = dividendEvents(config)
         val dividendTax = Cfg.num(Cfg.get(config, "dividend_tax", 0.154))
         var dividendIncome = 0.0
+        val dividendSkipped = mutableListOf<String>()
         val book = Book(1.0)
         var prevPrices: Map<String, Double>? = null
         var prevRiskOff = false
@@ -287,7 +288,7 @@ object PortfolioBacktest {
             val limitRef = prevPrices
             // 1) 마크투마켓 + 상장폐지(terminal gap) 확정
             prevPrices?.let { markToMarket(book, it, prices, d, lastValid, delistRecovery, journal) }
-            dividendsByDay[d]?.let { dividendIncome += accrueDividends(book, it, prices, dividendTax) }
+            dividendsByDay[d]?.let { dividendIncome += accrueDividends(book, it, prices, dividendTax, d, dividendSkipped) }
             prevPrices = prices
             // 2) 전일 결정의 지연 체결
             pending?.let {
@@ -344,6 +345,7 @@ object PortfolioBacktest {
         )
         // 배당 이벤트가 있을 때만 키를 더한다(없으면 이전 결과와 동일). 금액은 원화(자본 × 비율).
         if (dividendsByDay.isNotEmpty()) result["dividend_income"] = Num.safe(dividendIncome * ex.capital)
+        if (dividendSkipped.isNotEmpty()) result["dividend_warnings"] = dividendSkipped.toList()
         return result
     }
 

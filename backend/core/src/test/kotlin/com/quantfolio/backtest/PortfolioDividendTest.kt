@@ -78,4 +78,18 @@ class PortfolioDividendTest {
         assertNull(DividendDates.exDate(LocalDate.of(2018, 3, 30)) { if (it == LocalDate.of(2018, 3, 29)) null else true })
         assertTrue(DividendDates.exDate(LocalDate.of(2018, 3, 30)) { false } == null)
     }
+
+    @Test
+    fun `ex date close missing while holding skips the event with a warning`() {
+        // 중간 결측이 ffill 한도(10일)를 넘으면 배당락일 종가가 NaN — 평가액만 동결되고 배당은 못 받는다. 조용히 넘기지 않고 경고한다.
+        val gapped = prices.copyOf().also { for (i in 100..125) it[i] = Double.NaN }
+        val out = PortfolioBacktest.run(
+            Panel(dates, listOf(sym), mapOf(sym to gapped)),
+            config(mapOf("_dividends" to mapOf(sym to listOf(event(120, 300.0))))), dates.first(), dates.last(),
+        )
+        assertEquals(0.0, out["dividend_income"])
+        val w = out["dividend_warnings"] as List<*>
+        assertEquals(1, w.size)
+        assertTrue(w.single().toString().contains(sym))
+    }
 }

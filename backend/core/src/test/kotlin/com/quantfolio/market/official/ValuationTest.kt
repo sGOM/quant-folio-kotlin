@@ -197,11 +197,37 @@ class ValuationTest(
 
     @Test
     fun `no dividend rows is zero only after the full dividend ingest ran`() {
-        val s = newSymbol(); serveCorpMap()
+        val s = newSymbol(); val other = newSymbol(); serveCorpMap()
+        dividends.write(listOf(DividendEvent(other, LocalDate.of(2015, 6, 30), 10.0, null, "t")))
         snapshot(s, close = 1000.0)
         report(s, 2020, LocalDate.of(2021, 3, 10), netIncome = 10_000L, equity = 50_000L)
         assertNull(one(s).div) // 전체 적재 전: 모른다
         ledger.put("datagokr", "dividends_full", 100, true)
         assertEquals(0.0, one(s).div) // 적재 후 기록 없음 = 무배당
+    }
+
+    @Test
+    fun `annual december dividend is still counted in march and not mistaken for no dividend`() {
+        val s = newSymbol(); val other = newSymbol(); serveCorpMap()
+        val day = LocalDate.of(2021, 3, 15)
+        snapshot(s, day = day, close = 1000.0)
+        report(s, 2020, LocalDate.of(2021, 3, 10), netIncome = 10_000L, equity = 50_000L)
+        // 공시일 불명: 알려진 날 = 기준일 + 90일. 2020-12-31 건은 3-15 에 아직 모르고, 2019-12-31 건(알려진 날 2020-03-30)이 직전 1년 창 안이다.
+        dividends.write(listOf(DividendEvent(s, LocalDate.of(2019, 12, 31), 100.0, null, "t"), DividendEvent(s, LocalDate.of(2020, 12, 31), 120.0, null, "t")))
+        dividends.write(listOf(DividendEvent(other, LocalDate.of(2015, 6, 30), 10.0, null, "t"))) // 이력 시작을 충분히 앞으로
+        ledger.put("datagokr", "dividends_full", 100, true)
+        assertEquals(10.0, valuation.compute(day, listOf(s)).single().div)
+    }
+
+    @Test
+    fun `zero is asserted only once a year of dividend history exists before asOf`() {
+        val s = newSymbol(); val other = newSymbol(); serveCorpMap()
+        dividends.write(listOf(DividendEvent(other, LocalDate.of(2015, 6, 30), 10.0, null, "t")))
+        ledger.put("datagokr", "dividends_full", 100, true)
+        for ((day, expected) in listOf(LocalDate.of(2015, 12, 1) to null, LocalDate.of(2016, 7, 1) to 0.0)) {
+            snapshot(s, day = day, close = 1000.0)
+            report(s, day.year - 1, day.minusDays(120), netIncome = 10_000L, equity = 50_000L)
+            assertEquals(expected, valuation.compute(day, listOf(s)).single().div, "asOf $day")
+        }
     }
 }

@@ -44,7 +44,7 @@ class DividendFeed(
             if (dated.isEmpty()) continue
             val adjusted = ticks.bars(symbol, MarketClock.kstStart(dated.minOf { it.first }), MarketClock.kstEnd(dated.maxOf { it.first }))
                 .associate { it.date to it.close }
-            val raw = daily.readSymbol(symbol).associate { it.first to it.second.close }
+            val raw = daily.readSymbol(symbol, dated.minOf { it.first }, dated.maxOf { it.first }).associate { it.first to it.second.close }
             val list = dated.sortedBy { it.first }.mapNotNull { (ex, dps) ->
                 val a = adjusted[ex]
                 val r = raw[ex]

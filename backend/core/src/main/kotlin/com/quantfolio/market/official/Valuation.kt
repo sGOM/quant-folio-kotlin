@@ -47,7 +47,9 @@ class Valuation(
         if (queried.isNotEmpty() && queried.all { it is Fin.NotLoaded }) throw (queried.first() as Fin.NotLoaded).error
         val dps = dpsBySymbol(snaps.keys.toList(), asOf)
         // 전체 배당 적재가 끝난 뒤의 무기록은 무배당(원본 KRX DVD_YLD 도 0). 적재 전이면 모른다(null).
-        val dividendsLoaded = ledger.get(DividendIngest.SOURCE, DividendIngest.LEDGER_KEY)?.final == true
+        // 단, 적재된 배당 이력이 시작된 지 1년이 안 된 asOf 는 이력 부재와 무배당을 구분할 수 없어 null.
+        val dividendsLoaded = ledger.get(DividendIngest.SOURCE, DividendIngest.LEDGER_KEY)?.final == true &&
+            dividends.minRecordDate()?.let { !asOf.isBefore(it.plusDays(DIV_WINDOW_DAYS)) } == true
         return codes.map { c ->
             val s = snaps[c] ?: return@map StockDaily(c)
             val f = fins[c] as? Fin.Loaded
@@ -90,10 +92,15 @@ class Valuation(
 
     /** 종목별 DPS. 알려진 배당이 한 건도 없으면 키가 없다(= unknown), 합이 0 이면 0.0. */
     private fun dpsBySymbol(codes: List<String>, asOf: LocalDate): Map<String, Double> =
-        dividends.read(codes, asOf.minusDays(DIV_WINDOW_DAYS - 1), asOf)
+        // 창은 "알려진 날" 기준이다: 알려진 날 = 공시일, 없으면 기준일 + 90일. 기준일로 창을 잡으면 실효 창이 275일로 줄어
+        // 연 1회 결산배당이 매년 12월~3월에 통째로 빠진다.
+        dividends.read(codes, asOf.minusDays(DIV_WINDOW_DAYS + UNANNOUNCED_LAG_DAYS), asOf)
             // ponytail: 공시일 없는 배당은 기준일 + 90일 뒤에야 알려진 것으로 본다. 2023 이전 결산배당은 기준일(12/31) 뒤에
             // 결정돼서, 공시일 없이 기준일 직후부터 쓰면 미래참조다. 상한은 실제 공시일을 못 구한 만큼의 지연이고, 공시일 적재가 늘면 줄어든다.
-            .filter { e -> e.announcedOn?.let { !it.isAfter(asOf) } ?: !e.recordDate.plusDays(UNANNOUNCED_LAG_DAYS).isAfter(asOf) }
+            .filter { e ->
+                val known = e.announcedOn ?: e.recordDate.plusDays(UNANNOUNCED_LAG_DAYS)
+                !known.isAfter(asOf) && known.isAfter(asOf.minusDays(DIV_WINDOW_DAYS))
+            }
             .groupBy { it.symbol }
             .mapValues { (_, es) -> es.sumOf { it.dps } }
 

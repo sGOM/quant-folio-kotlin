@@ -51,4 +51,8 @@ class DividendStore(private val jdbc: NamedParameterJdbcTemplate) {
             )
         }
     }
+
+    /** 적재된 현금배당(dps > 0)의 가장 이른 기준일. 하나도 없으면 null. */
+    fun minRecordDate(): LocalDate? =
+        jdbc.query("SELECT min(record_date) FROM dividends WHERE dps > 0", emptyMap<String, Any>()) { rs, _ -> rs.getDate(1)?.toLocalDate() }.firstOrNull()
 }

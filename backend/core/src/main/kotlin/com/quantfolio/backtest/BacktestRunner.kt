@@ -147,7 +147,7 @@ class BacktestRunner(
             },
         )
         factorCoverageWarnings(config, universe, end).takeIf { it.isNotEmpty() }?.let { result["factor_warnings"] = it }
-        dividends.warnings.takeIf { it.isNotEmpty() }?.let { result["dividend_warnings"] = it }
+        (dividends.warnings + (result["dividend_warnings"] as? List<*> ?: emptyList<Any?>())).takeIf { it.isNotEmpty() }?.let { result["dividend_warnings"] = it }
         result["assumptions"] = dividends.assumptions + "벤치마크는 배당 제외"
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
         return result
@@ -172,7 +172,10 @@ class BacktestRunner(
             (if (inputs.warnings.size > MAX_DIVIDEND_WARNINGS) listOf("배당 경고 ${inputs.warnings.size - MAX_DIVIDEND_WARNINGS}건 생략") else emptyList())
         return DividendSetup(
             if (inputs.events.isEmpty()) emptyMap() else mapOf("_dividends" to inputs.events), warnings,
-            listOf("현금배당 반영: 배당락일 종가에 세후(dividend_tax) 현금 적립, 재투자 없음"),
+            listOf(
+                "현금배당 반영: 배당락일 종가에 세후(dividend_tax) 현금 적립(적립 현금은 다음 리밸런싱에서 투자될 수 있다)",
+                "배당락일 적립 금액은 사후 확정값이다(2023년 이전 결산배당은 락일 뒤에 결의)",
+            ),
         )
     }
 

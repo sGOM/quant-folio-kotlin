@@ -107,10 +107,10 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         }
     }
 
-    /** 한 종목의 전 기간 행(날짜 오름차순). 수정주가 재계산용. */
-    fun readSymbol(symbol: String): List<Pair<LocalDate, StockDaily>> = jdbc.query(
-        "SELECT * FROM stock_daily_snapshots WHERE symbol = :symbol ORDER BY trade_date",
-        mapOf("symbol" to padSymbol(symbol)),
+    /** 한 종목의 행(날짜 오름차순), 기본은 전 기간. 수정주가 재계산용. */
+    fun readSymbol(symbol: String, from: LocalDate = LocalDate.of(1900, 1, 1), to: LocalDate = LocalDate.of(9999, 12, 31)): List<Pair<LocalDate, StockDaily>> = jdbc.query(
+        "SELECT * FROM stock_daily_snapshots WHERE symbol = :symbol AND trade_date BETWEEN :from AND :to ORDER BY trade_date",
+        mapOf("symbol" to padSymbol(symbol), "from" to from, "to" to to),
     ) { rs, _ ->
         rs.getObject("trade_date", LocalDate::class.java) to StockDaily(
             symbol = rs.getString("symbol"), market = rs.getString("market"),
