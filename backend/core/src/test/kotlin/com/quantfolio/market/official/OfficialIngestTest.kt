@@ -57,6 +57,8 @@ class OfficialIngestTest(
     class FakeOpen(cooldowns: Cooldowns) : KrxOpenApi(FakeExternalHttp(), QuantfolioProperties(), cooldowns) {
         val prices = sortedMapOf<LocalDate, Pair<Double, Double>>()
         val failDays = mutableMapOf<LocalDate, Exception>()
+        val failIndexDays = mutableMapOf<LocalDate, Exception>()
+        val failBaseMarkets = mutableSetOf<String>()
         var indexNames: Map<String, List<String>> = mapOf("KRX" to listOf("KRX 300"), "KOSPI" to listOf("코스피", "코스피 200"), "KOSDAQ" to listOf("코스닥"))
         var dailyCalls = 0
         var indexCalls = 0
@@ -73,6 +75,7 @@ class OfficialIngestTest(
 
         override fun stockBase(day: LocalDate, market: String): List<OpenBaseRow> {
             baseCalls++
+            if (market in failBaseMarkets) throw SourceUnavailableError("krx_open", "base 503")
             if (prices[day] == null) return emptyList()
             return listOf(OpenBaseRow(if (market == "KOSPI") "000001" else "000002", "n", market, "보통주"))
         }
@@ -80,6 +83,7 @@ class OfficialIngestTest(
         override fun indexDaily(day: LocalDate, family: String): List<OpenIndexRow> {
             indexCalls++
             failDays[day]?.let { throw it }
+            failIndexDays[day]?.let { throw it }
             if (prices[day] == null) return emptyList()
             return indexNames.getValue(family).map { OpenIndexRow(day, it, 1.0, 2.0, 0.5, 1.5) }
         }
@@ -204,6 +208,91 @@ class OfficialIngestTest(
         ingest().backfill(weekdays[0], weekdays[2], 1000)
         val bars = ticks.bars("000001", Instant.parse("2320-01-01T00:00:00Z"), Instant.parse("2320-12-31T00:00:00Z"))
         assertEquals(listOf(500.0, 500.0, 500.0), bars.map { it.close })
+    }
+
+    private val range = Instant.parse("2320-01-01T00:00:00Z") to Instant.parse("2320-12-31T00:00:00Z")
+    private fun closes(symbol: String = "000001") = ticks.bars(symbol, range.first, range.second).map { it.close }
+
+    @Test
+    fun `base info is fetched for a past month even when a recent month already has kinds`() {
+        val may = generateSequence(LocalDate.of(2320, 5, 4)) { it.plusDays(1) }.first { it.dayOfWeek.value <= 5 }
+        trade(may)
+        ingest().backfill(may, may, 1000)
+        assertEquals(2, open.baseCalls)
+        trade(weekdays[0], weekdays[1])
+        ingest().backfill(weekdays[0], weekdays[1], 1000)
+        assertEquals(4, open.baseCalls) // 4월 첫 거래일에만 추가 2회
+        assertEquals(listOf("보통주"), daily.read(weekdays[0], listOf("KOSPI")).map { it.stockKind })
+    }
+
+    @Test
+    fun `base info failing for one market is retried only for that market`() {
+        trade(weekdays[0], weekdays[1])
+        open.failBaseMarkets += "KOSDAQ"
+        val r = ingest().backfill(weekdays[0], weekdays[0], 1000)
+        assertEquals(1, r.failed.size)
+        assertEquals(listOf("보통주"), daily.read(weekdays[0], listOf("KOSPI")).map { it.stockKind })
+        assertEquals(listOf<String?>(null), daily.read(weekdays[0], listOf("KOSDAQ")).map { it.stockKind })
+        open.failBaseMarkets.clear()
+        val before = open.baseCalls
+        ingest().backfill(weekdays[1], weekdays[1], 1000)
+        assertEquals(before + 1, open.baseCalls) // KOSDAQ 만 다시
+        assertEquals(listOf("보통주"), daily.read(weekdays[1], listOf("KOSDAQ")).map { it.stockKind })
+    }
+
+    @Test
+    fun `backfilling before existing bars yields one continuous adjusted series`() {
+        trade(weekdays[3], closes = listOf(500.0 to 0.0)) // 경계(w2 → w3)에 1:2 분할
+        ingest().backfill(weekdays[3], weekdays[3], 1000)
+        trade(weekdays[0], weekdays[1], weekdays[2], closes = List(3) { 1000.0 to 0.0 })
+        ingest().backfill(weekdays[0], weekdays[2], 1000)
+        assertEquals(listOf(500.0, 500.0, 500.0, 500.0), closes())
+    }
+
+    @Test
+    fun `a failed day does not cause adjustment across the gap`() {
+        trade(weekdays[0], weekdays[2], closes = listOf(1000.0 to 0.0, 1050.0 to 30.0)) // w1 종가 1020 은 못 받았다
+        open.failDays[weekdays[1]] = SourceUnavailableError("krx_open", "503")
+        ingest().backfill(weekdays[0], weekdays[2], 1000)
+        assertEquals(listOf(1000.0, 1050.0), closes())
+    }
+
+    @Test
+    fun `filling a gap day later rebuilds the series`() {
+        trade(weekdays[0], weekdays[2], closes = listOf(1000.0 to 0.0, 500.0 to 0.0))
+        open.failDays[weekdays[1]] = SourceUnavailableError("krx_open", "503")
+        ingest().backfill(weekdays[0], weekdays[2], 1000)
+        assertEquals(listOf(1000.0, 500.0), closes()) // 공백 너머는 잇지 않는다
+        open.failDays.clear()
+        trade(weekdays[1], closes = listOf(1000.0 to 0.0))
+        ingest().backfill(weekdays[0], weekdays[2], 1000)
+        assertEquals(listOf(500.0, 500.0, 500.0), closes())
+    }
+
+    @Test
+    fun `backfill before the API start date is rejected`() {
+        org.junit.jupiter.api.assertThrows<IllegalArgumentException> { ingest().backfill(LocalDate.of(2009, 12, 31), LocalDate.of(2010, 1, 5), 100) }
+    }
+
+    @Test
+    fun `an index family missing one expected name stays unconfirmed`() {
+        trade(weekdays[0])
+        open.indexNames = open.indexNames + ("KOSPI" to listOf("코스피"))
+        val r = ingest().backfill(weekdays[0], weekdays[0], 1000)
+        assertEquals(0, r.daysDone)
+        assertEquals(LedgerEntry(1, false), ledger.get("krx_open", key("kospi_dd_trd", weekdays[0], "KOSPI")))
+        assertEquals(LedgerEntry(1, true), ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI")))
+        assertEquals(1, indexes.read("1001", weekdays[0], weekdays[0]).size)
+    }
+
+    @Test
+    fun `stocks succeed but index fails records and writes nothing`() {
+        trade(weekdays[0])
+        open.failIndexDays[weekdays[0]] = SourceUnavailableError("krx_open", "503")
+        val r = ingest().backfill(weekdays[0], weekdays[0], 1000)
+        assertEquals(1, r.failed.size)
+        assertTrue(daily.read(weekdays[0]).isEmpty())
+        assertNull(ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI")))
     }
 
     @Test

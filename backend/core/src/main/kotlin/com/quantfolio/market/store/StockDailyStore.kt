@@ -116,10 +116,16 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         )
     }
 
-    /** 주권 종류가 적재된 가장 최근 거래일. 없으면 null. */
-    fun latestKindDay(): LocalDate? = jdbc.query(
-        "SELECT max(trade_date) FROM stock_daily_snapshots WHERE stock_kind IS NOT NULL", emptyMap<String, Any>(),
-    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }.firstOrNull()
+    /** [from, to] 안에 주권 종류가 적재된 시장들. */
+    fun kindMarkets(from: LocalDate, to: LocalDate): Set<String> = jdbc.query(
+        "SELECT DISTINCT market FROM stock_daily_snapshots WHERE stock_kind IS NOT NULL AND trade_date BETWEEN :from AND :to AND market IS NOT NULL",
+        mapOf("from" to from, "to" to to),
+    ) { rs, _ -> rs.getString(1) }.toSet()
+
+    /** 어느 종목이든 행이 있는 거래일(오름차순). */
+    fun tradeDates(): List<LocalDate> = jdbc.query(
+        "SELECT DISTINCT trade_date FROM stock_daily_snapshots ORDER BY trade_date", emptyMap<String, Any>(),
+    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }
 
     /** 종목별 **최신** 주권 종류가 [kind] 인 [market] 종목(코드 오름차순). */
     fun symbolsWithKind(market: String, kind: String): List<String> = jdbc.query(

@@ -21,6 +21,12 @@ class BackfillRunner(
     @Value("\${quantfolio.backfill.call-budget:2000}") private val callBudget: Int,
 ) : ApplicationRunner {
     override fun run(args: ApplicationArguments) {
-        LoggerFactory.getLogger(javaClass).info("수동 백필 결과: {}", jobs.backfillOfficial(from, to, callBudget))
+        val log = LoggerFactory.getLogger(javaClass)
+        // 여기서 예외가 새면 워커 기동이 실패해 재기동이 반복되고 백업 등 다른 작업도 멈춘다 — 로그만 남기고 계속 간다.
+        try {
+            log.info("수동 백필 결과: {}", jobs.backfillOfficial(from, to, callBudget))
+        } catch (e: Exception) {
+            log.error("수동 백필 실패 [{}~{}]", from, to, e)
+        }
     }
 }

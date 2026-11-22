@@ -20,7 +20,6 @@ import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.DayOfWeek
 import java.time.LocalDate
-import java.time.YearMonth
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
@@ -53,40 +52,61 @@ class OfficialIngest(
         var done = 0
         var stopped = false
         val failed = mutableListOf<String>()
+
+        /** 수정주가를 다시 계산해야 하는 종목(오름차순 정렬 집합). 실행 끝에 한꺼번에 처리한다. */
+        val dirty = sortedSetOf<String>()
         fun report() = IngestReport(done, calls, stopped, failed)
     }
 
-    fun backfill(from: LocalDate, to: LocalDate, callBudget: Int): IngestReport =
-        runDays(weekdays(from, to), callBudget) { day -> daily.latestKindDay()?.let { YearMonth.from(it).isBefore(YearMonth.from(day)) } != false }
+    fun backfill(from: LocalDate, to: LocalDate, callBudget: Int): IngestReport {
+        // 제공 시작일 앞의 평일은 0행이 "휴장"으로 영구 확정되므로 요청 자체를 거부한다.
+        require(!from.isBefore(API_START)) { "KRX Open API 는 $API_START 부터 제공한다: from=$from" }
+        return runDays(weekdays(from, to), callBudget) { d ->
+            val loaded = daily.kindMarkets(d.withDayOfMonth(1), d.withDayOfMonth(d.lengthOfMonth()))
+            MARKETS.filter { it !in loaded }
+        }
+    }
 
     /** [day] 와 그 앞 [CATCH_UP_DAYS]일 안의 미확정 평일을 마저 받는다(상한이 있어 무한히 거슬러 가지 않는다). */
     fun daily(day: LocalDate): IngestReport =
         runDays(weekdays(day.minusDays(CATCH_UP_DAYS), day), Int.MAX_VALUE) { d ->
-            daily.latestKindDay()?.isBefore(d.minusDays(BASE_MAX_AGE_DAYS)) != false
+            val loaded = daily.kindMarkets(d.minusDays(BASE_MAX_AGE_DAYS), d)
+            MARKETS.filter { it !in loaded }
         }
 
     private fun weekdays(from: LocalDate, to: LocalDate): List<LocalDate> =
         generateSequence(from) { it.plusDays(1) }.takeWhile { !it.isAfter(to) }
             .filter { it.dayOfWeek != DayOfWeek.SATURDAY && it.dayOfWeek != DayOfWeek.SUNDAY }.toList()
 
-    private fun runDays(days: List<LocalDate>, budget: Int, baseNeeded: (LocalDate) -> Boolean): IngestReport {
+    /** baseMarkets: 그날 기본정보를 받아야 하는 시장(그 달·최근 30일에 주권 종류가 아직 없는 시장). */
+    private fun runDays(days: List<LocalDate>, budget: Int, baseMarkets: (LocalDate) -> List<String>): IngestReport {
         val run = Run(budget)
-        for (day in days) {
-            if (isDone(day)) continue
-            val needBase = baseNeeded(day)
-            if (run.calls.toLong() + DAY_CALLS + (if (needBase) BASE_CALLS else 0) > budget) {
-                run.stopped = true
-                break
+        try {
+            for (day in days) {
+                if (isDone(day)) continue
+                val base = baseMarkets(day)
+                if (run.calls.toLong() + DAY_CALLS + base.size > budget) {
+                    run.stopped = true
+                    break
+                }
+                try {
+                    if (ingestDay(day, base, run)) run.done++
+                } catch (e: DataSourceError) {
+                    run.failed += "$day: ${e.message}"
+                    log.warn("공식 적재 실패 {}: {}", day, e.message)
+                    if (e is SourceAuthError || e is SourceQuotaError) break // 뒤 날짜도 같은 이유로 실패한다
+                }
             }
-            try {
-                if (ingestDay(day, needBase, run)) run.done++
-            } catch (e: DataSourceError) {
-                run.failed += "$day: ${e.message}"
-                log.warn("공식 적재 실패 {}: {}", day, e.message)
-                if (e is SourceAuthError || e is SourceQuotaError) break // 뒤 날짜도 같은 이유로 실패한다
-            }
+        } finally {
+            rebuildDirty(run)
         }
         return run.report()
+    }
+
+    private fun rebuildDirty(run: Run) {
+        if (run.dirty.isEmpty()) return
+        val gaps = marketGaps()
+        for (symbol in run.dirty) rebuild(symbol, gaps)
     }
 
     private fun key(service: String, day: LocalDate, market: String) = "$service|${day.format(YMD)}|$market"
@@ -94,7 +114,7 @@ class OfficialIngest(
     private fun isDone(day: LocalDate) = LEDGER_KEYS.all { (service, market) -> ledger.get(SOURCE, key(service, day, market))?.final == true }
 
     /** @return 5개 호출이 모두 확정(휴장 확정 포함)이면 true. 예외가 나면 쓴 것이 없다. */
-    private fun ingestDay(day: LocalDate, needBase: Boolean, run: Run): Boolean {
+    private fun ingestDay(day: LocalDate, baseMarkets: List<String>, run: Run): Boolean {
         val stocks = MARKETS.associateWith { run.calls++; api.stockDaily(day, it) }
         val idx = INDEX_CODES.keys.associateWith { run.calls++; api.indexDaily(day, it) }
         for ((family, rows) in idx) {
@@ -104,6 +124,11 @@ class OfficialIngest(
                 throw SourceSchemaError(SOURCE, "지수 계열 $family 응답에 기대 지수(${expected.keys})가 없다: ${rows.take(3).map { it.name }}")
             }
         }
+        // 기대 지수 일부만 있으면(이름 변경 의심) 그 계열은 미확정으로 둔다.
+        val partial = idx.filter { (family, rows) ->
+            val expected = INDEX_CODES.getValue(family)
+            expected.isNotEmpty() && rows.isNotEmpty() && !rows.map { it.name.trim() }.containsAll(expected.keys)
+        }.keys
         val counts = LEDGER_KEYS.associateWith { (service, market) ->
             when (service) {
                 in STOCK_SERVICES.values -> stocks.getValue(market).size
@@ -120,13 +145,14 @@ class OfficialIngest(
                 val code = INDEX_CODES.getValue(family)[r.name.trim()] ?: continue
                 indexes.write(code, listOf(IndexBar(day, r.open, r.high, r.low, r.close)), r.name.trim())
             }
-            appendPrices(day, dailyRows)
-            if (needBase && dailyRows.isNotEmpty()) ingestBase(day, dailyRows, run)
+            appendPrices(day, dailyRows, run)
+            if (dailyRows.isNotEmpty()) ingestBase(day, dailyRows, baseMarkets, run)
         }
-        for ((k, n) in counts) {
-            ledger.put(SOURCE, key(k.first, day, k.second), n, final = n > 0 || (holiday && oldEnough))
+        val finals = counts.mapValues { (k, n) ->
+            (n > 0 && !(INDEX_SERVICES[k.second] == k.first && k.second in partial)) || (holiday && oldEnough)
         }
-        return counts.all { (_, n) -> n > 0 } || (holiday && oldEnough)
+        for ((k, n) in counts) ledger.put(SOURCE, key(k.first, day, k.second), n, final = finals.getValue(k))
+        return finals.values.all { it }
     }
 
     private fun OpenDailyRow.toStockDaily(market: String) = StockDaily(
@@ -134,51 +160,82 @@ class OfficialIngest(
         volume = volume, tradingValue = tradingValue, marketCap = marketCap, shares = shares,
     )
 
-    /** 주권 종류. 실패해도 그날 시세 적재는 유지하고(다음 처리일에 다시 시도), 사유만 보고한다. */
-    private fun ingestBase(day: LocalDate, dailyRows: List<StockDaily>, run: Run) {
+    /** 주권 종류. 시장별로 받고, 실패해도 그날 시세 적재는 유지하며(그 시장은 다음 처리일에 다시) 사유만 보고한다. */
+    private fun ingestBase(day: LocalDate, dailyRows: List<StockDaily>, markets: List<String>, run: Run) {
         val present = dailyRows.map { it.symbol }.toSet()
-        try {
-            for (market in MARKETS) {
+        for (market in markets) {
+            try {
                 run.calls++
                 val rows = api.stockBase(day, market)
                 daily.write(day, rows.filter { it.symbol in present }.map { StockDaily(it.symbol, market, stockKind = it.stockKind) })
                 ledger.put(SOURCE, key(BASE_SERVICES.getValue(market), day, market), rows.size, final = rows.isNotEmpty())
+            } catch (e: DataSourceError) {
+                run.failed += "$day $market 기본정보: ${e.message}"
+                log.warn("기본정보 적재 실패 {} {}: {}", day, market, e.message)
             }
-        } catch (e: DataSourceError) {
-            run.failed += "$day 기본정보: ${e.message}"
-            log.warn("기본정보 적재 실패 {}: {}", day, e.message)
         }
     }
 
     /**
-     * 그날 봉을 붙인다. 전일 저장 종가와 기준가(종가−전일대비)가 어긋나면(액면분할 등 권리락) 그 종목 전체를 다시 계산한다.
-     * 어긋남 = r(종가/기준가) 와 원주가비(종가/전일 저장 종가)의 상대차 > [ACTION_TOLERANCE]. 가격은 원 단위 정수라
-     * 같은 날 체인에서는 두 비가 정확히 같다(부동소수 잡음 ~1e-15) — 1e-6 은 그 잡음 위, 100만원대 종목의 1원 차이(1e-6)까지 잡는 하한이다.
+     * 그날 봉을 붙인다. 직전 저장 봉이 시장의 바로 앞 거래일일 때만 기준가(종가-전일대비)와 전일 저장 종가를 비교해
+     * 어긋나면(액면분할 등 권리락) dirty 로 표시한다. 어긋남 = r(종가/기준가) 와 원주가비(종가/전일 저장 종가)의 상대차
+     * > [ACTION_TOLERANCE]. 가격이 원 단위 정수라 정상일에는 두 비가 정확히 같고 부동소수 잡음은 약 1e-15 다 —
+     * 1e-6 은 그 잡음 위, 100만원대 종목의 1원 차이까지 잡는 하한이다.
+     * 직전 봉이 바로 앞 거래일이 아니거나(공백·정지) 이 날짜보다 늦은 봉이 이미 있으면 비교할 수 없으므로 무조건 dirty.
      */
-    private fun appendPrices(day: LocalDate, rows: List<StockDaily>) {
+    private fun appendPrices(day: LocalDate, rows: List<StockDaily>, run: Run) {
         val time = day.atStartOfDay().toInstant(ZoneOffset.UTC)
-        val prevClose = ticks.lastCloses(rows.map { it.symbol }, time)
+        val symbols = rows.map { it.symbol }
+        val prev = ticks.lastBars(symbols, time)
+        val later = ticks.symbolsWithBarsAfter(symbols, time)
+        val prevTime = previousTradingDay(day)?.atStartOfDay()?.toInstant(ZoneOffset.UTC)
+        val bars = mutableListOf<Pair<String, Bar>>()
         for (r in rows) {
             val o = r.open; val h = r.high; val l = r.low; val c = r.close; val v = r.volume
             if (o == null || h == null || l == null || c == null || v == null) continue
-            val prev = prevClose[r.symbol]
-            val base = r.prevDiff?.let { c - it }
-            if (prev != null && base != null && base > 0 && prev > 0) {
-                val ratioAdjusted = c / base
-                val ratioRaw = c / prev
-                if (abs(ratioAdjusted / ratioRaw - 1) > ACTION_TOLERANCE) {
-                    rebuildAdjusted(r.symbol)
-                    continue
+            val p = prev[r.symbol]
+            val dirty = when {
+                r.symbol in later -> true
+                p == null -> false
+                p.first != prevTime -> true
+                else -> {
+                    val base = r.prevDiff?.let { c - it }
+                    base != null && base > 0 && p.second > 0 && abs((c / base) / (c / p.second) - 1) > ACTION_TOLERANCE
                 }
             }
-            ticks.upsert(r.symbol, listOf(Bar(time, o, h, l, c, v)))
+            if (dirty) run.dirty += r.symbol
+            bars += r.symbol to Bar(time, o, h, l, c, v)
         }
+        ticks.upsertMany(bars)
     }
 
+    /** 원장상 day 의 바로 앞 거래일. 앞 평일이 원장에 없으면(실패·미적재) null — 공백이다. 0행으로 기록된 평일은 휴장으로 건너뛴다. */
+    private fun previousTradingDay(day: LocalDate): LocalDate? {
+        var d = day
+        repeat(PREV_DAY_LOOKBACK) {
+            d = d.minusDays(1)
+            if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) return@repeat
+            val e = ledger.get(SOURCE, stockKey(d)) ?: return null
+            if (e.rowCount > 0) return d
+        }
+        return null
+    }
+
+    private fun stockKey(day: LocalDate) = key(STOCK_SERVICES.getValue("KOSPI"), day, "KOSPI")
+
+    /** 앞 거래일과의 사이에 원장에 없는 평일(못 받은 날)이 끼어 있는 거래일들 — 그 날의 전일대비로 공백 너머를 잇지 않는다. */
+    private fun marketGaps(): Set<LocalDate> =
+        daily.tradeDates().zipWithNext()
+            .filter { (a, b) -> weekdays(a.plusDays(1), b.minusDays(1)).any { ledger.get(SOURCE, stockKey(it)) == null } }
+            .map { it.second }.toSet()
+
     /** 저장된 원주가·전일대비로 이 종목의 수정주가 전체를 다시 만들어 price_ticks 를 바꾼다. */
-    fun rebuildAdjusted(symbol: String) {
+    fun rebuildAdjusted(symbol: String) = rebuild(symbol, marketGaps())
+
+    private fun rebuild(symbol: String, gaps: Set<LocalDate>) {
         val rows = daily.readSymbol(symbol)
-        ticks.replaceFrom(symbol, AdjustedBars.build(rows.map { it.second }, rows.map { it.first }))
+        val input = rows.map { (d, r) -> if (d in gaps) r.copy(prevDiff = null) else r }
+        ticks.replaceFrom(symbol, AdjustedBars.build(input, rows.map { it.first }))
     }
 
     /**
@@ -247,7 +304,10 @@ class OfficialIngest(
             MARKETS.map { STOCK_SERVICES.getValue(it) to it } + INDEX_SERVICES.map { (family, svc) -> svc to family }
 
         private const val DAY_CALLS = 5
-        private const val BASE_CALLS = 2
+        private const val PREV_DAY_LOOKBACK = 10
+
+        /** KRX Open API 일별 데이터 제공 시작일. */
+        val API_START: LocalDate = LocalDate.of(2010, 1, 4)
         private const val CATCH_UP_DAYS = 14L
         private const val BASE_MAX_AGE_DAYS = 30L
         private const val HOLIDAY_SETTLE_DAYS = 7L

@@ -22,8 +22,11 @@ fun List<Bar>.closeSeries(): Series = Series(map { it.date }, DoubleArray(size) 
 @Component
 class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val tx: TransactionTemplate) {
     /** 같은 (time, symbol) 은 새 값으로 덮어쓴다(소스가 수정주가를 갱신하므로). 적재 행 수 반환. */
-    fun upsert(symbol: String, bars: List<Bar>): Int {
-        if (bars.isEmpty()) return 0
+    fun upsert(symbol: String, bars: List<Bar>): Int = upsertMany(bars.map { symbol to it })
+
+    /** 여러 종목의 봉을 한 배치로 upsert. */
+    fun upsertMany(items: List<Pair<String, Bar>>): Int {
+        if (items.isEmpty()) return 0
         jdbc.batchUpdate(
             """
             INSERT INTO price_ticks (time, symbol, open, high, low, close, volume)
@@ -31,7 +34,7 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val t
             ON CONFLICT (time, symbol) DO UPDATE SET
               open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close, volume = EXCLUDED.volume
             """,
-            bars.map { b ->
+            items.map { (symbol, b) ->
                 mapOf(
                     "time" to Timestamp.from(b.time), "symbol" to symbol,
                     "open" to BigDecimal(b.open.toString()), "high" to BigDecimal(b.high.toString()),
@@ -40,7 +43,7 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val t
                 )
             }.toTypedArray(),
         )
-        return bars.size
+        return items.size
     }
 
     /** [bars] 의 첫 시각 이후 이 종목 봉을 지우고 [bars] 로 바꾼다(수정주가 재계산용). 그 앞 봉은 건드리지 않는다. */
@@ -52,13 +55,22 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val t
         }
     }
 
-    /** 종목별 [before] 이전의 가장 최근 종가. 봉이 없는 종목은 결과에 없다. */
-    fun lastCloses(symbols: List<String>, before: Instant): Map<String, Double> {
+    /** 종목별 [before] 이전의 가장 최근 봉(시각, 종가). 봉이 없는 종목은 결과에 없다. */
+    fun lastBars(symbols: List<String>, before: Instant): Map<String, Pair<Instant, Double>> {
         if (symbols.isEmpty()) return emptyMap()
         return jdbc.query(
-            "SELECT DISTINCT ON (symbol) symbol, close FROM price_ticks WHERE symbol IN (:symbols) AND time < :before ORDER BY symbol, time DESC",
+            "SELECT DISTINCT ON (symbol) symbol, time, close FROM price_ticks WHERE symbol IN (:symbols) AND time < :before ORDER BY symbol, time DESC",
             mapOf("symbols" to symbols, "before" to Timestamp.from(before)),
-        ) { rs, _ -> rs.getString(1) to rs.getBigDecimal(2).toDouble() }.toMap()
+        ) { rs, _ -> rs.getString(1) to (rs.getTimestamp(2).toInstant() to rs.getBigDecimal(3).toDouble()) }.toMap()
+    }
+
+    /** [symbols] 중 [after] 보다 늦은 봉이 이미 있는 종목. */
+    fun symbolsWithBarsAfter(symbols: List<String>, after: Instant): Set<String> {
+        if (symbols.isEmpty()) return emptySet()
+        return jdbc.query(
+            "SELECT DISTINCT symbol FROM price_ticks WHERE symbol IN (:symbols) AND time > :after",
+            mapOf("symbols" to symbols, "after" to Timestamp.from(after)),
+        ) { rs, _ -> rs.getString(1) }.toSet()
     }
 
     /** [start, end] 구간 일봉, 시간순. */
