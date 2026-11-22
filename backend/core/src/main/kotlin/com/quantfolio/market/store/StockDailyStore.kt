@@ -154,6 +154,18 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         mapOf("day" to day, "market" to market),
     ) { rs, _ -> CapKind(rs.getString("symbol"), rs.getLong("market_cap"), rs.getString("stock_kind")) }
 
+    /** [from, to] 의 [market] 시총 행들과 각 행 날짜 기준 종목별 최신 주권 종류(이월). 구간 앞의 기본정보 적재일도 이월에 쓴다. */
+    fun capsWithKindRange(from: LocalDate, to: LocalDate, market: String): List<Pair<LocalDate, CapKind>> = jdbc.query(
+        """
+        SELECT trade_date, symbol, market_cap, max(stock_kind) OVER (PARTITION BY symbol, grp) AS kind FROM (
+          SELECT trade_date, symbol, market, market_cap, stock_kind,
+                 count(stock_kind) OVER (PARTITION BY symbol ORDER BY trade_date) AS grp
+            FROM stock_daily_snapshots WHERE trade_date <= :to) t
+         WHERE trade_date >= :from AND market = :market AND market_cap IS NOT NULL
+        """,
+        mapOf("from" to from, "to" to to, "market" to market),
+    ) { rs, _ -> rs.getObject("trade_date", LocalDate::class.java) to CapKind(rs.getString("symbol"), rs.getLong("market_cap"), rs.getString("kind")) }
+
     fun delete(day: LocalDate) {
         jdbc.update("DELETE FROM stock_daily_snapshots WHERE trade_date = :day", mapOf("day" to day))
     }

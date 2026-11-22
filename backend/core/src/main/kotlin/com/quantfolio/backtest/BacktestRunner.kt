@@ -184,12 +184,13 @@ class BacktestRunner(
     private fun pitPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> {
         val source = Cfg.get(rule, "source", "fixed").toString()
         if (source == "fixed") return null to null
+        if (source == "KOSPI_MCAP") return mcapPool(rule, start, end)
         val minCapWon = rule?.get("min_market_cap")?.takeIf { Cfg.truthy(it) }?.let { Cfg.num(it).toLong() * 100_000_000L } ?: 0L
         val byMonth = LinkedHashMap<Pair<Int, Int>, List<String>>()
         var d = start.withDayOfMonth(1)
         while (!d.isAfter(end.withDayOfMonth(1))) {
-            var members = if (source == "KOSPI_MCAP") mcap.members(d, (rule?.get("pick") as? Number)?.toInt() ?: 20) else localMembers(source, d)
-            if (source != "KOSPI_MCAP" && minCapWon > 0 && members.isNotEmpty()) {
+            var members = localMembers(source, d)
+            if (minCapWon > 0 && members.isNotEmpty()) {
                 val caps = krx.marketCaps(d)
                 if (caps.isNotEmpty()) members = members.filter { (caps[it] ?: 0L) >= minCapWon }
             }
@@ -198,9 +199,17 @@ class BacktestRunner(
         }
         val union = byMonth.values.flatten().toSortedSet().toList()
         if (union.isEmpty()) {
-            log.error("PIT 후보풀이 비었다(source={}, {}~{}, {}개월 전부 0종목) — KRX 인증 실패 가능성. 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", source, start, end, byMonth.size)
+            log.error("PIT 후보풀이 비었다(source={}, {}~{}, {}개월 전부 0종목) — 로컬 index_constituents 적재 확인. 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", source, start, end, byMonth.size)
         }
         return union to { day -> byMonth[day.year to day.monthValue].orEmpty() }
+    }
+
+    /** KOSPI_MCAP: 결정일마다 직전 거래일 시총 상위 pick(월 단위 아님). min_market_cap 은 이 소스에서 적용하지 않는다. */
+    private fun mcapPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> {
+        if (Cfg.truthy(rule?.get("min_market_cap"))) log.warn("KOSPI_MCAP 소스는 min_market_cap 을 적용하지 않는다(무시됨).")
+        val pool = mcap.pool(start, end, (rule?.get("pick") as? Number)?.toInt() ?: 20)
+        if (pool.union.isEmpty()) log.error("KOSPI_MCAP 후보풀이 비었다({}~{}) — 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", start, end)
+        return pool.union to pool.members
     }
 
     private fun localMembers(index: String, day: LocalDate): List<String> =
