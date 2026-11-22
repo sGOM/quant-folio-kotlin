@@ -1,6 +1,7 @@
 package com.quantfolio.market.dart
 
 import com.quantfolio.common.MarketClock
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -42,8 +43,10 @@ class DartFinancials(
     /**
      * 메모리 → 원장(확정 0행이면 null) → 저장소 확정본 → 원격. 원격 결과는 저장하고 원장에 기록한다.
      * 무자료(013)는 확정일이 지났을 때만 '확정 무자료'로 굳힌다(정정공시로 나중에 생길 수 있다).
+     *
+     * @param remote false 면 원격을 부르지 않는다(백테스트·엔진 로컬 전용). 원장·저장소 확정본이 없으면 [MarketDataNotLoaded].
      */
-    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String): List<Map<String, Any?>>? {
+    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean = true): List<Map<String, Any?>>? {
         val key = listOf(corp, year, reprt, fsDiv)
         accountsCache[key]?.let { return it }
         val cacheKey = CacheKeys.of(corp, year, reprt, fsDiv)
@@ -51,6 +54,7 @@ class DartFinancials(
         if (entry != null && entry.final && entry.rowCount == 0) return null
         val stored = store.read(corp, year, reprt, fsDiv)
         if (stored != null && stored.second) return stored.first.also { accountsCache[key] = it }
+        if (!remote) throw MarketDataNotLoaded("dart_accounts", cacheKey)
 
         val acc = client.accounts(corp, year, reprt, fsDiv)
         if (!acc.isNullOrEmpty()) {

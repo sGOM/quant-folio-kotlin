@@ -2,6 +2,7 @@ package com.quantfolio.market.dart
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.TestApp
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.HttpBytes
 import com.quantfolio.market.source.SourceQuotaError
@@ -63,6 +64,14 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
     }
 
     private fun accountCalls() = http.calls.count { it.url.endsWith("fnlttSinglAcntAll.json") }
+
+    @Test
+    fun dartLocalOnlyThrowsWhenLedgerHasNoFinalEntry() {
+        assertThrows<MarketDataNotLoaded> { fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false) }
+        assertEquals(0, accountCalls())
+        ledger.put("dart_accounts", com.quantfolio.market.store.CacheKeys.of(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS"), 0, true)
+        assertNull(fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false))
+    }
 
     @Test
     fun cachedAccountsRemoteThenStoreThenMemory() {

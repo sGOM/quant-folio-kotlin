@@ -14,6 +14,7 @@ import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.store.StockPeriodStore
 import com.quantfolio.market.store.StoreCache
 import org.slf4j.LoggerFactory
+import org.springframework.context.annotation.Primary
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -39,6 +40,7 @@ interface SnapshotSource {
 }
 
 @Component
+@Primary // 로컬 전용 LocalSnapshots(@Qualifier("local")) 가 생겨도 기존 주입처는 이쪽을 받는다
 class KrxSnapshots(
     private val api: KrxStockApi,
     private val cache: StoreCache,
