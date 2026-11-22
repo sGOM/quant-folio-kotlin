@@ -49,9 +49,10 @@ class MetricsServicesTest {
         var snapshot: List<StockDaily>? = null
         var tickers: () -> List<String> = { emptyList() }
         var periodError: Exception? = null
+        var periodErrorMarkets: Set<String>? = null // null 이면 전 시장
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = emptyList<StockDaily>()
         override fun marketCap(asOf: LocalDate, markets: List<String>) = caps
-        override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periodError?.let { throw it } ?: periods
+        override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periodError?.takeIf { periodErrorMarkets?.let { m -> markets.any { it in m } } ?: true }?.let { throw it } ?: periods
         override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = emptyList<StockPeriod>()
         override fun marketOhlcvSnapshot(day: LocalDate, market: String) = snapshot
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = indexError?.let { throw it } ?: index
@@ -125,8 +126,21 @@ class MetricsServicesTest {
             periodError = MarketDataNotLoaded("stock_daily", "KOSPI")
         }
         val service = PanicService(src, common, QuantfolioProperties(cacheDir = dir.toString()))
-        assertThrows<MarketDataNotLoaded> { service.compute("KOSPI", asOf) }
         assertThrows<MarketDataNotLoaded> { service.series("KOSPI", asOf.minusDays(10), asOf) }
+    }
+
+    /** UI 화면은 시장 하나의 미적재로 통째로 내려가지 않는다 — 그 시장만 unavailable. */
+    @Test
+    fun panicScreenMarksOnlyTheUnloadedMarketUnavailable(@TempDir dir: Path) {
+        val src = FakeSource().apply {
+            index = (0 until 30).map { IndexBar(asOf.minusDays(30L - it), high = 101.0, low = 99.0, close = 100.0, tradingValue = 1_000) }
+            periods = listOf(StockPeriod("000010", changePct = -1.0, volume = 10))
+            periodError = MarketDataNotLoaded("stock_daily", "KOSDAQ")
+            periodErrorMarkets = setOf("KOSDAQ")
+        }
+        val out = PanicService(src, common, QuantfolioProperties(cacheDir = dir.toString())).compute("ALL", asOf)
+        assertEquals(listOf("KOSPI"), out.items.map { it.market })
+        assertEquals(listOf("KOSDAQ"), out.unavailable)
     }
 
     @Test

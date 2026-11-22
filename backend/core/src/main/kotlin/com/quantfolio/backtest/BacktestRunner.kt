@@ -260,31 +260,36 @@ class BacktestRunner(
         if (Cfg.get(selection, "method", "momentum") != "score") return
         val w = factorWeights(selection)
         for (k in listOf("flow", "pead")) {
-            if ((w[k] as? Number)?.toDouble()?.let { it > 0 } == true) {
+            if ((w[k] ?: 0.0) > 0) {
                 val input = if (k == "flow") "투자자별 순매수" else "공시 달력"
                 throw BacktestInputError("$k 팩터는 1단계(공식 경로)에서 지원하지 않습니다: 입력 데이터($input)를 공식 출처에서 구할 수 없습니다. 가중치를 0 으로 두세요.")
             }
         }
     }
 
-    /** [FactorScores.compute] 와 같은 유효 가중치: 비었으면 기본값 전체, 아니면 없는 키만 기본값. */
-    private fun factorWeights(selection: Map<String, Any?>): Map<String, Any?> {
+    /**
+     * [FactorScores.compute] 와 같은 유효 가중치: 비었으면 기본값 전체, 아니면 없는 키만 기본값.
+     * 엔진은 `Cfg.num`(숫자만)으로 읽으므로 숫자가 아닌 값("0.5" 등)은 거절·커버리지 검사를 피해 가지 않게 여기서 입력 오류로 막는다.
+     */
+    private fun factorWeights(selection: Map<String, Any?>): Map<String, Double> {
         @Suppress("UNCHECKED_CAST")
         val fw = (selection["factor_weights"] as? Map<String, Any?>).orEmpty()
-        return if (fw.isEmpty()) FactorScores.DEFAULT_WEIGHTS else FactorScores.DEFAULT_WEIGHTS + fw
+        val given = fw.mapValues { (k, v) -> (v as? Number)?.toDouble() ?: throw BacktestInputError("factor_weights.$k 는 숫자여야 합니다: $v") }
+        return if (given.isEmpty()) FactorScores.DEFAULT_WEIGHTS else FactorScores.DEFAULT_WEIGHTS + given
     }
 
     /**
      * score 선정용 시점별 펀더멘털(로컬 전용): 밸류(로컬 시총·DART 로 계산) + 퀄리티(로컬 DART, PIT) [+ 중립화 축 시총·업종] [+ 잔차 모멘텀].
      * 가중치가 있는 팩터는 리밸런싱일마다 후보의 [MIN_FACTOR_COVERAGE] 이상이 입력을 가져야 한다 — 미달이면 [MarketDataNotLoaded]
-     * (후보의 절반 이상 점수가 없으면 순위가 결측 패턴에 좌우된다. 임계값은 측정 후 조정 가능). 조회 실패는 숨기지 않고 전파한다.
+     * (후보의 절반 이상 점수가 없으면 순위가 결측 패턴에 좌우된다. 임계값은 측정 후 조정 가능). 후보가 없는 날은 검사하지 않는다.
+     * 미적재([MarketDataNotLoaded])는 숨기지 않고 전파하고, 잔차 모멘텀 계산 실패만 그 컬럼 결측으로 저하한다.
      */
     private fun fundamentalsProvider(config: Map<String, Any?>, panel: Panel, benchmark: Series?): FundamentalsProvider {
         val sel = Cfg.map(config, "selection")
         val useTtm = Cfg.get(config, "financial_period", "annual") == "ttm"
         val neutralize = Cfg.get(sel, "neutralize", "none").toString()
         val fw = factorWeights(sel)
-        fun weight(k: String) = (fw[k] as? Number)?.toDouble() ?: 0.0
+        fun weight(k: String) = fw[k] ?: 0.0
         val closes = panel.symbols.associateWith { panel.column(it) }
         return { asOf, codes ->
             val norm = codes.map { it.padStart(6, '0') }
@@ -295,24 +300,25 @@ class BacktestRunner(
                 any = true
             }
             fun requireCoverage(factor: String, have: Int) {
-                val coverage = if (norm.isEmpty()) 0.0 else have.toDouble() / norm.size
+                if (norm.isEmpty()) return // 후보 없음은 미적재가 아니다(빈 유니버스는 기존 동작)
+                val coverage = have.toDouble() / norm.size
                 if (coverage < MIN_FACTOR_COVERAGE) {
                     throw MarketDataNotLoaded("factor_coverage", "$factor $asOf coverage=${(coverage * 100).toInt()}% ($have/${norm.size}, 최소 ${(MIN_FACTOR_COVERAGE * 100).toInt()}%)")
                 }
             }
             if (weight("value") > 0) {
                 val byCode = snapshots.fundamentals(asOf, listOf("KOSPI", "KOSDAQ")).associateBy { it.symbol }
-                requireCoverage("value", norm.count { c -> byCode[c]?.let { it.per != null || it.pbr != null || it.div != null } == true })
                 for (c in norm) {
                     put(c, "PER", byCode[c]?.per)
                     put(c, "PBR", byCode[c]?.pbr)
                     put(c, "DIV", byCode[c]?.div)
                 }
+                requireCoverage("value", norm.count { c -> FactorScores.VALUE_INPUTS.any { rows[c]?.get(it) != null } })
             }
             if (weight("quality") > 0 || weight("growth") > 0) {
                 val quality = dart.metricsBySymbol(norm, asOf, useTtm, remote = false)
-                if (weight("quality") > 0) requireCoverage("quality", norm.count { c -> FactorScores.QUALITY_COLS.any { quality[c]?.get(it) != null } })
-                if (weight("growth") > 0) requireCoverage("growth", norm.count { c -> GROWTH_COLS.any { quality[c]?.get(it) != null } })
+                if (weight("quality") > 0) requireCoverage("quality", norm.count { c -> FactorScores.QUALITY_INPUTS.any { quality[c]?.get(it) != null } })
+                if (weight("growth") > 0) requireCoverage("growth", norm.count { c -> FactorScores.GROWTH_INPUTS.any { quality[c]?.get(it) != null } })
                 for (k in FactorScores.QUALITY_COLS) {
                     if (quality.values.none { k in it }) continue
                     for (c in norm) put(c, k, quality[c]?.get(k))
@@ -344,7 +350,6 @@ class BacktestRunner(
         private const val MAX_DIVIDEND_WARNINGS = 20
         private const val CAP_LOOKBACK_DAYS = 10L
         private const val MIN_FACTOR_COVERAGE = 0.5
-        private val GROWTH_COLS = listOf("op_growth", "net_growth", "turnaround")
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
 
         /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */

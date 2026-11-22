@@ -36,7 +36,9 @@ class PanicService(@Qualifier("local") private val snapshots: SnapshotSource, pr
             val item = try {
                 oneMarket(mkt, ticker, asOf, prev, histStart)
             } catch (e: MarketDataNotLoaded) {
-                throw e
+                // 시장 하나의 공백이 다른 시장 결과까지 지우지 않게 unavailable 로 둔다(전파는 백테스트용 series 만).
+                log.warn("패닉 지표: 시장 데이터 미적재 (market={}): kind={} key={} {}", mkt, e.kind, e.key, e.missing)
+                null
             } catch (e: Exception) {
                 log.warn("패닉 지표 계산 오류 (market={}): {}", mkt, e.message)
                 null

@@ -29,6 +29,14 @@ object FactorScores {
     /** DART 재무 품질 컬럼. 조회 측(백테스트·실매매·추천)이 이 순서로 프레임에 채운다 — 순서가 결과 dict 순서. */
     val QUALITY_COLS = listOf("roe", "debt_ratio", "fcf", "f_score", "op_growth", "net_growth", "turnaround")
 
+    /**
+     * 카테고리 점수([compute])에 실제로 쓰이는 입력 컬럼. 입력 커버리지 검사(BacktestRunner)가 같은 정의를 쓴다 —
+     * compute 의 value·quality·growth 계산을 바꾸면 여기도 함께 바꾼다. (QUALITY_COLS 에는 growth 입력이 섞여 있어 quality 입력이 아니다.)
+     */
+    val VALUE_INPUTS = listOf("PER", "PBR", "DIV")
+    val QUALITY_INPUTS = listOf("roe", "debt_ratio", "fcf", "f_score")
+    val GROWTH_INPUTS = listOf("op_growth", "net_growth", "turnaround")
+
     /** 백테스트가 fundamentals 에서 옮겨 담는 전 컬럼(원본 dict 순서). 팩터를 추가하면 여기와 compute 를 함께 고친다. */
     val FUNDAMENTAL_COLS = listOf("PER", "PBR", "DIV") + QUALITY_COLS + listOf("market_cap", "flow_norm", "resid_mom", "pead_sue")
 
@@ -66,7 +74,7 @@ object FactorScores {
         val fcf = frame.col("fcf")
         val fcfPositive = DoubleArray(fcf.size) { if (fcf[it].isNaN()) Double.NaN else if (fcf[it] > 0) 1.0 else 0.0 }
         val quality = meanOf(zc("roe"), zc("debt_ratio", invert = true), fill(winsorizeZ(fcfPositive)), zc("f_score"))
-        val growth = meanOf(zc("op_growth"), zc("net_growth"), zc("turnaround"))
+        val growth = meanOf(*GROWTH_INPUTS.map { zc(it) }.toTypedArray())
 
         val scores = linkedMapOf(
             "score_momentum" to momentum, "score_value" to value, "score_lowvol" to lowvol, "score_quality" to quality,

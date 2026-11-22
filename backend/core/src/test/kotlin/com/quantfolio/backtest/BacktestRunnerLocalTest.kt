@@ -38,6 +38,7 @@ import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -57,7 +58,7 @@ class BacktestRunnerLocalTest(
     @Autowired private val daily: StockDailyStore,
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired private val ticks: PriceTickStore,
-    @Autowired private val dartStore: DartFinancialStore,
+    @Autowired jdbc: NamedParameterJdbcTemplate,
     @Autowired private val dividends: DividendStore,
     @Autowired private val constituents: IndexConstituentStore,
     @Autowired private val sectors: SectorMapSnapshotRepository,
@@ -65,6 +66,8 @@ class BacktestRunnerLocalTest(
     @Autowired private val dividendFeed: DividendFeed,
 ) {
     private val clock = Clock.fixed(Instant.parse("2330-10-19T01:00:00Z"), ZoneOffset.UTC)
+    // 재무 확정 판정이 이 시계(2330년)를 쓰도록 직접 만든다(운영 시계면 2328년 보고서가 미확정이다).
+    private val dartStore = DartFinancialStore(jdbc, clock)
     private val ledger = InMemoryFetchLedger()
     private val http = FakeExternalHttp() // DART·Naver 원격 — 호출되면 실패
     private val krxTransport = FakeKrxTransport() // KRX MDC — 호출되면 실패
@@ -85,8 +88,8 @@ class BacktestRunnerLocalTest(
     )
 
     private val symbols = listOf("L10001", "L10002", "L10003", "L10004", "L10005")
-    private val start = LocalDate.of(2330, 6, 3)
-    private val end = LocalDate.of(2330, 9, 30)
+    private val start = LocalDate.of(2330, 2, 3)
+    private val end = LocalDate.of(2330, 6, 30)
     private val loadFrom = start.minusDays(500)
     private val tradingDays = generateSequence(loadFrom) { it.plusDays(1) }.takeWhile { !it.isAfter(end) }.filter { it.dayOfWeek.value <= 5 }.toList()
 
@@ -110,6 +113,7 @@ class BacktestRunnerLocalTest(
             )
         }
         dartStore.writeCorpCodes(symbols.associateWith { "C$it" })
+        for (y in 2327..2329) symbols.forEach { dartStore.delete("C$it", y, "11011", "CFS") }
         http.calls.clear()
         krxTransport.calls.clear()
     }
@@ -156,6 +160,51 @@ class BacktestRunnerLocalTest(
         indexes.delete("1028")
         val e = assertThrows<MarketDataNotLoaded> { runner.run(config(mapOf("momentum" to 1.0, "value" to 0.0, "lowvol" to 0.0)), start, end) }
         assertEquals("index_ohlcv", e.kind)
+        assertNoRemoteCalls()
+    }
+
+    private fun row(sj: String, id: String, amount: Int) = mapOf<String, Any?>("sj_div" to sj, "account_id" to id, "thstrm_amount" to amount.toString())
+
+    /** 사업보고서(연결)를 [symbols] 전부에 적재. 접수번호가 없어 확정일 = 사업연도 다음 해 말(테스트 시계 이전). */
+    private fun loadAnnual(year: Int, accounts: List<Map<String, Any?>>) = symbols.forEach { dartStore.write("C$it", year, "11011", "CFS", accounts) }
+
+    private val qualityAccounts = listOf(
+        row("BS", "ifrs-full_Equity", 1_000), row("BS", "ifrs-full_Liabilities", 500), row("IS", "ifrs-full_ProfitLoss", 100),
+    )
+    private val qualityWeights = mapOf("momentum" to 0.5, "quality" to 0.5, "value" to 0.0, "lowvol" to 0.0)
+
+    @Test
+    fun `coverage is checked at every rebalance not only the first`() {
+        // 4월 이전 결정일은 2328 사업보고서(적재), 4월부터는 2329(미적재) — 첫 리밸런싱은 통과하고 나중에 50% 아래로 떨어진다.
+        loadAnnual(2328, qualityAccounts)
+        val e = assertThrows<MarketDataNotLoaded> { runner.run(config(qualityWeights), start, end) }
+        assertEquals("factor_coverage", e.kind)
+        assertTrue(Regex("quality 2330-0[4-6]-").containsMatchIn(e.key), e.key)
+    }
+
+    @Test
+    fun `quality coverage counts only inputs the quality score uses`() {
+        // 점수에 안 쓰는 op_growth 만 차 있고 roe·debt_ratio·fcf·f_score 는 비어 있다.
+        val opIncome = listOf(row("IS", "dart_OperatingIncomeLoss", 100))
+        for (y in 2327..2328) loadAnnual(y, opIncome) // 2~3월 결정일(2328 사업연도)에서 op_growth 는 계산된다. 2329 는 시계상 미확정이라 4월 이후는 제외.
+        val e = assertThrows<MarketDataNotLoaded> { runner.run(config(qualityWeights), start, LocalDate.of(2330, 3, 31)) }
+        assertEquals("factor_coverage", e.kind)
+        assertTrue("quality" in e.key, e.key)
+    }
+
+    @Test
+    fun `empty universe day skips the coverage check`() {
+        val rule = mapOf("source" to "KOSPI_MCAP", "pick" to 4, "lookback" to 100_000) // 이력 부족으로 전 종목 제외 -> 후보 0
+        val cfg = config(qualityWeights).let { it + ("selection" to (it["selection"] as Map<*, *> + ("universe_rule" to rule))) }
+        val e = runCatching { runner.run(cfg, start, end) }.exceptionOrNull()
+        assertTrue(e !is MarketDataNotLoaded || e.kind != "factor_coverage", "빈 유니버스를 미적재로 보고했다: $e")
+    }
+
+    @Test
+    fun `string factor weights are rejected not silently skipped`() {
+        val e = assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "flow" to "0.5")), start, end) }
+        assertTrue("flow" in e.message!!, e.message)
+        assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "quality" to "0.5")), start, end) }
         assertNoRemoteCalls()
     }
 }
