@@ -20,6 +20,8 @@ data class StockDaily(
     val volume: Long? = null,
     val tradingValue: Long? = null,
     val changePct: Double? = null,
+    val prevDiff: Double? = null,
+    val stockKind: String? = null,
 )
 
 @Component
@@ -31,8 +33,8 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         jdbc.batchUpdate(
             """
             INSERT INTO stock_daily_snapshots
-              (trade_date, symbol, market, per, pbr, div, market_cap, shares, open, high, low, close, volume, trading_value, change_pct, created_at)
-            VALUES (:day, :symbol, :market, :per, :pbr, :div, :marketCap, :shares, :open, :high, :low, :close, :volume, :tradingValue, :changePct, now())
+              (trade_date, symbol, market, per, pbr, div, market_cap, shares, open, high, low, close, volume, trading_value, change_pct, prev_diff, stock_kind, created_at)
+            VALUES (:day, :symbol, :market, :per, :pbr, :div, :marketCap, :shares, :open, :high, :low, :close, :volume, :tradingValue, :changePct, :prevDiff, :stockKind, now())
             ON CONFLICT (trade_date, symbol) DO UPDATE SET
               market = COALESCE(EXCLUDED.market, stock_daily_snapshots.market),
               per = COALESCE(EXCLUDED.per, stock_daily_snapshots.per),
@@ -46,7 +48,9 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
               close = COALESCE(EXCLUDED.close, stock_daily_snapshots.close),
               volume = COALESCE(EXCLUDED.volume, stock_daily_snapshots.volume),
               trading_value = COALESCE(EXCLUDED.trading_value, stock_daily_snapshots.trading_value),
-              change_pct = COALESCE(EXCLUDED.change_pct, stock_daily_snapshots.change_pct)
+              change_pct = COALESCE(EXCLUDED.change_pct, stock_daily_snapshots.change_pct),
+              prev_diff = COALESCE(EXCLUDED.prev_diff, stock_daily_snapshots.prev_diff),
+              stock_kind = COALESCE(EXCLUDED.stock_kind, stock_daily_snapshots.stock_kind)
             """,
             unique.map { r ->
                 mapOf(
@@ -55,6 +59,7 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
                     "marketCap" to r.marketCap, "shares" to r.shares,
                     "open" to num(r.open), "high" to num(r.high), "low" to num(r.low), "close" to num(r.close),
                     "volume" to r.volume, "tradingValue" to r.tradingValue, "changePct" to num(r.changePct),
+                    "prevDiff" to num(r.prevDiff), "stockKind" to r.stockKind,
                 )
             }.toTypedArray(),
         )
@@ -76,6 +81,7 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
                 marketCap = rs.long("market_cap"), shares = rs.long("shares"),
                 open = rs.double("open"), high = rs.double("high"), low = rs.double("low"), close = rs.double("close"),
                 volume = rs.long("volume"), tradingValue = rs.long("trading_value"), changePct = rs.double("change_pct"),
+                prevDiff = rs.double("prev_diff"), stockKind = rs.getString("stock_kind"),
             )
         }
     }

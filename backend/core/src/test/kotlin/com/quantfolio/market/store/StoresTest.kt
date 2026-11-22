@@ -79,6 +79,26 @@ class StoresTest(
     }
 
     @Test
+    fun prevDiffAndStockKindRoundTrip() {
+        val day = freshDay()
+        daily.write(day, listOf(StockDaily("000010", close = 100.0, prevDiff = -1500.5, stockKind = "보통주")))
+        val got = daily.read(day).single()
+        assertEquals(-1500.5, got.prevDiff)
+        assertEquals("보통주", got.stockKind)
+    }
+
+    @Test
+    fun nullPrevDiffDoesNotOverwriteExisting() {
+        val day = freshDay()
+        daily.write(day, listOf(StockDaily("000011", prevDiff = 20.0, stockKind = "우선주")))
+        daily.write(day, listOf(StockDaily("000011", close = 5.0)))
+        val got = daily.read(day).single()
+        assertEquals(20.0, got.prevDiff)
+        assertEquals("우선주", got.stockKind)
+        assertEquals(5.0, got.close)
+    }
+
+    @Test
     fun deleteDay() {
         val day = freshDay()
         daily.write(day, listOf(StockDaily("000004", close = 1.0)))
