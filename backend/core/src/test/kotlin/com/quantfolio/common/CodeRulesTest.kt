@@ -77,13 +77,12 @@ class CodeRulesTest {
     /**
      * 공식 경로 1단계: 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)는 KRX MDC·네이버 클래스를 참조하지 않는다.
      * OhlcvLoader.kt 는 UI 경로용 Naver 보충(2단계에서 제거)이 남아 목록에서 뺐고, 전략 경로의 LocalOhlcvCoverage 를 LocalOhlcvCoverage.kt 로 분리해 대신 넣었다.
-     * 미해결: BacktestRunner.kt·LocalMarketData.kt 는 업종(로컬 스냅샷만 읽음)을 KrxIndexService.sectorMap 으로 받아 아직 목록에 없다 — 업종 조회를 MDC 의존 없는 빈으로 떼어낸 뒤 목록에 넣는다.
      */
     @Test
     fun strategyPathAvoidsMdcAndNaver() {
         val files = setOf(
-            "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
-            "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt",
+            "BacktestRunner.kt", "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
+            "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt", "LocalMarketData.kt",
         )
         val found = mainCodeLines().map { it.first.substringAfterLast('/') }.toSet()
         assertTrue(files.all { it in found }, "목록의 파일을 못 찾음(이름 변경?): ${files - found}")

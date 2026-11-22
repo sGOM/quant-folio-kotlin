@@ -6,6 +6,7 @@ import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.OpenDartClient
 import com.quantfolio.market.krx.KrxIndexService
+import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.krx.KrxMdc
 import com.quantfolio.market.krx.KrxSession
 import com.quantfolio.market.official.DividendFeed
@@ -80,11 +81,11 @@ class BacktestRunnerLocalTest(
     private val krx: KrxIndexService = run {
         val props = QuantfolioProperties(krx = QuantfolioProperties.Krx("id", "pw"))
         val session = KrxSession(krxTransport, props, cooldowns, clock)
-        KrxIndexService(KrxMdc(krxTransport, session, cooldowns) {}, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), sectors, clock)
+        KrxIndexService(KrxMdc(krxTransport, session, cooldowns) {}, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), LocalSectorMap(sectors), clock)
     }
     private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger))
     private val runner = BacktestRunner(
-        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, krx, McapUniverse(daily, days), constituents, daily, panic, dividendFeed, clock,
+        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), constituents, daily, panic, dividendFeed, clock,
     )
 
     private val symbols = listOf("L10001", "L10002", "L10003", "L10004", "L10005")

@@ -55,6 +55,7 @@ paths:
 | `LocalSnapshots`·`LocalTradingDays` | 로컬 `SnapshotSource`·거래일(= `index_ohlcv` 1001 날짜). 적재 최대일 초과는 결측 |
 | `Valuation` | PER/PBR/DIV 로컬 계산(DART 재무·시총·배당) |
 | `DividendIngest`·`DividendFeed` | 공공데이터포털 `getDiviInfo_V2` 전체 적재(원장 `datagokr|dividends_full`)·백테스트 현금 적립 |
+| `LocalSectorMap` | 업종 PIT 스냅샷(KIS 마스터)만 읽음, 없으면 미적재 |
 | `McapUniverse` | `KOSPI_MCAP` 유니버스(직전 거래일 이하 최신 시총·종목별 최신 `stock_kind`) |
 
 - **Valuation `div=0.0` 규칙:** 전체 배당 적재가 있고 창(공시일 ≤ asOf, 기준일이 365일 안) 안에 행이 없으면 0.0, 적재가 없거나 배당 이력 시작+365일 이전이면 `null`. 0 과 결측을 섞지 않는다.
@@ -70,7 +71,7 @@ paths:
 | `KrxMdc.rows` | `krx_index._krx_rows` | 응답 원인 분류(HTML=Auth, 키 없음=Schema) |
 | `KrxMdc.pykrx` | pykrx `KrxWebIo` | 분류 없음, 730일 분할. 호출자가 Unavailable 로 감싼다 |
 | `KrxStockApi` | pykrx `stock.*` 9종 | 같은 bld·파라미터·숫자 정리 규칙 |
-| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총. `sectorMap` 만 로컬 스냅샷 전용(전략 경로도 사용) |
+| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총. `sectorMap` 은 `LocalSectorMap` 에 위임(로컬 스냅샷 전용, 전략 경로는 이쪽을 직접 씀) |
 | `KrxSnapshots` | `metrics/fetch.py` | 위를 `StoreCache` 로 감싼 로컬 우선 조회 |
 
 - `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.

@@ -4,7 +4,7 @@ import com.quantfolio.common.MarketClock
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
+import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.DividendFeed
 import com.quantfolio.market.official.MarketDataNotLoaded
@@ -44,7 +44,7 @@ class BacktestRunner(
     private val ticks: PriceTickStore,
     @Qualifier("local") private val snapshots: SnapshotSource,
     private val dart: DartFinancials,
-    private val krx: KrxIndexService,
+    private val sectorMaps: LocalSectorMap,
     private val mcap: McapUniverse,
     private val constituents: IndexConstituentStore,
     private val daily: StockDailyStore,
@@ -190,7 +190,7 @@ class BacktestRunner(
      */
     private fun withSectorMap(config: Map<String, Any?>): Map<String, Any?> {
         if (!Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) || Cfg.truthy(config["_sector_map"])) return config
-        val smap = krx.sectorMap(MarketClock.todayUtcLegacy(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
+        val smap = sectorMaps.sectorMap(MarketClock.todayUtcLegacy(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
         if (smap.isEmpty()) {
             log.warn("섹터 한도 설정됨(max_sector_pct)이나 업종 매핑 미확보 — 섹터 캡 미적용.")
             return config
@@ -329,7 +329,7 @@ class BacktestRunner(
                 if (caps.isNotEmpty()) for (c in norm) put(c, "market_cap", caps[c]?.toDouble())
             }
             if (neutralize == "sector" || neutralize == "size_sector") {
-                val smap = krx.sectorMap(asOf) // 로컬 KIS 마스터 스냅샷 — 없으면 MarketDataNotLoaded
+                val smap = sectorMaps.sectorMap(asOf) // 로컬 KIS 마스터 스냅샷 — 없으면 MarketDataNotLoaded
                 if (smap.isNotEmpty()) for (c in norm) put(c, "sector", smap[c])
             }
             if (weight("residual_momentum") > 0 && benchmark != null) {

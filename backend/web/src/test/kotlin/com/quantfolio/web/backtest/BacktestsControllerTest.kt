@@ -68,6 +68,7 @@ class BacktestsControllerTest(
     @Qualifier("local") @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
     @MockitoBean lateinit var krx: KrxIndexService
+    @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
@@ -181,18 +182,18 @@ class BacktestsControllerTest(
         }
 
         val uncapped = invested(base)
-        verify(krx, never()).sectorMap(anyDate())
+        verify(sectorMaps, never()).sectorMap(anyDate())
         assertTrue(uncapped > 0.9, "캡 없으면 거의 전액 투자: $uncapped")
 
-        given(krx.sectorMap(anyDate())).willReturn(codes.associateWith { "전기전자" })
+        given(sectorMaps.sectorMap(anyDate())).willReturn(codes.associateWith { "전기전자" })
         val before = MarketClock.todayUtcLegacy(clock)
         val withCap = invested(capped)
         val after = MarketClock.todayUtcLegacy(clock)
-        verify(krx).sectorMap(dateThat { it == before || it == after }) // 원본 date.today()(UTC)
+        verify(sectorMaps).sectorMap(dateThat { it == before || it == after }) // 원본 date.today()(UTC)
         assertTrue(withCap < 0.5, "한 업종 30% 상한이면 나머지는 현금: $withCap")
 
         // 업종 스냅샷 미적재는 캡을 조용히 빼지 않고 409 로 멈춘다(로컬 전용 — 원격 조회 실패라는 사건이 없다).
-        given(krx.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "2026-01-01"))
+        given(sectorMaps.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "2026-01-01"))
         run(me, me.strategy(capped), "2023-01-02", "2023-12-29").andExpect { status { isConflict() } }
     }
 

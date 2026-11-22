@@ -1,8 +1,8 @@
 package com.quantfolio.engine
 
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.ohlcv.PriceHistory
@@ -24,7 +24,7 @@ class LocalMarketData(
     @Qualifier("local") val snapshots: SnapshotSource,
     val coverage: LocalOhlcvCoverage,
     private val ticks: PriceTickStore,
-    private val krx: KrxIndexService,
+    private val sectorMaps: LocalSectorMap,
     dart: DartFinancials,
 ) {
     /** 로컬 일봉. 구간의 거래일이 빠졌으면 미적재(외부 보충 없음). */
@@ -38,7 +38,7 @@ class LocalMarketData(
         override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int): Map<String, Double> = throw MarketDataNotLoaded("unsupported_in_phase1", "pead")
         override fun marketCaps(asOf: LocalDate): Map<String, Long> =
             snapshots.marketCap(asOf, listOf("KOSPI", "KOSDAQ")).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
-        override fun sectorMap(asOf: LocalDate) = krx.sectorMap(asOf)
+        override fun sectorMap(asOf: LocalDate) = sectorMaps.sectorMap(asOf)
         override fun dartEnabled() = dart.enabled()
     }
 
@@ -46,5 +46,5 @@ class LocalMarketData(
     val scores = UniverseScores(snapshots, TechIndicatorLoader(prices), inputs, prices)
 
     /** 종목 → 업종(로컬 PIT 스냅샷). 없으면 [MarketDataNotLoaded]. */
-    fun sectorMap(asOf: LocalDate): Map<String, String> = krx.sectorMap(asOf)
+    fun sectorMap(asOf: LocalDate): Map<String, String> = sectorMaps.sectorMap(asOf)
 }

@@ -80,6 +80,7 @@ class RunnersTest(
     @MockitoBean lateinit var naver: com.quantfolio.market.ohlcv.NaverDaily
     @MockitoBean lateinit var coverage: com.quantfolio.market.ohlcv.LocalOhlcvCoverage
     @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
+    @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoBean lateinit var mcap: McapUniverse
 
     /** 종목별 고정 시세, 주문은 즉시 전량 체결. */
@@ -436,7 +437,7 @@ class RunnersTest(
     fun `missing sector snapshot skips rebalance and publishes critical`() {
         val codes = (1..3).map { sym() }
         codes.forEachIndexed { k, c -> seed(c, 30) { i -> 1000.0 + (k + 1) * 10.0 * i } }
-        given(krx.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "x"))
+        given(sectorMaps.sectorMap(anyDate())).willThrow(MarketDataNotLoaded("sector_map", "x"))
         val (_, sid) = strategy(rebalCfg(codes, mapOf("risk_layer" to mapOf("max_sector_pct" to 0.3))))
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
@@ -511,7 +512,7 @@ class RunnersTest(
         val idx = (0 until 60).map { IndexBar(LocalDate.now().minusDays(60L - it), close = 3000.0) }
         given(snapshots.indexOhlcv(anyDate(), anyDate(), anyString())).willReturn(idx)
         given(snapshots.priceChange(anyDate(), anyDate(), anyList())).willReturn(codes.mapIndexed { k, c -> StockPeriod(c, changePct = 5.0 + k) })
-        given(krx.sectorMap(anyDate())).willReturn(codes.associateWith { "S" })
+        given(sectorMaps.sectorMap(anyDate())).willReturn(codes.associateWith { "S" })
         val (_, sid) = strategy(
             rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0)),
                 "regime_filter" to mapOf("enabled" to true, "ma_period" to 20), "risk_layer" to mapOf("max_sector_pct" to 0.6))),

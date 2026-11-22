@@ -1,8 +1,7 @@
 package com.quantfolio.market.krx
 
-import com.quantfolio.domain.market.SectorMapSnapshot
-import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.ohlcv.IndexMembers
+import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
@@ -41,7 +40,7 @@ class KrxIndexService(
     private val constituents: IndexConstituentStore,
     private val ledger: FetchLedger,
     private val cache: StoreCache,
-    private val sectors: SectorMapSnapshotRepository,
+    private val localSectors: LocalSectorMap,
     private val clock: Clock,
 ) : IndexMembers, ListedStocks {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -133,14 +132,8 @@ class KrxIndexService(
         return caps
     }
 
-    /**
-     * 종목 → 업종. asOf 이하 최신 PIT 스냅샷(`sector_map_snapshots`, KIS 종목마스터 스냅샷이 채운다)만 쓴다.
-     * 스냅샷이 없으면 원격으로 대체하지 않고 [MarketDataNotLoaded] — 업종 없이 돌리면 섹터 캡이 조용히 무력화된다.
-     */
-    fun sectorMap(asOf: LocalDate): Map<String, String> {
-        val latest = sectors.latestDateOnOrBefore(asOf) ?: throw MarketDataNotLoaded("sector_map", asOf.toString())
-        return sectors.findBySnapshotDate(latest).associate { it.symbol to it.sector }
-    }
+    /** 업종은 로컬 스냅샷 전용 — 로직은 [LocalSectorMap] 한 곳에 있고 여기는 위임만 한다(UI 경로 호환). */
+    fun sectorMap(asOf: LocalDate): Map<String, String> = localSectors.sectorMap(asOf)
 
     /**
      * 날짜(·시장)를 거슬러 가며 여러 번 조회할 때의 실패 누적. 실패가 쌓인 채 쿨다운이 걸리면 단락([cooling]),

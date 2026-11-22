@@ -43,7 +43,7 @@ class KrxIndexServiceTest(
         val props = if (withCreds) QuantfolioProperties(krx = QuantfolioProperties.Krx("id", "pw")) else QuantfolioProperties()
         val session = KrxSession(transport, props, cooldowns, clock)
         val mdc = KrxMdc(transport, session, cooldowns) {}
-        return KrxIndexService(mdc, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), sectors, clock)
+        return KrxIndexService(mdc, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), com.quantfolio.market.official.LocalSectorMap(sectors), clock)
     }
 
     @BeforeEach
