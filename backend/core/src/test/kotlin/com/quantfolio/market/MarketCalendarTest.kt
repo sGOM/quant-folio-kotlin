@@ -1,17 +1,10 @@
 package com.quantfolio.market
 
 import com.quantfolio.common.MarketClock
-import com.quantfolio.domain.TestApp
 import com.quantfolio.market.official.LocalTradingDays
-import com.quantfolio.market.store.IndexBar
-import com.quantfolio.market.store.IndexOhlcvStore
-import com.quantfolio.test.ContainersConfig
 import com.quantfolio.test.InMemoryFetchLedger
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.context.annotation.Import
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -22,9 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-@SpringBootTest(classes = [TestApp::class])
-@Import(ContainersConfig::class)
-class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
+class MarketCalendarTest {
     // 2026-10-19 10:00 KST = 오늘
     private class MutableClock(var now: Instant) : Clock() {
         override fun getZone() = ZoneOffset.UTC
@@ -35,16 +26,16 @@ class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
     private val clock = MutableClock(Instant.parse("2026-10-19T01:00:00Z"))
     private val kisCalls = mutableListOf<LocalDate>()
     private var kis: (LocalDate) -> Map<LocalDate, Boolean> = { emptyMap() }
+    private val ledger = InMemoryFetchLedger()
     private val calendar by lazy {
-        MarketCalendar(LocalTradingDays(indexes, InMemoryFetchLedger()), { from -> kisCalls += from; kis(from) }, clock)
+        MarketCalendar(LocalTradingDays(ledger), { from -> kisCalls += from; kis(from) }, clock)
     }
 
     @BeforeEach
-    fun loadIndex() {
-        indexes.delete("1001")
-        // 10-09(금)은 휴장, 10-16(금)까지 적재
-        val days = listOf(5, 6, 7, 8, 12, 13, 14, 15, 16).map { LocalDate.of(2026, 10, it) }
-        indexes.write("1001", days.map { IndexBar(it, close = 1.0) }, null)
+    fun loadLedger() {
+        // 10-09(금)은 휴장 확정, 10-16(금)까지 적재
+        ledger.trading(listOf(5, 6, 7, 8, 12, 13, 14, 15, 16).map { LocalDate.of(2026, 10, it) })
+        ledger.holiday(listOf(LocalDate.of(2026, 10, 9)))
     }
 
     @Test
@@ -55,9 +46,9 @@ class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
     }
 
     @Test
-    fun `past business day from local index dates`() {
+    fun `past business day from the ingest ledger`() {
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 16)))
-        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 9))) // 지수 행 없는 평일 = 휴장
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 9))) // 휴장 확정
         assertTrue(kisCalls.isEmpty())
     }
 
@@ -79,18 +70,18 @@ class MarketCalendarTest(@Autowired private val indexes: IndexOhlcvStore) {
 
     @Test
     fun `past holiday after last loaded index day comes from KIS`() {
-        indexes.delete("1001")
-        indexes.write("1001", listOf(12, 13, 14).map { IndexBar(LocalDate.of(2026, 10, it), close = 1.0) }, null)
+        ledger.rows.clear()
+        ledger.trading(listOf(12, 13, 14).map { LocalDate.of(2026, 10, it) })
         kis = { mapOf(LocalDate.of(2026, 10, 15) to false, LocalDate.of(2026, 10, 16) to true, LocalDate.of(2026, 10, 19) to true) }
         assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 15))) // 적재 범위 밖 과거 휴장일
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 16)))
-        assertEquals(listOf(LocalDate.of(2026, 10, 15)), kisCalls) // 기준일 = 지수 최대일+1, 한 번
+        assertEquals(listOf(LocalDate.of(2026, 10, 15)), kisCalls) // 기준일 = 원장 최대일+1, 한 번
     }
 
     @Test
     fun `unloaded past day falls back to weekday rule when KIS is unavailable`() {
-        indexes.delete("1001")
-        indexes.write("1001", listOf(12, 13, 14).map { IndexBar(LocalDate.of(2026, 10, it), close = 1.0) }, null)
+        ledger.rows.clear()
+        ledger.trading(listOf(12, 13, 14).map { LocalDate.of(2026, 10, it) })
         kis = { error("vts 미지원") }
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 15)))
     }

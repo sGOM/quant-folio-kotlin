@@ -73,7 +73,7 @@ class BacktestRunnerLocalTest(
     private val http = FakeExternalHttp() // DART·Naver 원격 — 호출되면 실패
     private val krxTransport = FakeKrxTransport() // KRX MDC — 호출되면 실패
     private val cooldowns = Cooldowns(clock)
-    private val days = LocalTradingDays(indexes, ledger)
+    private val days = LocalTradingDays(ledger)
     private val dart = DartFinancials(
         OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock),
         dartStore, ledger, cooldowns, clock,
@@ -83,7 +83,7 @@ class BacktestRunnerLocalTest(
         val session = KrxSession(krxTransport, props, cooldowns, clock)
         KrxIndexService(KrxMdc(krxTransport, session, cooldowns) {}, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), LocalSectorMap(sectors), clock)
     }
-    private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger))
+    private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger, ticks, days))
     private val runner = BacktestRunner(
         LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), constituents, daily, panic, dividendFeed, clock,
     )
@@ -103,6 +103,7 @@ class BacktestRunnerLocalTest(
         indexes.delete("1028")
         tradingDays.forEach { daily.delete(it) }
         indexes.write("1001", tradingDays.map { IndexBar(it, close = 100.0) }, null)
+        ledger.trading((1L..7L).map { loadFrom.minusDays(it) } + tradingDays) // 첫 적재일 앞 며칠(워밍업 직전 거래일 조회)
         indexes.write("1028", tradingDays.mapIndexed { i, d -> IndexBar(d, close = 100.0 + i) }, null)
         symbols.forEachIndexed { s, sym -> ticks.upsert(sym, tradingDays.mapIndexed { i, d -> bar(d, price(s, i)) }) }
         tradingDays.forEachIndexed { i, d ->

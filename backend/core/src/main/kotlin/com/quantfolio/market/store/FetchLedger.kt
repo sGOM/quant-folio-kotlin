@@ -13,6 +13,10 @@ interface FetchLedger {
     /** 조회한 적이 없으면 null. */
     fun get(source: String, key: String): LedgerEntry?
 
+    /** 여러 키를 한 번에. 기록 없는 키는 결과에 없다. */
+    fun getAll(source: String, keys: List<String>): Map<String, LedgerEntry> =
+        keys.mapNotNull { k -> get(source, k)?.let { k to it } }.toMap()
+
     /** 같은 키는 덮어쓴다. */
     fun put(source: String, key: String, rowCount: Int, final: Boolean)
 }
@@ -24,6 +28,14 @@ class SqlFetchLedger(private val jdbc: NamedParameterJdbcTemplate) : FetchLedger
         "SELECT row_count, final FROM external_fetches WHERE source = :source AND cache_key = :key",
         mapOf("source" to source, "key" to key),
     ) { rs, _ -> LedgerEntry(rs.getInt(1), rs.getBoolean(2)) }.firstOrNull()
+
+    override fun getAll(source: String, keys: List<String>): Map<String, LedgerEntry> {
+        if (keys.isEmpty()) return emptyMap()
+        return jdbc.query(
+            "SELECT cache_key, row_count, final FROM external_fetches WHERE source = :source AND cache_key IN (:keys)",
+            mapOf("source" to source, "keys" to keys),
+        ) { rs, _ -> rs.getString(1) to LedgerEntry(rs.getInt(2), rs.getBoolean(3)) }.toMap()
+    }
 
     override fun put(source: String, key: String, rowCount: Int, final: Boolean) {
         jdbc.update(

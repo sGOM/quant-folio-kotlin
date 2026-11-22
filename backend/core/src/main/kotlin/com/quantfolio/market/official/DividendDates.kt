@@ -1,9 +1,15 @@
 package com.quantfolio.market.official
 
+import com.quantfolio.market.PastTradingDays
+import java.time.DayOfWeek
 import java.time.LocalDate
 
 object DividendDates {
     private const val MAX_BACK = 20
+
+    /** [exDate] 를 [days] 로. 주말은 달력에 묻지 않고 휴일로 본다. */
+    fun exDateOn(record: LocalDate, days: PastTradingDays): LocalDate? =
+        exDate(record) { d -> if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) false else days.isTradingDay(d) }
 
     /**
      * 배당락일 = 기준일 이하 마지막 거래일의 직전 거래일. 기준일이 거래일이면 단순히 직전 거래일이고,

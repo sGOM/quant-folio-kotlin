@@ -27,7 +27,8 @@ class OhlcvLoaderLocalTest(
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired private val ticks: PriceTickStore,
 ) {
-    private val local = LocalOhlcvCoverage(ticks, daily, LocalTradingDays(indexes, InMemoryFetchLedger()))
+    private val ledger = InMemoryFetchLedger()
+    private val local = LocalOhlcvCoverage(ticks, daily, LocalTradingDays(ledger))
     private val week = (1..5).map { LocalDate.of(2320, 3, it) }
     private fun bar(day: LocalDate) = Bar(day.atStartOfDay().toInstant(ZoneOffset.UTC), 1.0, 1.0, 1.0, 1.0, 1)
 
@@ -35,7 +36,7 @@ class OhlcvLoaderLocalTest(
     fun clean() {
         indexes.delete("1001")
         week.forEach { daily.delete(it) }
-        indexes.write("1001", week.map { IndexBar(it, close = 1.0) }, null)
+        ledger.trading(week)
     }
 
     @Test

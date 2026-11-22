@@ -33,7 +33,7 @@ class OwnerKisHolidays(private val credentials: BrokerCredentials) : KisHolidays
 /**
  * KRX 장 운영시간·휴장일(원본 `services/market.py`). 정규장 09:00~15:30 KST.
  *
- * 과거 날짜는 로컬 `index_ohlcv`(KOSPI 1001) 날짜([PastTradingDays]), 오늘·미래는 KIS 국내휴장일조회([KisHolidays]).
+ * 과거 날짜는 로컬 적재 원장([PastTradingDays] = `LocalTradingDays`), 오늘·미래는 KIS 국내휴장일조회([KisHolidays]).
  * KIS 결과는 하루 캐시한다(호출 권장 하루 1회). 조회가 실패하거나(vts 미지원 포함) 목록에 없는 날은 평일 규칙으로 돌려 장 개장 판단을 막지 않고
  * 경고만 남긴다 — 실제 휴장이면 시세·주문 단계에서 자연 차단된다. 실패 후 [RETRY_AFTER] 동안은 다시 부르지 않는다.
  */

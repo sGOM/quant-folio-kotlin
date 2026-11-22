@@ -53,19 +53,7 @@ class McapUniverse(private val daily: StockDailyStore, private val days: LocalTr
             .take(n).map { it.symbol }
     }
 
-    private fun previousTradingDay(asOf: LocalDate): LocalDate {
-        var d = asOf.minusDays(1)
-        repeat(MAX_BACK) {
-            when (days.isTradingDay(d)) {
-                true -> return d
-                null -> throw MarketDataNotLoaded("index_ohlcv", "1001", listOf(d to d))
-                false -> d = d.minusDays(1)
-            }
-        }
-        throw MarketDataNotLoaded("index_ohlcv", "1001", listOf(d to asOf.minusDays(1)))
-    }
-
-    private companion object {
-        const val MAX_BACK = 20
-    }
+    /** 직전 거래일. 원장이 모르면(미적재) 추측하지 않고 미적재. */
+    private fun previousTradingDay(asOf: LocalDate): LocalDate =
+        days.previous(asOf) ?: throw MarketDataNotLoaded("trading_days", "KOSPI", listOf(asOf.minusDays(1) to asOf.minusDays(1)))
 }

@@ -5,10 +5,12 @@ import com.quantfolio.domain.TestApp
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.OpenDartClient
 import com.quantfolio.market.source.Cooldowns
+import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.CacheKeys
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.DividendEvent
 import com.quantfolio.market.store.DividendStore
+import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.test.ContainersConfig
@@ -33,6 +35,7 @@ class ValuationTest(
     @Autowired private val daily: StockDailyStore,
     @Autowired private val dartStore: DartFinancialStore,
     @Autowired private val dividends: DividendStore,
+    @Autowired private val ticks: PriceTickStore,
 ) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp()
@@ -40,7 +43,7 @@ class ValuationTest(
     private val client = OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock)
     private val ledger = InMemoryFetchLedger()
     private val dart = DartFinancials(client, dartStore, ledger, cooldowns, clock)
-    private val valuation = Valuation(daily, dart, dartStore, dividends, ledger)
+    private val valuation = Valuation(daily, dart, dartStore, dividends, ledger, ticks) { d -> d.dayOfWeek.value <= 5 }
 
     private val asOf = LocalDate.of(2021, 6, 15)
     private val id = UUID.randomUUID().toString().filter { it.isDigit() }.padEnd(6, '7')
@@ -151,6 +154,7 @@ class ValuationTest(
                 DividendEvent(paid, asOf.minusDays(5), 777.0, asOf.plusDays(1), "t"), // 공시가 asOf 이후
             ),
         )
+        for (r in listOf(30L, 200L)) flatPrices(paid, asOf.minusDays(r), asOf)
         val out = valuation.compute(asOf, listOf(unknown, zero, paid)).associateBy { it.symbol }
         assertNull(out.getValue(unknown).div)
         assertEquals(0.0, out.getValue(zero).div)
@@ -216,6 +220,7 @@ class ValuationTest(
         dividends.write(listOf(DividendEvent(s, LocalDate.of(2019, 12, 31), 100.0, null, "t"), DividendEvent(s, LocalDate.of(2020, 12, 31), 120.0, null, "t")))
         dividends.write(listOf(DividendEvent(other, LocalDate.of(2015, 6, 30), 10.0, null, "t"))) // 이력 시작을 충분히 앞으로
         ledger.put("datagokr", "dividends_full", 100, true)
+        flatPrices(s, LocalDate.of(2019, 12, 31), day)
         assertEquals(10.0, valuation.compute(day, listOf(s)).single().div)
     }
 
@@ -229,5 +234,41 @@ class ValuationTest(
             report(s, day.year - 1, day.minusDays(120), netIncome = 10_000L, equity = 50_000L)
             assertEquals(expected, valuation.compute(day, listOf(s)).single().div, "asOf $day")
         }
+    }
+
+    /** 기준일 [record] 의 배당락일과 [asOf] 에 분할 없는 가격(1000)을 심는다. */
+    private fun flatPrices(symbol: String, record: LocalDate, asOf: LocalDate) {
+        val ex = DividendDates.exDateOn(record) { d -> d.dayOfWeek.value <= 5 }!!
+        prices(symbol, ex, raw = 1000.0)
+        prices(symbol, asOf, raw = 1000.0)
+    }
+
+    /** [day] 의 원시 종가(stock_daily)와 수정 종가(price_ticks) 를 함께 심는다. */
+    private fun prices(symbol: String, day: LocalDate, raw: Double, adj: Double = raw) {
+        daily.write(day, listOf(StockDaily(symbol, market = "KOSPI", marketCap = 100_000L, close = raw)))
+        ticks.upsert(symbol, listOf(Bar(day.atStartOfDay().toInstant(ZoneOffset.UTC), adj, adj, adj, adj, 1L)))
+    }
+
+    @Test
+    fun `dividend yield converts pre-split dps to asOf units, equal to the no-split case`() {
+        val split = newSymbol(); val plain = newSymbol(); val other = newSymbol(); serveCorpMap()
+        dividends.write(listOf(DividendEvent(other, LocalDate.of(2015, 6, 30), 10.0, null, "t")))
+        ledger.put("datagokr", "dividends_full", 100, true)
+        val record = asOf.minusDays(100) // 2021-03-07(일) -> 마지막 거래일 03-05(금) -> 배당락 03-04(목)
+        val ex = LocalDate.of(2021, 3, 4)
+        for (s in listOf(split, plain)) {
+            report(s, 2020, LocalDate.of(2021, 3, 10), netIncome = 10_000L, equity = 50_000L)
+        }
+        dividends.write(listOf(DividendEvent(split, record, 5000.0, asOf.minusDays(90), "t")))
+        // 50:1 분할이 배당락일과 asOf 사이에 있었다: 배당락일 원시 종가 1,000,000 → asOf 20,000. 수정 종가는 둘 다 20,000 이하 단위.
+        // 수정/원시 비는 분할 때만 바뀌고, 이후(asOf 뒤) 다른 권리락이 와도 두 날짜가 같은 인자로 곱해져 비의 비는 변하지 않는다 — 미래참조 없음.
+        prices(split, ex, raw = 1_000_000.0, adj = 20_000.0)
+        prices(split, asOf, raw = 20_000.0, adj = 20_000.0)
+        // 분할이 없었던 동등 종목: 가격 20,000 그대로, 주당 배당 100.
+        dividends.write(listOf(DividendEvent(plain, record, 100.0, asOf.minusDays(90), "t")))
+        prices(plain, ex, raw = 20_000.0); prices(plain, asOf, raw = 20_000.0)
+        val out = valuation.compute(asOf, listOf(split, plain)).associateBy { it.symbol }
+        assertEquals(0.5, out.getValue(plain).div!!, 1e-9)
+        assertEquals(0.5, out.getValue(split).div!!, 1e-9)
     }
 }

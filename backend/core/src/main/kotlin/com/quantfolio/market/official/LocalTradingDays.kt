@@ -2,52 +2,66 @@ package com.quantfolio.market.official
 
 import com.quantfolio.market.PastTradingDays
 import com.quantfolio.market.store.FetchLedger
-import com.quantfolio.market.store.IndexOhlcvStore
 import org.springframework.stereotype.Component
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
- * 로컬이 아는 거래일. 기준은 `index_ohlcv` 의 KOSPI(1001) 행이다.
- * 적재된 마지막 지수일보다 뒤로 요청 구간이 뻗으면 그 뒤 평일은 아직 모르는 날이므로 결측으로 센다 —
- * 단 원장에 휴장 확정(0행·final)이 있는 날은 제외.
+ * 로컬이 아는 거래일 — 진실은 KRX Open API 적재 원장(`krx_open | stk_bydd_trd|yyyyMMdd|KOSPI`) 하나다.
+ * 행 > 0 이면 거래일, 0행·확정이면 휴장, 기록이 없거나 미확정 0행이면 **모른다**(결측).
+ * `index_ohlcv` 는 UI(원격 KrxSnapshots)·구 MDC 도 쓰는 테이블이라 달력의 근거가 될 수 없다
+ * (오래된 캐시 구간이 남으면 그 앞뒤 수년이 휴장으로 보인다). 직전 거래일 계산도 여기 하나다.
  */
 @Component
-class LocalTradingDays(private val indexes: IndexOhlcvStore, private val ledger: FetchLedger) : PastTradingDays {
-    /** 적재 구간 안이면 지수 행 유무, 휴장 확정 기록이면 false, 적재 구간 뒤(최신 지수일 이후)는 모르므로 null. 구간 앞은 평일 규칙(true). */
+class LocalTradingDays(private val ledger: FetchLedger) : PastTradingDays {
+    /** 주말 false, 원장대로 true/false, 모르면 null. */
     override fun isTradingDay(day: LocalDate): Boolean? {
-        if (isHoliday(day)) return false
-        val span = indexes.span(KOSPI_INDEX) ?: return null
-        return when {
-            day.isBefore(span.first) -> true
-            day.isAfter(span.second) -> null
-            else -> indexes.read(KOSPI_INDEX, day, day).isNotEmpty()
-        }
+        if (isWeekend(day)) return false
+        return state(ledger.get(SOURCE, key(day)))
     }
 
-    /** [start, end] 의 기대 거래일(오름차순). 적재 구간 앞·뒤의 평일(휴장 확정 제외)은 아직 모르는 날이라 결측 후보다. */
+    /** [start, end] 의 기대 거래일(오름차순) = 평일 중 휴장 확정이 아닌 날. 아직 모르는 날은 결측 후보로 남는다. */
     fun expected(start: LocalDate, end: LocalDate): List<LocalDate> {
-        val span = indexes.span(KOSPI_INDEX) ?: return unknownWeekdays(start, end)
-        val head = unknownWeekdays(start, minOf(end, span.first.minusDays(1)))
-        val inRange = indexes.read(KOSPI_INDEX, start, end).map { it.date }
-        val tail = unknownWeekdays(maxOf(start, span.second.plusDays(1)), end)
-        return head + inRange + tail
+        val weekdays = generateSequence(start) { it.plusDays(1) }.takeWhile { !it.isAfter(end) }.filter { !isWeekend(it) }.toList()
+        val entries = ledger.getAll(SOURCE, weekdays.map(::key))
+        return weekdays.filter { state(entries[key(it)]) != false }
     }
 
-    private fun unknownWeekdays(from: LocalDate, to: LocalDate): List<LocalDate> =
-        generateSequence(from) { it.plusDays(1) }
-            .takeWhile { !it.isAfter(to) }
-            .filter { it.dayOfWeek != DayOfWeek.SATURDAY && it.dayOfWeek != DayOfWeek.SUNDAY && !isHoliday(it) }
-            .toList()
+    /**
+     * [day] 바로 앞 거래일. 휴장 확정·주말은 건너뛴다. 가다가 모르는 날을 만나거나 [MAX_BACK] 일 안에 없으면 null —
+     * 호출자는 이를 추측으로 메우지 않고 미적재/공백으로 다룬다.
+     */
+    fun previous(day: LocalDate): LocalDate? {
+        var d = day
+        repeat(MAX_BACK) {
+            d = d.minusDays(1)
+            when (isTradingDay(d)) {
+                true -> return d
+                null -> return null
+                false -> Unit
+            }
+        }
+        return null
+    }
 
-    /** 원장에 휴장 확정(`krx_open`, `stk_bydd_trd|yyyyMMdd|KOSPI`, 0행·final)이 있는 날. */
-    fun isHoliday(day: LocalDate): Boolean =
-        ledger.get(LEDGER_SOURCE, "stk_bydd_trd|${day.format(YMD)}|KOSPI")?.let { it.rowCount == 0 && it.final } == true
+    /** 원장에 휴장 확정(0행·final)이 있는 날. */
+    fun isHoliday(day: LocalDate): Boolean = ledger.get(SOURCE, key(day))?.let { it.rowCount == 0 && it.final } == true
+
+    private fun state(e: com.quantfolio.market.store.LedgerEntry?): Boolean? = when {
+        e == null -> null
+        e.rowCount > 0 -> true
+        e.final -> false
+        else -> null
+    }
+
+    private fun isWeekend(d: LocalDate) = d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY
+
+    private fun key(day: LocalDate) = "stk_bydd_trd|${day.format(YMD)}|KOSPI"
 
     companion object {
-        const val KOSPI_INDEX = "1001"
-        private const val LEDGER_SOURCE = "krx_open"
+        private const val SOURCE = "krx_open"
+        private const val MAX_BACK = 20
         private val YMD = DateTimeFormatter.ofPattern("yyyyMMdd")
     }
 }

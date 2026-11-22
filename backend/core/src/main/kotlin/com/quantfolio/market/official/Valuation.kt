@@ -1,10 +1,13 @@
 package com.quantfolio.market.official
 
 import com.quantfolio.market.dart.DartFinancials
+import com.quantfolio.market.PastTradingDays
 import com.quantfolio.market.dart.DartMetrics
 import com.quantfolio.market.store.DartFinancialStore
+import com.quantfolio.market.store.DividendEvent
 import com.quantfolio.market.store.DividendStore
 import com.quantfolio.market.store.FetchLedger
+import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
 import org.springframework.stereotype.Component
@@ -25,7 +28,11 @@ class Valuation(
     private val dartStore: DartFinancialStore,
     private val dividends: DividendStore,
     private val ledger: FetchLedger,
+    ticks: PriceTickStore,
+    private val days: PastTradingDays,
 ) {
+    private val units = PriceUnits(ticks, daily)
+
     /** 한 종목의 재무 조회 결과. 미적재와 '쓸 보고서 없음'은 다른 사건이다. */
     private sealed interface Fin {
         data class Loaded(val netIncome: Double?, val equity: Double?) : Fin
@@ -58,7 +65,7 @@ class Valuation(
                 c, market = s.market,
                 per = ratio(cap, f?.netIncome),
                 pbr = ratio(cap, f?.equity),
-                div = (dps[c] ?: 0.0.takeIf { dividendsLoaded })?.let { d -> s.close?.takeIf { it > 0 }?.let { d / it * 100 } },
+                div = (if (c in dps) dps[c] else 0.0.takeIf { dividendsLoaded })?.let { d -> s.close?.takeIf { it > 0 }?.let { d / it * 100 } },
             )
         }
     }
@@ -90,8 +97,12 @@ class Valuation(
         return Fin.Absent
     }
 
-    /** 종목별 DPS. 알려진 배당이 한 건도 없으면 키가 없다(= unknown), 합이 0 이면 0.0. */
-    private fun dpsBySymbol(codes: List<String>, asOf: LocalDate): Map<String, Double> =
+    /**
+     * 종목별 DPS(asOf 시점 주식 단위). 알려진 배당이 한 건도 없으면 키가 없다(= unknown), 합이 0 이면 0.0.
+     * 배당금은 기준일 당시 주식 수 기준이라 분할이 끼면 asOf 가격과 단위가 다르다 — 배당락일 비율 ÷ asOf 비율을 곱해 맞춘다.
+     * 환산 비율을 못 구하면(배당락일 불명·종가 없음) 추측하지 않고 값이 null(= 키는 있고 모름)이다. 0원 배당은 환산이 필요 없다.
+     */
+    private fun dpsBySymbol(codes: List<String>, asOf: LocalDate): Map<String, Double?> =
         // 창은 "알려진 날" 기준이다: 알려진 날 = 공시일, 없으면 기준일 + 90일. 기준일로 창을 잡으면 실효 창이 275일로 줄어
         // 연 1회 결산배당이 매년 12월~3월에 통째로 빠진다.
         dividends.read(codes, asOf.minusDays(DIV_WINDOW_DAYS + UNANNOUNCED_LAG_DAYS), asOf)
@@ -102,7 +113,19 @@ class Valuation(
                 !known.isAfter(asOf) && known.isAfter(asOf.minusDays(DIV_WINDOW_DAYS))
             }
             .groupBy { it.symbol }
-            .mapValues { (_, es) -> es.sumOf { it.dps } }
+            .mapValues { (symbol, es) -> es.sumOfScaled(symbol, asOf) }
+
+    private fun List<DividendEvent>.sumOfScaled(symbol: String, asOf: LocalDate): Double? {
+        val paying = filter { it.dps != 0.0 }
+        if (paying.isEmpty()) return 0.0
+        val exDates = paying.associateWith { DividendDates.exDateOn(it.recordDate, days) }
+        if (exDates.values.any { it == null }) return null
+        val from = exDates.values.minOf { it!! }
+        val ratios = units.ratios(symbol, from, asOf)
+        // asOf 이하 가장 최근 비율(스냅샷과 같은 14일 이내) — 둘 다 asOf 이하 날짜라 미래참조 없음.
+        val now = ratios.filterKeys { !it.isBefore(asOf.minusDays(SNAPSHOT_LOOKBACK_DAYS)) }.maxByOrNull { it.key }?.value ?: return null
+        return paying.sumOf { e -> (ratios[exDates.getValue(e)] ?: return null) / now * e.dps }
+    }
 
     companion object {
         // 측정 근거 없음. LocalSnapshots 경유 시 asOf 당일 행만 넘어와 실질 무영향.

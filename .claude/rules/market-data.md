@@ -52,14 +52,14 @@ paths:
 |---|---|
 | `krxopen/` | KRX Open API(AUTH_KEY) 클라이언트·일일/백필 적재. 원장 `krx_open|<서비스>|yyyyMMdd|<시장>` |
 | `AdjustedBars` | 원주가 + 전일대비로 수정주가 계산(분할 반영). 수정 후 `price_ticks` 에 저장 |
-| `LocalSnapshots`·`LocalTradingDays` | 로컬 `SnapshotSource`·거래일(= `index_ohlcv` 1001 날짜). 적재 최대일 초과는 결측 |
+| `LocalSnapshots`·`LocalTradingDays` | 로컬 `SnapshotSource`·거래일(= 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`: 행>0 거래일·0행 확정 휴장·기록 없음/미확정=모름=결측). `index_ohlcv` 는 UI·MDC 도 써서 달력 근거 아님. 직전 거래일은 `LocalTradingDays.previous` 한 곳 |
 | `Valuation` | PER/PBR/DIV 로컬 계산(DART 재무·시총·배당) |
 | `DividendIngest`·`DividendFeed` | 공공데이터포털 `getDiviInfo_V2` 전체 적재(원장 `datagokr|dividends_full`)·백테스트 현금 적립 |
 | `LocalSectorMap` | 업종 PIT 스냅샷(KIS 마스터)만 읽음, 없으면 미적재 |
 | `McapUniverse` | `KOSPI_MCAP` 유니버스(직전 거래일 이하 최신 시총·종목별 최신 `stock_kind`) |
 
 - **Valuation `div=0.0` 규칙:** 전체 배당 적재가 있고 창(공시일 ≤ asOf, 기준일이 365일 안) 안에 행이 없으면 0.0, 적재가 없거나 배당 이력 시작+365일 이전이면 `null`. 0 과 결측을 섞지 않는다.
-- 배당 금액은 기준일 당시 주식 단위(분할 전 값)다 — 수정주가 단위로 환산해 쓴다. 배당락일은 "기준일 이하 마지막 거래일의 직전 거래일".
+- 배당 금액은 기준일 당시 주식 단위(분할 전 값)다 — `PriceUnits`(수정/원시 종가 비)로 환산: 백테스트 현금은 배당락일 비, `Valuation` DIV 는 배당락일 비 ÷ asOf 비(환산 못 하면 null). 거래정지일 봉(거래량 0·시고저 0)은 `AdjustedBars.flatIfHalted` 로 o=h=l=종가(원본과 알려진 차이). 배당락일은 "기준일 이하 마지막 거래일의 직전 거래일".
 - 0행 휴장 확정은 위 4상태 예외(7일 이상 지난 날만 `final`). 지수명→코드 매핑 밖 지수는 저장하지 않는다.
 - Open API 필드명·지수명·공개 시각은 **미실측**(문서상 이름) — 파서가 어긋나면 `SourceSchemaError` 로 드러난다.
 

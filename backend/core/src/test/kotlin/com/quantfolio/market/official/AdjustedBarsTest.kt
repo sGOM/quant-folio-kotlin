@@ -40,6 +40,13 @@ class AdjustedBarsTest {
     }
 
     @Test
+    fun `halted day with zero ohl and zero volume is flattened to close, not dropped`() {
+        val halted = row(100.0, 0.0, o = 0.0, h = 0.0, l = 0.0, v = 0)
+        val bars = AdjustedBars.build(listOf(row(100.0, null), halted), listOf(d1, d2))
+        assertEquals(listOf(100.0, 100.0, 100.0, 100.0), bars[1].let { listOf(it.open, it.high, it.low, it.close) })
+    }
+
+    @Test
     fun `null prevDiff starts new chain without NaN`() {
         val bars = AdjustedBars.build(
             listOf(row(100.0, null), row(50.0, 0.0), row(55.0, null), row(60.0, 5.0)), listOf(d1, d2, d3, d3.plusDays(1)),

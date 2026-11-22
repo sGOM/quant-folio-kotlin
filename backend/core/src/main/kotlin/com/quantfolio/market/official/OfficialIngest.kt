@@ -46,6 +46,7 @@ class OfficialIngest(
     private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val tradingDays = LocalTradingDays(ledger)
 
     private class Run(val budget: Int) {
         var calls = 0
@@ -210,7 +211,8 @@ class OfficialIngest(
         val later = ticks.symbolsWithBarsAfter(symbols, time)
         val prevTime = previousTradingDay(day)?.atStartOfDay()?.toInstant(ZoneOffset.UTC)
         val bars = mutableListOf<Pair<String, Bar>>()
-        for (r in rows) {
+        for (raw in rows) {
+            val r = AdjustedBars.flatIfHalted(raw)
             val o = r.open; val h = r.high; val l = r.low; val c = r.close; val v = r.volume
             if (o == null || h == null || l == null || c == null || v == null) continue
             val p = prev[r.symbol]
@@ -229,17 +231,8 @@ class OfficialIngest(
         ticks.upsertMany(bars)
     }
 
-    /** 원장상 day 의 바로 앞 거래일. 앞 평일이 원장에 없으면(실패·미적재) null — 공백이다. 0행으로 기록된 평일은 휴장으로 건너뛴다. */
-    private fun previousTradingDay(day: LocalDate): LocalDate? {
-        var d = day
-        repeat(PREV_DAY_LOOKBACK) {
-            d = d.minusDays(1)
-            if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) return@repeat
-            val e = ledger.get(SOURCE, stockKey(d)) ?: return null
-            if (e.rowCount > 0) return d
-        }
-        return null
-    }
+    /** day 의 바로 앞 거래일 — [LocalTradingDays] 한 곳. 원장에 없는 평일(실패·미적재)이 끼면 null — 공백이다. */
+    private fun previousTradingDay(day: LocalDate): LocalDate? = tradingDays.previous(day)
 
     private fun stockKey(day: LocalDate) = key(STOCK_SERVICES.getValue("KOSPI"), day, "KOSPI")
 
@@ -324,7 +317,6 @@ class OfficialIngest(
             MARKETS.map { STOCK_SERVICES.getValue(it) to it } + INDEX_SERVICES.map { (family, svc) -> svc to family }
 
         private const val DAY_CALLS = 5
-        private const val PREV_DAY_LOOKBACK = 10
 
         /** KRX Open API 일별 데이터 제공 시작일. */
         val API_START: LocalDate = LocalDate.of(2010, 1, 4)

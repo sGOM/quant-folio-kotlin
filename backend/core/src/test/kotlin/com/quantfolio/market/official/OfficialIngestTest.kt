@@ -59,6 +59,7 @@ class OfficialIngestTest(
         val failDays = mutableMapOf<LocalDate, Exception>()
         val failIndexDays = mutableMapOf<LocalDate, Exception>()
         val failBaseMarkets = mutableSetOf<String>()
+        val halted = mutableSetOf<LocalDate>()
         var indexNames: Map<String, List<String>> = mapOf("KRX" to listOf("KRX 300"), "KOSPI" to listOf("코스피", "코스피 200"), "KOSDAQ" to listOf("코스닥"))
         var dailyCalls = 0
         var indexCalls = 0
@@ -70,6 +71,7 @@ class OfficialIngestTest(
             failDays[day]?.let { throw it }
             val (c, d) = prices[day] ?: return emptyList()
             val sym = if (market == "KOSPI") "000001" else "000002"
+            if (day in halted) return listOf(OpenDailyRow(day, sym, market, 0.0, 0.0, 0.0, c, d, 0, 0, 1000, 100))
             return listOf(OpenDailyRow(day, sym, market, c, c, c, c, d, 10, 10, 1000, 100))
         }
 
@@ -164,8 +166,8 @@ class OfficialIngestTest(
         assertEquals(LedgerEntry(0, true), ledger.get("krx_open", key("stk_bydd_trd", oldDay, "KOSPI")))
         assertEquals(LedgerEntry(0, false), ledger.get("krx_open", key("stk_bydd_trd", recent, "KOSPI")))
         assertEquals(LedgerEntry(0, true), ledger.get("krx_open", key("kospi_dd_trd", oldDay, "KOSPI")))
-        assertTrue(LocalTradingDays(indexes, ledger).isHoliday(oldDay))
-        assertFalse(LocalTradingDays(indexes, ledger).isHoliday(recent))
+        assertTrue(LocalTradingDays(ledger).isHoliday(oldDay))
+        assertFalse(LocalTradingDays(ledger).isHoliday(recent))
     }
 
     @Test
@@ -189,6 +191,21 @@ class OfficialIngestTest(
         assertEquals(0, r.daysDone)
         assertEquals(1, r.failed.size)
         assertNull(ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI")))
+    }
+
+    @Test
+    fun `halted day bar has open high low equal to close`() {
+        trade(weekdays[0], weekdays[1], closes = listOf(1000.0 to 0.0, 1000.0 to 0.0))
+        open.halted += weekdays[1]
+        ingest().backfill(weekdays[0], weekdays[1], 1000)
+        val bars = ticks.bars("000001", Instant.parse("2320-01-01T00:00:00Z"), Instant.parse("2320-12-31T00:00:00Z"))
+        assertEquals(2, bars.size)
+        val b = bars.last()
+        assertEquals(listOf(1000.0, 1000.0, 1000.0, 1000.0), listOf(b.open, b.high, b.low, b.close))
+        // 수정주가 재계산 경로도 같은 규칙
+        ingest().rebuildAdjusted("000001")
+        val r = ticks.bars("000001", Instant.parse("2320-01-01T00:00:00Z"), Instant.parse("2320-12-31T00:00:00Z")).last()
+        assertEquals(listOf(1000.0, 1000.0, 1000.0), listOf(r.open, r.high, r.low))
     }
 
     @Test

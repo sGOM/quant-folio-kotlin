@@ -34,8 +34,10 @@ class LocalSnapshotsTest(
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired dartStore: DartFinancialStore,
     @Autowired dividends: DividendStore,
+    @Autowired ticks: com.quantfolio.market.store.PriceTickStore,
 ) {
     private val ledger = InMemoryFetchLedger()
+    private val days = LocalTradingDays(ledger)
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp() // 호출되면 안 된다: 로컬 경로
     private val cooldowns = Cooldowns(clock)
@@ -47,7 +49,7 @@ class LocalSnapshotsTest(
         dartStore.writeCorpCodes(mapOf("999999" to "00000001"))
     }
 
-    private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger), Valuation(daily, dart, dartStore, dividends, ledger))
+    private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger, ticks, days))
 
     // 2310-03-01 ~ 03-05 (공유 DB 의 다른 테스트와 겹치지 않는 먼 미래). 요일은 무관하게 평일 가정이 필요하므로 아래에서 검증한다.
     private val week = generateSequence(LocalDate.of(2310, 3, 1)) { it.plusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(8).toList()
@@ -58,7 +60,7 @@ class LocalSnapshotsTest(
         week.forEach { daily.delete(it) }
     }
 
-    private fun loadIndex(vararg days: LocalDate) = indexes.write("1001", days.map { IndexBar(it, close = 1.0) }, null)
+    private fun loadIndex(vararg days: LocalDate) = ledger.trading(days.toList()).also { indexes.write("1001", days.map { IndexBar(it, close = 1.0) }, null) }
     private fun row(close: Double? = null, volume: Long? = null, cap: Long? = null) = listOf(StockDaily("005930", market = "KOSPI", close = close, volume = volume, marketCap = cap))
 
     @Test

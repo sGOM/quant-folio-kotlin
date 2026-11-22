@@ -22,7 +22,8 @@ class McapUniverseTest(
     @Autowired private val daily: StockDailyStore,
     @Autowired private val indexes: IndexOhlcvStore,
 ) {
-    private val universe = McapUniverse(daily, LocalTradingDays(indexes, InMemoryFetchLedger()))
+    private val ledger = InMemoryFetchLedger()
+    private val universe = McapUniverse(daily, LocalTradingDays(ledger))
 
     // 공유 DB 의 다른 테스트와 겹치지 않는 먼 미래의 평일 5일.
     private val days = generateSequence(LocalDate.of(2330, 3, 1)) { it.plusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(5).toList()
@@ -34,7 +35,7 @@ class McapUniverseTest(
     fun clean() {
         indexes.delete("1001")
         days.forEach { daily.delete(it) }
-        indexes.write("1001", days.map { IndexBar(it, close = 1.0) }, null)
+        ledger.trading(days)
     }
 
     private fun row(sym: String, cap: Long?, kind: String? = null, market: String = "KOSPI") = StockDaily(sym, market = market, marketCap = cap, stockKind = kind)
