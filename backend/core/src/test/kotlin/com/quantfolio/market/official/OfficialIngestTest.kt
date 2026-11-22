@@ -286,6 +286,21 @@ class OfficialIngestTest(
     }
 
     @Test
+    fun `refetching a day with final stocks and partial index skips stock calls and rebuilds`() {
+        trade(weekdays[0], weekdays[1])
+        open.indexNames = open.indexNames + ("KOSPI" to listOf("코스피"))
+        val first = ingest().backfill(weekdays[0], weekdays[1], 1000)
+        assertEquals(0, first.daysDone)
+        assertTrue(first.failed.any { it.contains("kospi_dd_trd|${weekdays[0].toString().replace("-", "")} partial") && it.contains("코스피 200") })
+        jdbc.update("UPDATE price_ticks SET volume = 999 WHERE symbol = '000001' AND time >= :t", mapOf("t" to java.sql.Timestamp.from(Instant.parse("2320-01-01T00:00:00Z"))))
+        val stockCalls = open.dailyCalls
+        val second = ingest().backfill(weekdays[0], weekdays[1], 1000)
+        assertEquals(stockCalls, open.dailyCalls)
+        assertEquals(setOf(999L), ticks.bars("000001", range.first, range.second).map { it.volume }.toSet()) // 다시 쓰지 않았다
+        assertEquals(2, second.failed.size) // 재조회해도 partial 은 계속 보고된다
+    }
+
+    @Test
     fun `stocks succeed but index fails records and writes nothing`() {
         trade(weekdays[0])
         open.failIndexDays[weekdays[0]] = SourceUnavailableError("krx_open", "503")

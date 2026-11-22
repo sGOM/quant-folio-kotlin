@@ -105,18 +105,36 @@ class OfficialIngest(
 
     private fun rebuildDirty(run: Run) {
         if (run.dirty.isEmpty()) return
-        val gaps = marketGaps()
-        for (symbol in run.dirty) rebuild(symbol, gaps)
+        // finally 에서 불리므로 던지지 않는다(원래 예외를 가리지 않게) — 실패는 보고서에 남긴다.
+        try {
+            val gaps = marketGaps()
+            for (symbol in run.dirty) {
+                try {
+                    rebuild(symbol, gaps)
+                } catch (e: Exception) {
+                    run.failed += "수정주가 재계산 실패 $symbol: ${e.message}"
+                    log.error("수정주가 재계산 실패 {}", symbol, e)
+                }
+            }
+        } catch (e: Exception) {
+            run.failed += "수정주가 재계산 실패: ${e.message}"
+            log.error("수정주가 재계산 실패", e)
+        }
     }
 
     private fun key(service: String, day: LocalDate, market: String) = "$service|${day.format(YMD)}|$market"
 
     private fun isDone(day: LocalDate) = LEDGER_KEYS.all { (service, market) -> ledger.get(SOURCE, key(service, day, market))?.final == true }
 
-    /** @return 5개 호출이 모두 확정(휴장 확정 포함)이면 true. 예외가 나면 쓴 것이 없다. */
+    /**
+     * 원장에서 이미 확정된 서비스는 다시 받지도 쓰지도 않는다(확정된 시장의 주식 쓰기·봉 append 도 건너뛴다 —
+     * 늦은 봉이 이미 있어 전 종목이 dirty 가 되는 것을 막는다). 미확정 서비스만 받아 쓴다.
+     * @return 5개 서비스가 모두 확정(휴장 확정 포함)이면 true. 예외가 나면 쓴 것이 없다.
+     */
     private fun ingestDay(day: LocalDate, baseMarkets: List<String>, run: Run): Boolean {
-        val stocks = MARKETS.associateWith { run.calls++; api.stockDaily(day, it) }
-        val idx = INDEX_CODES.keys.associateWith { run.calls++; api.indexDaily(day, it) }
+        fun finalEntry(service: String, market: String) = ledger.get(SOURCE, key(service, day, market))?.takeIf { it.final }
+        val stocks = MARKETS.filter { finalEntry(STOCK_SERVICES.getValue(it), it) == null }.associateWith { run.calls++; api.stockDaily(day, it) }
+        val idx = INDEX_CODES.keys.filter { finalEntry(INDEX_SERVICES.getValue(it), it) == null }.associateWith { run.calls++; api.indexDaily(day, it) }
         for ((family, rows) in idx) {
             val expected = INDEX_CODES.getValue(family)
             // 행은 왔는데 기대 지수가 하나도 없으면 이름이 바뀐 것이다 — 조용히 0건 저장하면 그날이 휴장처럼 보인다.
@@ -124,16 +142,15 @@ class OfficialIngest(
                 throw SourceSchemaError(SOURCE, "지수 계열 $family 응답에 기대 지수(${expected.keys})가 없다: ${rows.take(3).map { it.name }}")
             }
         }
-        // 기대 지수 일부만 있으면(이름 변경 의심) 그 계열은 미확정으로 둔다.
-        val partial = idx.filter { (family, rows) ->
-            val expected = INDEX_CODES.getValue(family)
-            expected.isNotEmpty() && rows.isNotEmpty() && !rows.map { it.name.trim() }.containsAll(expected.keys)
-        }.keys
+        // 기대 지수 일부만 있으면(이름 변경 의심) 그 계열은 미확정으로 두고 사람이 보게 보고한다.
+        val partial = idx.mapNotNull { (family, rows) ->
+            val missing = INDEX_CODES.getValue(family).keys - rows.map { it.name.trim() }.toSet()
+            if (rows.isNotEmpty() && missing.isNotEmpty() && INDEX_CODES.getValue(family).isNotEmpty()) family to missing else null
+        }.toMap()
+        for ((family, missing) in partial) run.failed += "${INDEX_SERVICES.getValue(family)}|${day.format(YMD)} partial: 누락 ${missing.toList()}"
+        // 이번에 받은 서비스는 응답 행 수, 건너뛴 서비스는 원장의 확정 행 수.
         val counts = LEDGER_KEYS.associateWith { (service, market) ->
-            when (service) {
-                in STOCK_SERVICES.values -> stocks.getValue(market).size
-                else -> idx.getValue(market).size
-            }
+            finalEntry(service, market)?.rowCount ?: if (service in STOCK_SERVICES.values) stocks.getValue(market).size else idx.getValue(market).size
         }
         val holiday = counts.values.all { it == 0 }
         val oldEnough = !day.isAfter(MarketClock.todayKst(clock).minusDays(HOLIDAY_SETTLE_DAYS))
@@ -146,13 +163,15 @@ class OfficialIngest(
                 indexes.write(code, listOf(IndexBar(day, r.open, r.high, r.low, r.close)), r.name.trim())
             }
             appendPrices(day, dailyRows, run)
-            if (dailyRows.isNotEmpty()) ingestBase(day, dailyRows, baseMarkets, run)
+            ingestBase(day, baseMarkets, run)
         }
-        val finals = counts.mapValues { (k, n) ->
-            (n > 0 && !(INDEX_SERVICES[k.second] == k.first && k.second in partial)) || (holiday && oldEnough)
+        val fetched = LEDGER_KEYS.filter { (service, market) -> if (service in STOCK_SERVICES.values) market in stocks else market in idx }
+        for (k in fetched) {
+            val n = counts.getValue(k)
+            val final = (n > 0 && !(INDEX_SERVICES[k.second] == k.first && k.second in partial)) || (holiday && oldEnough)
+            ledger.put(SOURCE, key(k.first, day, k.second), n, final = final)
         }
-        for ((k, n) in counts) ledger.put(SOURCE, key(k.first, day, k.second), n, final = finals.getValue(k))
-        return finals.values.all { it }
+        return LEDGER_KEYS.all { k -> k !in fetched || ledger.get(SOURCE, key(k.first, day, k.second))?.final == true }
     }
 
     private fun OpenDailyRow.toStockDaily(market: String) = StockDaily(
@@ -161,9 +180,10 @@ class OfficialIngest(
     )
 
     /** 주권 종류. 시장별로 받고, 실패해도 그날 시세 적재는 유지하며(그 시장은 다음 처리일에 다시) 사유만 보고한다. */
-    private fun ingestBase(day: LocalDate, dailyRows: List<StockDaily>, markets: List<String>, run: Run) {
-        val present = dailyRows.map { it.symbol }.toSet()
+    private fun ingestBase(day: LocalDate, markets: List<String>, run: Run) {
         for (market in markets) {
+            val present = daily.read(day, listOf(market)).map { it.symbol }.toSet()
+            if (present.isEmpty()) continue
             try {
                 run.calls++
                 val rows = api.stockBase(day, market)
