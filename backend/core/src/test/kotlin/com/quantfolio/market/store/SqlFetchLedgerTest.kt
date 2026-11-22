@@ -19,6 +19,6 @@ class SqlFetchLedgerTest(@Autowired private val ledger: SqlFetchLedger) {
         assertNull(ledger.get("fundamentals", key))
         ledger.put("fundamentals", key, 0, false)
         ledger.put("fundamentals", key, 2500, true)
-        assertEquals(LedgerEntry(2500, true), ledger.get("fundamentals", key))
+        assertEquals(LedgerEntry(2500, true), ledger.get("fundamentals", key)?.copy(fetchedAt = null))
     }
 }

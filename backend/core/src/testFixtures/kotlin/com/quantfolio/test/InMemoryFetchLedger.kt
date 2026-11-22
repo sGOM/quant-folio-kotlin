@@ -7,7 +7,15 @@ import com.quantfolio.market.store.LedgerEntry
 class InMemoryFetchLedger : FetchLedger {
     val rows = mutableMapOf<Pair<String, String>, LedgerEntry>()
 
-    override fun get(source: String, key: String) = rows[source to key]
+    /** 테스트가 기록 시각을 지정한 키만. 없으면 fetchedAt = null. */
+    private val times = mutableMapOf<Pair<String, String>, java.time.Instant>()
+
+    override fun get(source: String, key: String) = rows[source to key]?.copy(fetchedAt = times[source to key])
+
+    fun putAt(source: String, key: String, rowCount: Int, final: Boolean, at: java.time.Instant) {
+        put(source, key, rowCount, final)
+        times[source to key] = at
+    }
 
     override fun put(source: String, key: String, rowCount: Int, final: Boolean) {
         rows[source to key] = LedgerEntry(rowCount, final)
