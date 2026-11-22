@@ -1,6 +1,20 @@
 package com.quantfolio.market.official
 
+import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.TestApp
+import com.quantfolio.market.dart.DartFinancials
+import com.quantfolio.market.dart.OpenDartClient
+import com.quantfolio.market.source.Cooldowns
+import com.quantfolio.market.source.HttpBytes
+import com.quantfolio.market.store.DartFinancialStore
+import com.quantfolio.market.store.DividendStore
+import com.quantfolio.test.FakeExternalHttp
+import java.io.ByteArrayOutputStream
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.IndexOhlcvStore
 import com.quantfolio.market.store.StockDaily
@@ -19,9 +33,29 @@ import kotlin.test.assertNull
 
 @SpringBootTest(classes = [TestApp::class])
 @Import(ContainersConfig::class)
-class LocalSnapshotsTest(@Autowired private val daily: StockDailyStore, @Autowired private val indexes: IndexOhlcvStore) {
+class LocalSnapshotsTest(
+    @Autowired private val daily: StockDailyStore,
+    @Autowired private val indexes: IndexOhlcvStore,
+    @Autowired dartStore: DartFinancialStore,
+    @Autowired dividends: DividendStore,
+) {
     private val ledger = InMemoryFetchLedger()
-    private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger))
+    private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
+    private val http = FakeExternalHttp().also { h ->
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { z ->
+            z.putNextEntry(ZipEntry("CORPCODE.xml"))
+            z.write("<result><list><corp_code>00000001</corp_code><stock_code>999999</stock_code></list></result>".toByteArray())
+            z.closeEntry()
+        }
+        h.on({ it.url.endsWith("corpCode.xml") }) { HttpBytes(200, out.toByteArray()) }
+    }
+    private val cooldowns = Cooldowns(clock)
+    private val dart = DartFinancials(
+        OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock),
+        dartStore, ledger, cooldowns, clock,
+    )
+    private val snaps = LocalSnapshots(daily, indexes, LocalTradingDays(indexes, ledger), Valuation(daily, dart, dartStore, dividends))
 
     // 2310-03-01 ~ 03-05 (공유 DB 의 다른 테스트와 겹치지 않는 먼 미래). 요일은 무관하게 평일 가정이 필요하므로 아래에서 검증한다.
     private val week = generateSequence(LocalDate.of(2310, 3, 1)) { it.plusDays(1) }.filter { it.dayOfWeek.value <= 5 }.take(8).toList()
@@ -110,8 +144,20 @@ class LocalSnapshotsTest(@Autowired private val daily: StockDailyStore, @Autowir
     }
 
     @Test
-    fun `fundamentals and unsupported methods throw not loaded`() {
-        assertEquals("valuation_pending", assertThrows<MarketDataNotLoaded> { snaps.fundamentals(week[0], listOf("KOSPI")) }.kind)
+    fun `fundamentals delegates to valuation and keeps market`() {
+        loadIndex(week[0])
+        daily.write(week[0], row(close = 1000.0, cap = 5_000L))
+        val v = snaps.fundamentals(week[0], listOf("KOSPI")).single()
+        assertEquals("005930", v.symbol)
+        assertEquals("KOSPI", v.market)
+        assertNull(v.per) // corp 매핑에 없는 종목 → 지표 null (0 아님)
+        assertNull(v.pbr)
+        assertNull(v.div)
+        assertThrows<MarketDataNotLoaded> { snaps.fundamentals(week[0], listOf("KOSDAQ")) } // 시장 적재 공백은 그대로 미적재
+    }
+
+    @Test
+    fun `unsupported methods throw not loaded`() {
         assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.indexTickers(week[0], "KOSPI") }.kind)
         assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.indexName(week[0], "1001") }.kind)
         assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.netPurchases(week[0], week[1], listOf("KOSPI")) }.kind)

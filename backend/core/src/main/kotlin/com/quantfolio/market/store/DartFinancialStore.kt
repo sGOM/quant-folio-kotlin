@@ -52,6 +52,12 @@ class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate, private v
         json.readValue<List<Map<String, Any?>>>(rs.getString(1)) to final
     }.firstOrNull()
 
+    /** 저장된 보고서의 접수일. 행이 없거나 접수번호를 해석하지 못했으면 null. */
+    fun receiptDate(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String): LocalDate? = jdbc.query(
+        "SELECT rcept_dt FROM dart_financials WHERE corp_code = :corp AND bsns_year = :year AND reprt_code = :reprt AND fs_div = :fs",
+        mapOf("corp" to corpCode, "year" to bsnsYear, "reprt" to reprtCode, "fs" to fsDiv),
+    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }.firstOrNull()
+
     fun delete(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String) {
         jdbc.update(
             "DELETE FROM dart_financials WHERE corp_code = :corp AND bsns_year = :year AND reprt_code = :reprt AND fs_div = :fs",

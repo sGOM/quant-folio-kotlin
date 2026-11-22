@@ -20,10 +20,14 @@ class LocalSnapshots(
     private val daily: StockDailyStore,
     private val indexes: IndexOhlcvStore,
     private val days: LocalTradingDays,
+    private val valuation: Valuation,
 ) : SnapshotSource {
-    // 이후 Task(Valuation)가 대체한다.
-    override fun fundamentals(asOf: LocalDate, markets: List<String>): List<StockDaily> =
-        throw MarketDataNotLoaded("valuation_pending", "fundamentals|${markets.joinToString(",")}", listOf(asOf to asOf))
+    /** 시장별 당일 종목을 [requireDay] 로 확인(적재 공백은 미적재)한 뒤 [Valuation] 으로 per·pbr·div 를 직접 계산. */
+    override fun fundamentals(asOf: LocalDate, markets: List<String>): List<StockDaily> {
+        if (asOf !in days.expected(asOf, asOf)) return emptyList()
+        val symbols = markets.flatMap { requireDay(asOf, it) }.map { it.symbol }
+        return valuation.compute(asOf, symbols)
+    }
 
     override fun marketCap(asOf: LocalDate, markets: List<String>): List<StockDaily> {
         if (asOf !in days.expected(asOf, asOf)) return emptyList()

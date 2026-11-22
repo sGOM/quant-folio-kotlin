@@ -86,6 +86,24 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         }
     }
 
+    /** 종목별 (asOf - lookbackDays, asOf] 안의 가장 최근 행. 미래 행은 보지 않는다. 구간에 행이 없는 종목은 결과에 없다. */
+    fun latestUpTo(symbols: List<String>, asOf: LocalDate, lookbackDays: Long): List<StockDaily> {
+        if (symbols.isEmpty()) return emptyList()
+        return jdbc.query(
+            """
+            SELECT DISTINCT ON (symbol) * FROM stock_daily_snapshots
+             WHERE symbol IN (:symbols) AND trade_date <= :asOf AND trade_date > :from
+             ORDER BY symbol, trade_date DESC
+            """,
+            mapOf("symbols" to symbols.map(::padSymbol), "asOf" to asOf, "from" to asOf.minusDays(lookbackDays)),
+        ) { rs, _ ->
+            StockDaily(
+                symbol = rs.getString("symbol"), market = rs.getString("market"),
+                marketCap = rs.long("market_cap"), close = rs.double("close"),
+            )
+        }
+    }
+
     fun delete(day: LocalDate) {
         jdbc.update("DELETE FROM stock_daily_snapshots WHERE trade_date = :day", mapOf("day" to day))
     }
