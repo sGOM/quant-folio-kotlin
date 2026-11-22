@@ -15,6 +15,9 @@ import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.MarketCalendar
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.McapUniverse
+import com.quantfolio.market.store.IndexConstituentStore
+import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
@@ -75,6 +78,9 @@ data class RunnerContext(
     val scores: UniverseScores,
     val krx: KrxIndexService,
     val positions: PositionRepository,
+    val mcap: McapUniverse,
+    val constituents: IndexConstituentStore,
+    val daily: StockDailyStore,
 )
 
 /**
