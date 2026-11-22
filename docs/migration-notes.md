@@ -116,6 +116,25 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 장 마감 뒤 16:03(KST) 지정가(00) + `NXT`, 하한가 137,800원 1주 매수는 `rt_cd=1 msg_cd=40580000 "모의투자 장종료 입니다."` 로 거절됐다.
 - 결론: 모의투자로는 정규장 밖 주문(시간외·NXT 프리/애프터마켓)을 낼 수 없어 이 경로는 모의에서 검증할 수 없다. 실전에서의 동작은 미측정.
 
+## 공식 경로 시장데이터 1단계 — 의도적 변경 (2026-11-22~)
+
+설계 `docs/superpowers/specs/2026-11-22-official-market-data-phase1-design.md`. 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)만 바꿨고 UI 경로(스크리너·차트 등)의 MDC·네이버는 2단계까지 그대로다. 아래는 원본과 **일부러 다르게** 한 것이다.
+
+- 소스 교체: 종목 일봉·시총·지수는 KRX MDC·네이버 대신 KRX Open API 를 `market/krxopen/` 이 적재한 로컬 테이블에서 읽는다. 수정주가는 외부 수정주가 대신 원주가 + 전일대비(`prevDiff`)로 로컬에서 계산한다(`AdjustedBars`). DART 재무는 로컬 전용(`remote=false`, 종목→corp_code 는 `dart_corp_codes`), 배당은 공공데이터포털 금융위원회_주식배당정보(`getDiviInfo_V2`)다.
+  **미실측(Task 1 스파이크 대기, KRX IP 차단·401):** Open API 응답 필드명(문서상 이름으로 구현), 지수명 원문(코스피=1001·코스피 200=1028·코스닥=2001 로 매핑한 가정), 보통주 판정 문자열 `"보통주"`, 일일 공개 시각(작업은 10:00 KST 가정), TR(총수익) 지수 존재 여부.
+- 미적재는 실패다: 로컬에 없으면 원격 폴백·조용한 저하 대신 `MarketDataNotLoaded`(백테스트 409, 원본은 비어 있으면 MDC·네이버로 내려가거나 빈 결과로 계속). 조회 실패(`DataSourceError`)와 구분된다.
+- 백테스트에 배당 포함: 락일(기준일 이하 마지막 거래일의 직전 거래일)에 직전일 종가 보유분만 적립, 세율 0.154, 금액은 수정주가 단위로 환산(`dps_raw × 수정종가/원종가`). 벤치마크는 배당 제외(TR 지수 미확인). 배당 출처는 공시일이 없어 `announcedOn=null`, Valuation 은 기준일+90일에 알려진 것으로 본다.
+- Valuation: PER/PBR/DIV 를 로컬에서 계산(시총·종가는 asOf 이하 최신 거래일). 전체 적재가 있고 창 안에 배당 행이 없으면 `div=0.0`(무배당, 원본 KRX DVD_YLD 와 같은 의미), 전체 적재가 없거나 배당 이력 시작+365일 이전이면 `null`.
+- 업종 체계: KRX 업종명 대신 KIS 종목마스터 중분류(`sector_map_snapshots` 를 KIS 마스터가 채움). 섹터 캡 결과가 원본과 다를 수 있다. 값 형식이 `KOSPI:0013` 과 옛 KRX 업종명이 날짜별로 섞여 있다.
+- 유니버스 `KOSPI_MCAP`: 직전 거래일 이하 최신 시총 상위 N 보통주(종목별 최신 `stock_kind`). 구성종목 조회(MDC) 대신이며 `pick` 기본값을 따른다. 보통주 여부를 아는 종목이 하나도 없으면 `MarketDataNotLoaded("stock_kind")`.
+- 라이브 엔진 fail-closed: 시장데이터 미적재면 리밸런싱을 건너뛰고 에피소드당 critical 1회만 알린다(경보 플래그는 국면용·계획용 분리). 국면(`isRiskOff`)을 모르면 새 매수·리밸런싱 정지, 청산은 하지 않는다. 리스크오프 청산은 유니버스·업종 없이 `heldPositions()` 전체를 대상으로 계속 실행한다.
+- 응답 `factor_warnings` 키 제거: 원본은 커버리지 낮음을 경고로 남기고 진행했다. 지금은 팩터 커버리지 < 50% 면 실패한다(value/quality 는 점수에 쓰는 컬럼 기준, 빈 유니버스는 별도 실패).
+- 1단계 거부: `flow`·`pead` 가중치(수급 순매수·공시 달력이 원격 전용)는 `MarketDataNotLoaded("unsupported_in_phase1")`. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
+- `PanicService` UI: 시장별로 격리해 한 시장이 비면 그 시장만 `unavailable`(전체 503 아님). 백테스트의 패닉 시계열은 로컬 전용이며 priceChange 에서 기간 중 상폐 종목은 MDC 처럼 close 0·-100%·거래량 0 으로 보강한다. UI 의 `newLowRatio` 는 여전히 null.
+- 거래일·휴장: 로컬 `index_ohlcv(1001)` 날짜가 거래일 목록, 휴장 판정은 원장 `krx_open|stk_bydd_trd|yyyyMMdd|KOSPI` 가 0행·final. 적재 범위 밖 과거일은 KIS 국내휴장일조회(vts 미지원 → 평일 규칙 폴백+로그).
+- 원본 동작 보존(고치지 않고 기록): 정기 리밸런싱의 `holdings(pool)` 필터 — 풀(상위 N)에서 빠진 보유 종목은 고아 포지션이 되어 정기 리밸런싱으로 팔리지 않는다(리스크오프만 전체 청산). 라이브 `StrategyRunner` 일봉 시드는 기동 1회(`onLoad`). 엔진의 DART 미적재는 quality/growth 가중치가 있어도 중립 0점으로 매매한다(백테스트의 커버리지 관문 없음, 최종 리뷰 판단 대기).
+- 알려진 한계(미측정): `residual_momentum` 이 필요한 로컬 일봉 깊이(~2.4년), `DividendFeed` 전체 원주가 이력 로드 비용, 기존 `price_ticks` 보다 이른 날 백필 시 원주가·수정주가 혼입 가능.
+
 ## 의도적 차이 (동작 동등, 표현만 다름)
 
 - 텔레그램 알림 제거(2026-11-17 소유자 결정): 원본 `engine/alerts.publish_alert` 는 DB 적재가 dedup 으로 생략되지 않은 경우에 한해 `severity == "critical"` 이고 `TELEGRAM_BOT_TOKEN`·`TELEGRAM_CHAT_ID` 가 모두 비어 있지 않으면 사용자(WS) 유무와 무관하게 봇으로 추가 발송했다(타임아웃 5초, 실패는 로그만). Kotlin 은 그 경로를 지웠다 — 알림은 DB 저장·화면(WS)만. 되살리려면 이 제거 커밋을 되돌린다.

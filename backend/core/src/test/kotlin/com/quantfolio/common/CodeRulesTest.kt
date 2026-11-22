@@ -74,6 +74,23 @@ class CodeRulesTest {
         assertTrue(sqlHits.isEmpty(), "마이그레이션에서 차단 표시 해제 금지:\n${report(sqlHits)}")
     }
 
+    /**
+     * 공식 경로 1단계: 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)는 KRX MDC·네이버 클래스를 참조하지 않는다.
+     * OhlcvLoader.kt 는 UI 경로용 Naver 보충(2단계에서 제거)이 남아 목록에서 뺐고, 전략 경로의 LocalOhlcvCoverage 를 LocalOhlcvCoverage.kt 로 분리해 대신 넣었다.
+     * 미해결: BacktestRunner.kt·LocalMarketData.kt 는 업종(로컬 스냅샷만 읽음)을 KrxIndexService.sectorMap 으로 받아 아직 목록에 없다 — 업종 조회를 MDC 의존 없는 빈으로 떼어낸 뒤 목록에 넣는다.
+     */
+    @Test
+    fun strategyPathAvoidsMdcAndNaver() {
+        val files = setOf(
+            "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
+            "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt",
+        )
+        val found = mainCodeLines().map { it.first.substringAfterLast('/') }.toSet()
+        assertTrue(files.all { it in found }, "목록의 파일을 못 찾음(이름 변경?): ${files - found}")
+        val hits = mainCodeLines().filter { (f, _, l) -> f.substringAfterLast('/') in files && FORBIDDEN_SOURCE.containsMatchIn(l) }
+        assertTrue(hits.isEmpty(), "전략 경로는 KRX MDC·네이버를 쓰지 않는다(공식 경로 로컬 소스만):\n${report(hits)}")
+    }
+
     /** 정규식이 아무것도 못 잡게 망가지면 위 테스트들이 조용히 통과한다 — 그걸 막는다. */
     @Test
     fun patternsCatchViolations() {
@@ -101,6 +118,7 @@ class CodeRulesTest {
     }
 
     companion object {
+        private val FORBIDDEN_SOURCE = Regex("""\b(KrxSession|KrxMdc|KrxStockApi|KrxIndexService|KrxSnapshots|NaverDaily)\b""")
         private const val BLOCKED_COLUMN = "kis_balance_reconcile_blocked"
         private val BLOCKED_RELEASE = Regex("""kis_balance_reconcile_blocked\s*:?=\s*false""", RegexOption.IGNORE_CASE)
         private val SYSTEM_ZONE_DATE = Regex("""\b(LocalDate|LocalDateTime|LocalTime|ZonedDateTime|OffsetDateTime|YearMonth|Year)\.now\(\)|systemDefault""")
