@@ -45,5 +45,5 @@ paths:
 
 ## 함정
 
-- 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다 — 2026-11-17 실측에서 시험 전략이 이 때문에 주문을 내지 않았다.
-- `PortfolioBacktest` 는 조회 없는 순수 계산이라 업종 매핑 같은 조회 입력(`_sector_map`)은 `BacktestRunner.withSectorMap` 이 config 에 실어 넘긴다 — 원본은 백테스트 함수 안에서 조회해 Kotlin 이전 때 누락됐다(2026-11-22 수정). 실거래(`RebalanceRunner`)와 백테스트가 같은 리스크 설정을 적용하는지 함께 확인한다.
+- 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다.
+- `PortfolioBacktest` 는 조회 없는 순수 계산이라 업종 매핑 같은 조회 입력(`_sector_map`)은 `BacktestRunner.withSectorMap` 이 config 에 실어 넘긴다(원본은 백테스트 함수 안에서 조회한다). 실거래(`RebalanceRunner`)와 백테스트가 같은 리스크 설정을 적용하는지 함께 확인한다.
