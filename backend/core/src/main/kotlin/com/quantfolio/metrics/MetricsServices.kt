@@ -4,6 +4,7 @@ import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.market.kofia.KofiaClient
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -22,6 +23,8 @@ class TechIndicatorLoader(private val prices: PriceHistory) {
     fun load(code: String, start: LocalDate, end: LocalDate): TechIndicators = try {
         val bars = prices.load(code, start, end)
         TechIndicators.of(bars.closeSeries())
+    } catch (e: MarketDataNotLoaded) {
+        throw e // 로컬 전용 소스의 미적재는 빈 지표(중립)로 삼키지 않는다
     } catch (e: Exception) {
         log.debug("기술지표 계산 실패 ({}): {}", code, e.message)
         TechIndicators()

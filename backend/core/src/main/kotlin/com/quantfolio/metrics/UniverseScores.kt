@@ -6,6 +6,7 @@ import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.closeSeries
@@ -89,11 +90,15 @@ class UniverseScores(
         put("vol_ann") { t.getValue(it).volAnn }
         put("mdd_252") { t.getValue(it).mdd252 }
 
-        val quality = try {
-            inputs.qualityMetrics(codes, asOf, p.financialPeriod == "ttm")
-        } catch (e: DataSourceError) {
-            log.error("OpenDART 퀄리티 팩터 조회 실패 — 중립 처리: {}", e.message)
-            emptyMap()
+        val quality = if (!weighted("quality") && !weighted("growth")) {
+            emptyMap() // 가중치가 0 이면 점수에 쓰이지 않는다 — 재무를 조회하지 않는다
+        } else {
+            try {
+                inputs.qualityMetrics(codes, asOf, p.financialPeriod == "ttm")
+            } catch (e: DataSourceError) {
+                log.error("OpenDART 퀄리티 팩터 조회 실패 — 중립 처리: {}", e.message)
+                emptyMap()
+            }
         }
         if (quality.isNotEmpty()) {
             for (k in FactorScores.QUALITY_COLS) {
@@ -140,6 +145,8 @@ class UniverseScores(
 
     private fun guarded(label: String, block: () -> Map<String, Double>): Map<String, Double> = try {
         block()
+    } catch (e: MarketDataNotLoaded) {
+        throw e // 미적재는 중립 처리하지 않고 호출자가 멈춘다
     } catch (e: Exception) {
         log.warn("{} 팩터 조회 실패 — 중립 처리: {}", label, e.message)
         emptyMap()
@@ -177,7 +184,13 @@ class UniverseScores(
         val market = Series(idx.map { it.date }, DoubleArray(idx.size) { idx[it].close ?: Double.NaN })
         val closes = linkedMapOf<String, Series>()
         for (c in norm) {
-            val bars = runCatching { prices.load(c, start, asOf) }.getOrNull()
+            val bars = try {
+                prices.load(c, start, asOf)
+            } catch (e: MarketDataNotLoaded) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
             if (bars.isNullOrEmpty()) continue
             closes[c] = bars.closeSeries()
         }

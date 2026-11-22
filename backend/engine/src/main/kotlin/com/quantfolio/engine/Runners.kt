@@ -13,16 +13,12 @@ import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.StockDailyStore
-import com.quantfolio.market.ohlcv.OhlcvLoader
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.MetricsCommon
-import com.quantfolio.metrics.UniverseScores
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.Logger
@@ -71,12 +67,9 @@ data class RunnerContext(
     val risk: RiskManager,
     val calendar: MarketCalendar,
     val ticks: PriceTickStore,
-    val loader: OhlcvLoader,
     val jdbc: NamedParameterJdbcTemplate,
-    val snapshots: SnapshotSource,
     val common: MetricsCommon,
-    val scores: UniverseScores,
-    val krx: KrxIndexService,
+    val market: LocalMarketData,
     val positions: PositionRepository,
     val mcap: McapUniverse,
     val constituents: IndexConstituentStore,
@@ -197,19 +190,13 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     }
 
     /**
-     * price_ticks 의 [start, end] 일봉. [minBars] 보다 적으면 외부 소스에서 적재해 다시 읽는다.
-     * 적재 실패는 경고만 남기고 있는 만큼 돌려준다(`"$symbol $failLogLabel 적재 실패"`).
+     * price_ticks 의 [start, end] 일봉(로컬만 — 외부 소스로 보충하지 않는다). [minBars] 보다 적으면 경고만 남기고 있는 만큼 돌려준다.
+     * 거래일 누락을 막아야 하는 호출자(리밸런싱)는 먼저 `ctx.market.coverage.require` 로 확인한다.
      */
     protected fun barsWithBackfill(symbol: String, start: Instant, end: Instant, minBars: Int, failLogLabel: String): List<Bar> {
         val bars = ctx.ticks.bars(symbol, start, end)
-        if (bars.size >= minBars) return bars
-        return try {
-            ctx.ticks.upsert(symbol, ctx.loader.load(symbol, start.atZone(ZoneOffset.UTC).toLocalDate(), end.atZone(ZoneOffset.UTC).toLocalDate()))
-            ctx.ticks.bars(symbol, start, end)
-        } catch (e: Exception) {
-            log.warn("{} {} 적재 실패: {}", symbol, failLogLabel, e.message)
-            bars
-        }
+        if (bars.size < minBars) log.warn("{} {} 로컬 일봉 부족({}<{}) — 외부 보충 없음", symbol, failLogLabel, bars.size, minBars)
+        return bars
     }
 
     /** 이 전략에 귀속된 (사용자, 종목) 포지션. 없으면 null. */

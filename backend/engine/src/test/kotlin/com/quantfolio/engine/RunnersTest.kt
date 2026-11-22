@@ -30,16 +30,19 @@ import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.IndexBar
+import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.test.ContainersConfig
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willReturn
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -72,7 +75,10 @@ class RunnersTest(
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
     @MockitoBean lateinit var calendar: MarketCalendar
-    @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean @Qualifier("local") lateinit var snapshots: SnapshotSource // 엔진이 쓰는 로컬 소스
+    @MockitoBean lateinit var remoteSnapshots: com.quantfolio.market.krx.KrxSnapshots // 원격 — 라이브 틱이 부르면 안 된다
+    @MockitoBean lateinit var naver: com.quantfolio.market.ohlcv.NaverDaily
+    @MockitoBean lateinit var coverage: com.quantfolio.market.ohlcv.LocalOhlcvCoverage
     @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
     @MockitoBean lateinit var mcap: McapUniverse
 
@@ -435,6 +441,131 @@ class RunnersTest(
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
         assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid && it.severity == AlertSeverity.critical })
+    }
+
+    private fun heldKilled(uid: Int, sid: Int, held: String) {
+        val o = orders.save(Order(uid, sid, held, "buy", BigDecimal("100"), BigDecimal("1000"), status = OrderStatus.filled,
+            idempotencyKey = UUID.randomUUID().toString(), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        executions.save(Execution(o.id!!, sid, BigDecimal("100"), BigDecimal("1000"), accountPositionQty = BigDecimal("100")))
+        positions.save(Position(uid, sid, held, BigDecimal("100"), BigDecimal("1000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        redis.opsForValue().set(RedisKeys.mddState(sid, TEST_KIS_ACCOUNT_KEY), """{"hwm": 100000.0, "killed": false, "kill_date": null, "rearm_pending": false}""")
+        broker.quotes[held] = BigDecimal("800") // 자산가치 80,000 → 낙폭 -20%
+    }
+
+    private val mdd = mapOf("capital" to 100_000, "risk_layer" to mapOf("mdd_kill_pct" to 0.1, "mdd_rearm_days" to 5))
+
+    @Test
+    fun `mdd kill switch liquidates holdings even when universe not loaded`() {
+        val fixed = listOf(sym())
+        val held = fixed[0]
+        given(mcap.members(anyDate(), org.mockito.ArgumentMatchers.anyInt())).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        val (uid, sid) = strategy(mcapCfg(fixed, mdd))
+        heldKilled(uid, sid, held)
+        rebal(sid).tickOnce()
+        assertEquals(listOf(held), ordersOf(sid).filter { it.side == "sell" }.map { it.symbol })
+        assertTrue(alerts.findAll().none { it.code == "market_data_not_loaded" && it.strategyId == sid })
+    }
+
+    @Test
+    fun `risk off sells holdings outside the candidate pool`() {
+        val inPool = sym()
+        val outside = sym()
+        val (uid, sid) = strategy(rebalCfg(listOf(inPool), mdd))
+        heldKilled(uid, sid, outside) // universe 에 없는 보유
+        rebal(sid).tickOnce()
+        assertEquals(listOf(outside), ordersOf(sid).filter { it.side == "sell" }.map { it.symbol })
+    }
+
+    @Test
+    fun `KOSPI_MCAP decision date is today so previous trading day must be loaded`() {
+        val members = (1..2).map { sym() }
+        val fixed = listOf(sym())
+        (members + fixed).forEach { c -> seed(c, 30) { i -> 1000.0 + i } }
+        val today = com.quantfolio.common.MarketClock.todayKst(ctx.clock)
+        given(mcap.members(anyDate(), org.mockito.ArgumentMatchers.anyInt())).willReturn(members) // 그 이전 날짜는 적재된 상태
+        org.mockito.BDDMockito.willThrow(MarketDataNotLoaded("stock_daily", "KOSPI")).given(mcap).members(org.mockito.ArgumentMatchers.eq(today) ?: today, org.mockito.ArgumentMatchers.anyInt())
+        val (_, sid) = strategy(mcapCfg(fixed))
+        rebal(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid })
+    }
+
+    @Test
+    fun `unknown regime stops buying and alerts without liquidating`() {
+        val codes = listOf(sym())
+        seed(codes[0], 30) { 1000.0 }
+        given(snapshots.indexOhlcv(anyDate(), anyDate(), anyString())).willThrow(MarketDataNotLoaded("index_ohlcv", "1001"))
+        val (uid, sid) = strategy(rebalCfg(codes, mapOf("regime_filter" to mapOf("enabled" to true, "ma_period" to 20))))
+        positions.save(Position(uid, sid, codes[0], BigDecimal("7"), BigDecimal("900"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        rebal(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty()) // 국면을 모르면 매수도, 청산도 하지 않는다
+        val a = alerts.findAll().single { it.code == "market_data_not_loaded" && it.strategyId == sid }
+        assertEquals(AlertSeverity.critical, a.severity)
+    }
+
+    @Test
+    fun `live tick completes without touching remote sources`() {
+        val codes = (1..3).map { sym() }
+        codes.forEachIndexed { k, c -> seed(c, 30) { i -> 1000.0 + (k + 1) * 10.0 * i } }
+        codes.forEach { broker.quotes[it] = BigDecimal("1000") }
+        val idx = (0 until 60).map { IndexBar(LocalDate.now().minusDays(60L - it), close = 3000.0) }
+        given(snapshots.indexOhlcv(anyDate(), anyDate(), anyString())).willReturn(idx)
+        given(snapshots.priceChange(anyDate(), anyDate(), anyList())).willReturn(codes.mapIndexed { k, c -> StockPeriod(c, changePct = 5.0 + k) })
+        given(krx.sectorMap(anyDate())).willReturn(codes.associateWith { "S" })
+        val (_, sid) = strategy(
+            rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0)),
+                "regime_filter" to mapOf("enabled" to true, "ma_period" to 20), "risk_layer" to mapOf("max_sector_pct" to 0.6))),
+        )
+        rebal(sid).tickOnce()
+        assertTrue(ordersOf(sid).isNotEmpty(), alerts.findAll().filter { it.strategyId == sid }.map { it.message }.toString())
+        org.mockito.Mockito.verifyNoInteractions(remoteSnapshots, naver)
+        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).marketCaps(anyDate())
+        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
+    }
+
+    @Test
+    fun `flow and pead weights are rejected on live with critical and no orders`() {
+        val codes = (1..2).map { sym() }
+        codes.forEach { seed(it, 30) { i -> 1000.0 + i } }
+        val (_, sid) = strategy(rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0, "flow" to 0.5)))))
+        rebal(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid && it.severity == AlertSeverity.critical })
+    }
+
+    @Test
+    fun `missing local price history stops seeding with critical`() {
+        val codes = (1..2).map { sym() }
+        codes.forEach { seed(it, 30) { i -> 1000.0 + i } }
+        org.mockito.Mockito.doThrow(MarketDataNotLoaded("price_ticks", codes[0])).`when`(coverage).require(org.mockito.ArgumentMatchers.eq(codes[0]) ?: "", anyDate(), anyDate())
+        val (_, sid) = strategy(rebalCfg(codes))
+        rebal(sid).tickOnce()
+        assertTrue(ordersOf(sid).isEmpty())
+        assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid })
+        org.mockito.Mockito.verifyNoInteractions(naver)
+    }
+
+    @Test
+    fun `critical alert is raised once per episode even after it is read and again after recovery`() {
+        val members = (1..2).map { sym() }
+        val fixed = listOf(sym())
+        (members + fixed).forEach { c -> seed(c, 30) { i -> 1000.0 + i } }
+        given(mcap.members(anyDate(), org.mockito.ArgumentMatchers.anyInt())).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        val (_, sid) = strategy(mcapCfg(fixed))
+        val r = rebal(sid)
+        fun mine() = alerts.findAll().filter { it.code == "market_data_not_loaded" && it.strategyId == sid }
+        fun readAll() = alerts.saveAll(mine().onEach { it.isRead = true })
+        r.tickOnce()
+        readAll()
+        r.tickOnce() // 읽었어도 같은 에피소드면 다시 쌓지 않는다
+        r.tickOnce()
+        assertEquals(1, mine().size)
+        org.mockito.BDDMockito.willReturn(members).given(mcap).members(anyDate(), org.mockito.ArgumentMatchers.anyInt())
+        r.rebalanceOnce(ZonedDateTime.now(), riskOff = false, barTag = "ok") // 해소
+        org.mockito.BDDMockito.willThrow(MarketDataNotLoaded("stock_daily", "KOSPI")).given(mcap).members(anyDate(), org.mockito.ArgumentMatchers.anyInt())
+        readAll()
+        r.rebalanceOnce(ZonedDateTime.now(), riskOff = false, barTag = "again2") // 새 에피소드
+        assertEquals(2, mine().size)
     }
 
     /** 타임아웃으로 끊긴 틱은 주문하지 않는다. 틱 안의 catch(Exception) 가 인터럽트를 삼켜도(시세 조회 실패 처리 등) 마찬가지. */

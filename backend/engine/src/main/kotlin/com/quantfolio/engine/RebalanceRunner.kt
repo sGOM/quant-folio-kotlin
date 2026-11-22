@@ -7,6 +7,7 @@ import com.quantfolio.backtest.Tracking
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
+import com.quantfolio.factor.FactorScores
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.metrics.MetricsCommon
@@ -26,6 +27,7 @@ import java.math.MathContext
 import java.time.Duration
 import java.time.LocalDate
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
 /**
@@ -43,6 +45,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     private val json = JsonMapper.builder().build()
     private var pitFallbackActive = false
     private var panicAlerted = false
+    private var dataGapAlerted = false
     private var sectorMap: Map<String, String>? = null
 
     private val selection get() = Cfg.map(cfg, "selection")
@@ -81,7 +84,13 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         var riskOff = false
         var reentry = false
         if (regimeEnabled && marketOpen) {
-            riskOff = isRiskOff()
+            riskOff = try {
+                isRiskOff()
+            } catch (e: MarketDataNotLoaded) {
+                // 국면을 모른다 — 새 매수·리밸런싱을 멈추고 알린다. 청산도 하지 않는다(MDD 킬스위치는 위에서 이미 평가됨).
+                alertDataGap(e, "국면(레짐) 판정에 필요한 지수 데이터가 없어 이번 점검의 매매를 모두 중단합니다(청산·신규 매수 없음, MDD 킬스위치는 계속 동작)")
+                return
+            }
             val prev = getRegime()
             setRegime(riskOff)
             if (!riskOff && prev == true && !hasHoldings()) reentry = true
@@ -251,23 +260,26 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     // ── 계획·주문 ──
 
-    /** (후보풀, 목표비중). 위험회피면 목표 없음(전량 청산). */
-    private fun computePlan(asOf: LocalDate, riskOff: Boolean): Pair<List<String>, Map<String, Double>> {
+    /** (후보풀, 목표비중). 위험회피(청산)는 이 계획을 거치지 않는다 — 시장데이터 없이도 보유를 정리해야 하므로. */
+    private fun computePlan(asOf: LocalDate): Pair<List<String>, Map<String, Double>> {
         val pool = resolveUniverse(asOf)
         log.info("전략 {} 후보풀 확보: {}종목", strategyId, pool.size)
-        if (riskOff) return pool to emptyMap()
         val method = selection["method"]
         val weighting = Cfg.get(cfg, "weighting", "equal")
         val riskLayer = Cfg.map(cfg, "risk_layer")
         val hasRuleType = Cfg.truthy(rule["type"])
-        val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it) } ?: emptyMap()
+        val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it, asOf) } ?: emptyMap()
         val universe = if (hasRuleType) Rebalance.dynamicUniverse(Panel.fromSeries(history), pool, rule) else pool
         val planCfg = cfg + ("universe" to universe)
         var scores: Map<String, Double>? = null
         if (method == "score") {
             @Suppress("UNCHECKED_CAST")
             val fw = (selection["factor_weights"] as? Map<String, Any?>)?.mapValues { Cfg.num(it.value) }
-            scores = ctx.scores.compute(universe, asOf, scoreParams(fw))
+            val w = fw?.takeIf { it.isNotEmpty() } ?: FactorScores.DEFAULT_WEIGHTS
+            for (k in listOf("flow", "pead")) {
+                if ((w[k] ?: 0.0) > 0) throw MarketDataNotLoaded("unsupported_in_phase1", "$k 팩터(공식 경로에 입력 없음) — 가중치를 0 으로 두세요")
+            }
+            scores = ctx.market.scores.compute(universe, asOf, scoreParams(fw))
         }
         var targets = Rebalance.targetWeights(history, planCfg, scores)
         if (riskLayer.isNotEmpty() && targets.isNotEmpty()) {
@@ -300,27 +312,27 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     private fun sectors(): Map<String, String> {
         sectorMap?.takeIf { it.isNotEmpty() }?.let { return it }
-        val smap = ctx.krx.sectorMap(MarketClock.todayKst(ctx.clock)) // 로컬 스냅샷이 없으면 MarketDataNotLoaded — 캡을 조용히 빼지 않고 리밸런싱을 멈춘다
+        val smap = ctx.market.sectorMap(MarketClock.todayKst(ctx.clock)) // 로컬 스냅샷이 없으면 MarketDataNotLoaded — 캡을 조용히 빼지 않고 리밸런싱을 멈춘다
         if (smap.isNotEmpty()) sectorMap = smap else log.warn("전략 {} 섹터 한도 설정됨이나 업종 매핑 미확보 — 섹터 캡 미적용.", strategyId)
         return smap
     }
 
     /**
-     * 계획 계산 중 시장데이터 미적재([MarketDataNotLoaded]: 유니버스·업종·시총)면 주문 없이 건너뛰고 critical 경보(fail-closed).
-     * 지수·MCAP 유니버스는 config.universe 로 대체하지 않는다. 건너뛰었으면 false.
+     * 계획 계산 중 시장데이터 미적재([MarketDataNotLoaded]: 유니버스·업종·시총·일봉)면 주문 없이 건너뛰고 critical 경보(fail-closed).
+     * MCAP 유니버스는 config.universe 로 대체하지 않는다. 건너뛰었으면 false.
+     * [riskOff](청산)는 계획·시장데이터 없이 이 전략·계좌의 보유 전부를 판다 — 후보풀 밖 보유도 포함.
      */
     fun rebalanceOnce(now: ZonedDateTime, riskOff: Boolean, barTag: String = "rebal", liqKind: String = "regime"): Boolean {
         val asOf = ctx.common.lastBusinessDay()
-        val (pool, targets) = try {
-            computePlan(asOf, riskOff)
-        } catch (e: MarketDataNotLoaded) {
-            log.error("리밸런싱 전략 {} 시장데이터 미적재 — 주문 없이 건너뜀: {}", strategyId, e.message)
-            ctx.alerts.publish(
-                userId, strategyId, AlertSeverity.critical,
-                "시장데이터가 적재되지 않아 이번 리밸런싱을 건너뜁니다(주문 없음, 기존 보유 유지): ${e.message}. 데이터 적재 후 다음 점검에서 재시도합니다.",
-                "market_data_not_loaded", dedupWindowHours = 24.0,
-            )
-            return false
+        val (pool, targets) = if (riskOff) {
+            emptyList<String>() to emptyMap()
+        } else {
+            try {
+                computePlan(asOf).also { dataGapAlerted = false } // 해소 — 다음 결손은 새 에피소드
+            } catch (e: MarketDataNotLoaded) {
+                alertDataGap(e, "시장데이터가 적재되지 않아 이번 리밸런싱을 건너뜁니다(주문 없음, 기존 보유는 그대로)")
+                return false
+            }
         }
         if (riskOff) {
             log.info("리밸런싱 전략 {} 레짐 위험회피 — 보유 청산·신규 매수 중단", strategyId)
@@ -329,7 +341,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "리밸런싱 발화 시점에 선정 종목이 하나도 산정되지 않아 이번 리밸런싱을 건너뜁니다(팩터/가격 데이터 조회 장애 가능). 다음 주기 재시도.", "factor_outage")
             return true
         }
-        val positions = holdings(pool)
+        val positions = if (riskOff) heldPositions().associate { it.first to it.second } else holdings(pool)
         if (targets.isEmpty() && positions.isEmpty()) {
             log.info("리밸런싱 전략 {} 레짐 위험회피 & 보유 없음 — 매매 없음", strategyId)
             return true
@@ -366,7 +378,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val reB = maxOf(0.0, Cfg.num(Cfg.or(rf, "reentry_buffer_pct", 0.0)))
         val ticker = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")[Cfg.get(rf, "index", "KOSPI")] ?: "1001"
         val asOf = ctx.common.lastBusinessDay()
-        val bars = ctx.snapshots.indexOhlcv(MetricsCommon.approxStart(asOf, ma + 10), asOf, ticker)
+        val bars = ctx.market.snapshots.indexOhlcv(MetricsCommon.approxStart(asOf, ma + 10), asOf, ticker)
         if (bars.isNullOrEmpty()) {
             log.warn("리밸런싱 전략 {} 레짐 기준지수 조회 실패 — 오버레이 미적용(투자 유지)", strategyId)
             return false
@@ -396,7 +408,8 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         @Suppress("UNCHECKED_CAST")
         val fixed = (cfg["universe"] as? List<String>).orEmpty()
         if (source == "fixed") return fixed
-        if (source == "KOSPI_MCAP") return ctx.mcap.members(asOf, Cfg.int(Cfg.get(rule, "pick", 20)))
+        // 결정일은 오늘(KST) — members 가 직전 거래일 시총을 읽는다. asOf(전 영업일)를 넘기면 하루 더 묵은 데이터로 매매한다.
+        if (source == "KOSPI_MCAP") return ctx.mcap.members(MarketClock.todayKst(ctx.clock), Cfg.int(Cfg.get(rule, "pick", 20)))
         var members = ctx.constituents.read(source, asOf.withDayOfMonth(1)) // 백테스트와 같은 월초 기준일
         if (members.isEmpty()) {
             log.warn("전략 {} PIT 유니버스({}) 로컬 적재 없음 — config.universe 폴백", strategyId, source)
@@ -410,6 +423,14 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             members = members.filter { (caps[it] ?: 0L) >= Cfg.num(min).toLong() * 100_000_000L }
         }
         return members
+    }
+
+    /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 계획이 다시 성공하면 초기화. */
+    private fun alertDataGap(e: MarketDataNotLoaded, what: String) {
+        log.error("리밸런싱 전략 {} 시장데이터 미적재 — 주문 없이 중단: {}", strategyId, e.message)
+        if (dataGapAlerted) return
+        dataGapAlerted = true
+        ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "$what: ${e.message}. 데이터 적재 후 다음 점검에서 재시도합니다.", "market_data_not_loaded")
     }
 
     private fun alertPitFallback(source: String, cause: String) {
@@ -431,7 +452,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         )
     }
 
-    private fun seedHistory(universe: List<String>, minBars: Int): Map<String, Series> {
+    private fun seedHistory(universe: List<String>, minBars: Int, asOf: LocalDate): Map<String, Series> {
         var need = Cfg.int(Cfg.get(selection, "lookback", 120)) + 1
         if (selection["method"] == "custom") need = maxOf(need, Signals.minPeriods(mapOf("type" to "custom", "entry" to selection["entry"], "exit" to selection["exit"])))
         need = maxOf(need, minBars)
@@ -439,6 +460,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val start = end.minus(Duration.ofDays(need * 3L))
         val out = linkedMapOf<String, Series>()
         universe.forEachIndexed { i, sym ->
+            ctx.market.coverage.require(sym, start.atZone(ZoneOffset.UTC).toLocalDate(), asOf) // 거래일 누락이면 MarketDataNotLoaded
             val bars = barsWithBackfill(sym, start, end, need, "리밸런싱 시드")
             out[sym] = bars.closeSeries()
             if ((i + 1) % 20 == 0 || i + 1 == universe.size) log.info("전략 {} 히스토리 시딩 진행: {}/{}", strategyId, i + 1, universe.size)
