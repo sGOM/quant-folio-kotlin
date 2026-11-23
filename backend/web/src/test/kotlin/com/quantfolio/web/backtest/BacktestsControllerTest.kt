@@ -11,7 +11,6 @@ import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.official.MarketDataNotLoaded
@@ -67,7 +66,6 @@ class BacktestsControllerTest(
     @MockitoBean lateinit var coverage: LocalOhlcvCoverage // 로컬 시세 커버리지 점검은 통과(적재는 seed 가 한다)
     @Qualifier("local") @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
-    @MockitoBean lateinit var krx: KrxIndexService
     @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 

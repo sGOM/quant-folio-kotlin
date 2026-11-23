@@ -204,9 +204,21 @@ class QueryControllersTest(
 
     @Test
     fun recommendUsesCache() {
-        given(recommend.kospi200Scored(asOf)).willReturn(RecommendOut(asOf, "KOSPI200", 0, false, emptyList()))
-        mvc.get("/api/recommend/kospi200") { cookie(cookie) }.andExpect { jsonPath("$.index") { value("KOSPI200") } }
-        assertNull(redis.opsForValue().get("recommend:kospi200:2026-10-16"))
+        given(recommend.mcap200Scored(asOf)).willReturn(RecommendOut(asOf, "MCAP200", 0, false, emptyList()))
+        mvc.get("/api/recommend/mcap200") { cookie(cookie) }.andExpect { jsonPath("$.index") { value("MCAP200") } }
+        assertNull(redis.opsForValue().get("recommend:mcap200:2026-10-16"))
+        mvc.get("/api/recommend/kospi200") { cookie(cookie) }.andExpect { status { isNotFound() } }
+    }
+
+    /** 당일 시총 미적재는 빈 추천이 아니라 409(조용한 강등 금지). */
+    @Test
+    fun recommendNotLoadedIs409() {
+        given(recommend.mcap200Scored(asOf)).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        mvc.get("/api/recommend/mcap200") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.kind") { value("stock_daily") }
+        }
+        assertNull(redis.opsForValue().get("recommend:mcap200:2026-10-16"))
     }
 
     @Test

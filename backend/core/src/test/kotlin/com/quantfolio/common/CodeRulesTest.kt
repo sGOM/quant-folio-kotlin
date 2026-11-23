@@ -74,28 +74,28 @@ class CodeRulesTest {
         assertTrue(sqlHits.isEmpty(), "마이그레이션에서 차단 표시 해제 금지:\n${report(sqlHits)}")
     }
 
-    /**
-     * 공식 경로 1단계: 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)는 KRX MDC·네이버 클래스를 참조하지 않는다.
-     * 네이버 로더(OhlcvLoader)는 2단계에서 삭제됐다.
-     */
+    /** KRX MDC·네이버 차트 호스트는 main 어디에도 없어야 한다(MDC 약관상 자동 수집 금지·IP 차단 이력, 재유입 방지). Open API 호스트 data-dbg 는 허용. */
     @Test
-    fun strategyPathAvoidsMdcAndNaver() {
-        val files = STRATEGY_PATH_FILES
+    fun `main sources contain no MDC or Naver hosts`() {
+        val hits = mainCodeLines().filter { (_, _, l) -> FORBIDDEN_HOST.containsMatchIn(l) }
+        assertTrue(hits.isEmpty(), "KRX MDC(data.krx.co.kr)·네이버(stock.naver.com) 호스트 금지 - 공식 Open API·로컬 저장소만:\n${report(hits)}")
+    }
+
+    /** 아래 전략 경로 규칙들이 빈 목록 위에서 조용히 통과하지 않게, 목록의 파일이 실제로 있는지 확인한다. */
+    @Test
+    fun strategyPathFilesExist() {
         val found = mainCodeLines().map { it.first.substringAfterLast('/') }.toSet()
-        assertTrue(files.all { it in found }, "목록의 파일을 못 찾음(이름 변경?): ${files - found}")
-        val hits = mainCodeLines().filter { (f, _, l) -> f.substringAfterLast('/') in files && FORBIDDEN_SOURCE.containsMatchIn(l) }
-        assertTrue(hits.isEmpty(), "전략 경로는 KRX MDC·네이버를 쓰지 않는다(공식 경로 로컬 소스만):\n${report(hits)}")
+        assertTrue(STRATEGY_PATH_FILES.all { it in found }, "목록의 파일을 못 찾음(이름 변경?): ${STRATEGY_PATH_FILES - found}")
     }
 
     /**
      * 전략 경로의 SnapshotSource 는 `@Qualifier("local")` 이어야 한다(구현은 로컬뿐이지만 원격 구현이 다시 생겨도 조용히 들어오지 않게).
-     * 한정자는 같은 줄 또는 바로 윗줄. 와일드카드 import 는 KRX·Naver 클래스를 몰래 끌어오므로 막는다.
+     * 한정자는 같은 줄 또는 바로 윗줄.
      */
     @Test
     fun strategyPathSnapshotSourceIsLocal() {
-        val lines = strategyLines()
-        val hits = unqualifiedSnapshotSources(lines) + lines.filter { (_, _, l) -> WILDCARD_REMOTE_IMPORT.containsMatchIn(l) }
-        assertTrue(hits.isEmpty(), "전략 경로 SnapshotSource 는 @Qualifier(\"local\") 필수, krx.*·ohlcv.* 와일드카드 import 금지:\n${report(hits)}")
+        val hits = unqualifiedSnapshotSources(strategyLines())
+        assertTrue(hits.isEmpty(), "전략 경로 SnapshotSource 는 @Qualifier(\"local\") 필수:\n${report(hits)}")
     }
 
     /**
@@ -185,9 +185,9 @@ class CodeRulesTest {
             ).map { unqualifiedSnapshotSources(lines(*it.toTypedArray())).size },
         )
         assertEquals(
-            listOf(true, true, false, false),
-            listOf("import com.quantfolio.market.krx.*", "import com.quantfolio.market.ohlcv.*", "import com.quantfolio.market.official.SnapshotSource", "import com.quantfolio.market.official.*")
-                .map { WILDCARD_REMOTE_IMPORT.containsMatchIn(it) },
+            listOf(true, true, true, false),
+            listOf("\"https://data.krx.co.kr/x\"", "\"https://fchart.stock.naver.com/c\"", "\"https://api.stock.naver.com/x\"", "\"https://data-dbg.krx.co.kr/svc\"")
+                .map { FORBIDDEN_HOST.containsMatchIn(it) },
         )
         // catch-all 이 MDNL 을 삼키는가(위반 건수)
         val guards = listOf(
@@ -212,7 +212,6 @@ class CodeRulesTest {
         )
         private val SNAPSHOT_DECL = Regex("""\w+\s*:\s*SnapshotSource\b""")
         private val LOCAL_QUALIFIER = Regex("""@Qualifier\("local"\)""")
-        private val WILDCARD_REMOTE_IMPORT = Regex("""^\s*import\s+com\.quantfolio\.market\.(krx|ohlcv)\.\*""")
         private val CATCH_ALL = Regex("""catch\s*\(\s*\w+\s*:\s*(Exception|Throwable|RuntimeException)\s*\)|\brunCatching\b""")
         private val MDNL_CATCH = Regex("""catch\s*\(\s*\w+\s*:\s*MarketDataNotLoaded\s*\)""")
         private val RETHROW_MDNL = Regex("""is\s+MarketDataNotLoaded""")
@@ -227,7 +226,7 @@ class CodeRulesTest {
             "SymbolCatalog.kt" to (1 to "KIS 마스터 REST 조회 - 로컬 DB 미접근"),
             "WorkerJobs.kt" to (2 to "withOutageAlert 는 알림 후 throw e 로 전부 재던짐 + 체결 정합 리포트(orders/fills DB 만)"),
         )
-        private val FORBIDDEN_SOURCE = Regex("""\b(KrxSession|KrxMdc|KrxStockApi|KrxIndexService|KrxSnapshots|NaverDaily)\b""")
+        private val FORBIDDEN_HOST = Regex("""data\.krx\.co\.kr|stock\.naver\.com""")
         private const val BLOCKED_COLUMN = "kis_balance_reconcile_blocked"
         private val BLOCKED_RELEASE = Regex("""kis_balance_reconcile_blocked\s*:?=\s*false""", RegexOption.IGNORE_CASE)
         private val SYSTEM_ZONE_DATE = Regex("""\b(LocalDate|LocalDateTime|LocalTime|ZonedDateTime|OffsetDateTime|YearMonth|Year)\.now\(\)|systemDefault""")

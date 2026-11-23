@@ -17,8 +17,6 @@ docker compose 가 이 파일들을 `/run/secrets/<이름>`(tmpfs)으로 마운�
 | `hts_id.txt` | KIS HTS ID(실시간 체결통보 구독용) | 미사용 시 빈 파일 |
 | `toss_app_key.txt` | 토스 client_id (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
 | `toss_app_secret.txt` | 토스 client_secret (서버 설정이 유일한 출처) | 미사용 시 빈 파일 |
-| `krx_id.txt` | (선택) KRX 데이터 포털 로그인 ID | 지표 화면용. 미사용 시 빈 파일 |
-| `krx_pw.txt` | (선택) KRX 데이터 포털 비밀번호 | 지표 화면용. 미사용 시 빈 파일 |
 | `opendart_api_key.txt` | (선택) OpenDART 인증키 | 퀄리티·성장 팩터·턴어라운드 스크리너. 없으면 해당 팩터가 중립 처리돼 점수가 편향된다. 미사용 시 빈 파일 |
 | `krx_openapi_key.txt` | (선택) KRX Open API 인증키(AUTH_KEY) | 공식 경로 시장데이터. 없으면 해당 클라이언트가 Auth 오류. 미사용 시 빈 파일 |
 | `datagokr_api_key.txt` | (선택) 공공데이터포털 인증키(Decoding) | 주식배당정보(백테스트 현금배당). 없으면 배당 적재가 Auth 오류. 미사용 시 빈 파일 |
@@ -37,8 +35,6 @@ mkdir -p secrets
 : > secrets/kis_app_key.txt;  : > secrets/kis_app_secret.txt
 : > secrets/account_num;       : > secrets/hts_id.txt
 : > secrets/toss_app_key.txt; : > secrets/toss_app_secret.txt
-# KRX 데이터 포털(지표 화면용). 무료 가입 https://data.krx.co.kr — 미사용 시 빈 파일
-: > secrets/krx_id.txt; : > secrets/krx_pw.txt
 # OpenDART 재무데이터(퀄리티·성장 팩터). 무료 발급 https://opendart.fss.or.kr — 미사용 시 빈 파일
 : > secrets/opendart_api_key.txt
 ```

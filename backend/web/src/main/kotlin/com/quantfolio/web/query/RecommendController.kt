@@ -12,9 +12,9 @@ import org.springframework.web.bind.annotation.RestController
 
 @RestController
 class RecommendController(private val common: MetricsCommon, private val cache: JsonCache, private val recommend: RecommendService) {
-    @GetMapping("/api/recommend/kospi200")
-    fun kospi200(@CurrentUser user: User): RecommendOut {
+    @GetMapping("/api/recommend/mcap200")
+    fun mcap200(@CurrentUser user: User): RecommendOut {
         val asOf = common.lastBusinessDay()
-        return cache.getOrCompute(RedisKeys.recommendCache(asOf), RecommendOut::class.java, { it.items.isNotEmpty() }) { recommend.kospi200Scored(asOf) }
+        return cache.getOrCompute(RedisKeys.recommendCache(asOf), RecommendOut::class.java, { it.items.isNotEmpty() }) { recommend.mcap200Scored(asOf) }
     }
 }

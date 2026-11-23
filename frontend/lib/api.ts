@@ -796,7 +796,7 @@ export interface TurnaroundScreenOut {
   items: TurnaroundCandidate[];
 }
 
-/** KOSPI200 추천 구성종목 1건(백엔드 /api/recommend/kospi200). */
+/** 시총 상위 200 추천 구성종목 1건(백엔드 /api/recommend/mcap200). */
 export interface RecommendMember {
   code: string;
   name: string;
@@ -822,7 +822,7 @@ export interface RecommendMember {
   mdd_252: number | null;
   trend_aligned: boolean | null;
   above_sma200: boolean | null;
-  // ── 팩터별 세부점수(KOSPI200 크로스섹션 z-score, 가중치 무관) ──
+  // ── 팩터별 세부점수(시총 상위 200 크로스섹션 z-score, 가중치 무관) ──
   score_momentum: number | null;
   score_value: number | null;
   score_lowvol: number | null;
@@ -830,11 +830,11 @@ export interface RecommendMember {
   score_growth: number | null;
 }
 
-/** KOSPI200 추천 응답 래퍼. */
+/** 시총 상위 200 추천 응답 래퍼. */
 export interface RecommendOut {
   /** 기준일(YYYY-MM-DD). */
   as_of: string;
-  /** 지수명("KOSPI200"). */
+  /** 구성종목 라벨("MCAP200" = 기준일 KOSPI 보통주 시총 상위 200). */
   index: string;
   /** 구성종목 수. */
   count: number;
@@ -1426,11 +1426,11 @@ export const api = {
     return request<TurnaroundScreenOut>(`/api/screener/turnaround${qs ? `?${qs}` : ""}`);
   },
 
-  // --- 추천(KOSPI200 팩터 가중) ---
+  // --- 추천(시총 상위 200 팩터 가중) ---
   /**
-   * 현 시점 KOSPI200 구성종목의 팩터별 세부점수·메타데이터를 조회한다.
+   * 현 시점 KOSPI 시가총액 상위 200 보통주의 팩터별 세부점수·메타데이터를 조회한다.
    * 종합점수 가중합·Top-N 선정은 클라이언트가 사용자 비중으로 수행한다.
    */
-  getKospi200Recommend: () =>
-    request<RecommendOut>("/api/recommend/kospi200"),
+  getMcap200Recommend: () =>
+    request<RecommendOut>("/api/recommend/mcap200"),
 };

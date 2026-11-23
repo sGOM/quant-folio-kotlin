@@ -48,6 +48,14 @@ class McapUniverseTest(
     }
 
     @Test
+    fun `membersOn ranks the given day itself`() {
+        daily.write(d0, listOf(row("000001", 10, "보통주"), row("000002", 20, "보통주"), row("000003", 30, "우선주")))
+        daily.write(d1, listOf(row("000001", 99), row("000002", 1), row("000003", 999)))
+        assertEquals(listOf("000001", "000002"), universe.membersOn(d1, 5)) // 당일(d1) 순위, 전일(d0) 이면 000002 가 먼저
+        assertThrows<MarketDataNotLoaded> { universe.membersOn(d2, 5) } // 당일 행 없음
+    }
+
+    @Test
     fun `preferred shares excluded`() {
         daily.write(d0, listOf(row("000001", 10, "보통주"), row("000002", 50, "우선주"), row("000003", 5, "보통주"), row("000004", 99, "보통주", "KOSDAQ")))
         daily.write(d1, listOf(row("000001", 10), row("000002", 50), row("000003", 5)))

@@ -3,8 +3,8 @@ package com.quantfolio.metrics
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
+import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.official.SnapshotSource
-import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
@@ -173,12 +173,13 @@ class ScreenerService(
 }
 
 /**
- * KOSPI200 팩터 추천(원본 `services/recommend.py`). 가중치와 무관한 팩터별 세부점수(score_*)를 KOSPI200 크로스섹션 z 로 내려주고,
- * 가중합·Top-N 은 프론트가 사용자 비중으로 즉시 계산한다. 구성종목·시총이 없으면 빈 결과.
+ * 시총 상위 200 팩터 추천(원본 `services/recommend.py` 는 KOSPI200 구성종목). 가중치와 무관한 팩터별 세부점수(score_*)를 그 크로스섹션 z 로 내려주고,
+ * 가중합·Top-N 은 프론트가 사용자 비중으로 즉시 계산한다. 구성종목 = 기준일 **당일** KOSPI 보통주 시총 상위 200(화면용, 전략 아님).
+ * 당일 시총 미적재는 [com.quantfolio.market.official.MarketDataNotLoaded](409) 로 전파한다.
  */
 @Component
 class RecommendService(
-    private val members: IndexMembers,
+    private val universe: McapUniverse,
     @Qualifier("local") private val snapshots: SnapshotSource,
     private val tech: TechIndicatorLoader,
     private val inputs: FactorInputs,
@@ -187,11 +188,11 @@ class RecommendService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    fun kospi200Scored(asOf: LocalDate): RecommendOut {
+    fun mcap200Scored(asOf: LocalDate): RecommendOut {
         val enabled = inputs.dartEnabled()
-        val mem = members.indexMembers(asOf, INDEX).map { it.padStart(6, '0') }
+        val mem = universe.membersOn(asOf, SIZE).map { it.padStart(6, '0') }
         if (mem.isEmpty()) {
-            log.warn("KOSPI200 구성종목을 확보하지 못함(미인증/무자료) — 빈 추천 반환")
+            log.warn("당일 시총 상위 KOSPI 보통주가 없음(as_of={}) — 빈 추천 반환", asOf)
             return RecommendOut(asOf, INDEX, 0, enabled, emptyList())
         }
         val mkts = listOf("KOSPI")
@@ -259,11 +260,12 @@ class RecommendService(
                 scoreQuality = sc("score_quality"), scoreGrowth = sc("score_growth"),
             )
         }.sortedByDescending { it.marketCap ?: -1 }
-        log.info("KOSPI200 추천 스코어링 완료: {}종목(as_of={})", items.size, asOf)
+        log.info("시총 상위 200 추천 스코어링 완료: {}종목(as_of={})", items.size, asOf)
         return RecommendOut(asOf, INDEX, items.size, enabled, items)
     }
 
     private companion object {
-        const val INDEX = "KOSPI200"
+        const val INDEX = "MCAP200"
+        const val SIZE = 200
     }
 }

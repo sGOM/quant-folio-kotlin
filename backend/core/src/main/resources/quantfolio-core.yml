@@ -41,9 +41,6 @@ quantfolio:
     app-key: ${toss_app_key:${TOSS_APP_KEY:}}
     app-secret: ${toss_app_secret:${TOSS_APP_SECRET:}}
     account-no: ${TOSS_ACCOUNT_NO:}
-  krx:
-    id: ${krx_id:${KRX_ID:}}
-    pw: ${krx_pw:${KRX_PW:}}
   krx-open:
     api-key: ${krx_openapi_key:${KRX_OPENAPI_KEY:}}
   data-go-kr:

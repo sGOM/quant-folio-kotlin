@@ -11,8 +11,6 @@ x-backend-secrets: &backend-secrets
   - kis_hts_id
   - toss_app_key
   - toss_app_secret
-  - krx_id
-  - krx_pw
   - opendart_api_key
   - krx_openapi_key
   - datagokr_api_key
@@ -146,10 +144,6 @@ secrets:
     file: ./secrets/toss_app_key.txt
   toss_app_secret:
     file: ./secrets/toss_app_secret.txt
-  krx_id:
-    file: ./secrets/krx_id.txt
-  krx_pw:
-    file: ./secrets/krx_pw.txt
   opendart_api_key:
     file: ./secrets/opendart_api_key.txt
   krx_openapi_key:

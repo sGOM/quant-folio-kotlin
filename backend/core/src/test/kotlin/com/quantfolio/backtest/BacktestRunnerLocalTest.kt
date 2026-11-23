@@ -5,10 +5,7 @@ import com.quantfolio.domain.TestApp
 import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.dart.OpenDartClient
-import com.quantfolio.market.krx.KrxIndexService
 import com.quantfolio.market.official.LocalSectorMap
-import com.quantfolio.market.krx.KrxMdc
-import com.quantfolio.market.krx.KrxSession
 import com.quantfolio.market.official.DividendFeed
 import com.quantfolio.market.official.LocalSnapshots
 import com.quantfolio.market.official.LocalTradingDays
@@ -22,16 +19,13 @@ import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.DartFinancialStore
 import com.quantfolio.market.store.DividendStore
 import com.quantfolio.market.store.IndexBar
-import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.IndexOhlcvStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
-import com.quantfolio.market.store.StoreCache
 import com.quantfolio.metrics.PanicService
 import com.quantfolio.test.ContainersConfig
 import com.quantfolio.test.FakeExternalHttp
-import com.quantfolio.test.FakeKrxTransport
 import com.quantfolio.test.InMemoryFetchLedger
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -50,7 +44,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * 백테스트는 로컬 데이터만 읽는다 — KRX·Naver·DART 원격 fake 가 한 번이라도 불리면 실패한다.
+ * 백테스트는 로컬 데이터만 읽는다 — DART·Naver 원격 fake 가 한 번이라도 불리면 실패한다.
  * 합성 데이터(2330년대, 다른 테스트와 겹치지 않는 구간)를 Testcontainers DB 에 적재해 돌린다.
  */
 @SpringBootTest(classes = [TestApp::class])
@@ -61,7 +55,6 @@ class BacktestRunnerLocalTest(
     @Autowired private val ticks: PriceTickStore,
     @Autowired jdbc: NamedParameterJdbcTemplate,
     @Autowired private val dividends: DividendStore,
-    @Autowired private val constituents: IndexConstituentStore,
     @Autowired private val sectors: SectorMapSnapshotRepository,
     @Autowired private val panic: PanicService,
     @Autowired private val dividendFeed: DividendFeed,
@@ -71,18 +64,12 @@ class BacktestRunnerLocalTest(
     private val dartStore = DartFinancialStore(jdbc, clock)
     private val ledger = InMemoryFetchLedger()
     private val http = FakeExternalHttp() // DART·Naver 원격 — 호출되면 실패
-    private val krxTransport = FakeKrxTransport() // KRX MDC — 호출되면 실패
     private val cooldowns = Cooldowns(clock)
     private val days = LocalTradingDays(ledger)
     private val dart = DartFinancials(
         OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock),
         dartStore, ledger, cooldowns, clock,
     )
-    private val krx: KrxIndexService = run {
-        val props = QuantfolioProperties(krx = QuantfolioProperties.Krx("id", "pw"))
-        val session = KrxSession(krxTransport, props, cooldowns, clock)
-        KrxIndexService(KrxMdc(krxTransport, session, cooldowns) {}, session, cooldowns, constituents, ledger, StoreCache(ledger, clock), LocalSectorMap(sectors), clock)
-    }
     private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger, ticks, days))
     private val runner = BacktestRunner(
         LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), daily, panic, dividendFeed, clock,
@@ -117,7 +104,6 @@ class BacktestRunnerLocalTest(
         dartStore.writeCorpCodes(symbols.associateWith { "C$it" })
         for (y in 2327..2329) symbols.forEach { dartStore.delete("C$it", y, "11011", "CFS") }
         http.calls.clear()
-        krxTransport.calls.clear()
     }
 
     private fun config(weights: Map<String, Any?>, extra: Map<String, Any?> = emptyMap()) = mapOf(
@@ -130,7 +116,6 @@ class BacktestRunnerLocalTest(
 
     private fun assertNoRemoteCalls() {
         assertEquals(0, http.calls.size, "DART·Naver 원격이 불렸다: ${http.calls}")
-        assertEquals(0, krxTransport.calls.size, "KRX 원격이 불렸다: ${krxTransport.calls}")
     }
 
     @Test

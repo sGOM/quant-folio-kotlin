@@ -18,7 +18,6 @@ data class QuantfolioProperties(
     val cookie: Cookie = Cookie(),
     val kis: Kis = Kis(),
     val toss: Toss = Toss(),
-    val krx: Krx = Krx(),
     val opendart: OpenDart = OpenDart(),
     val krxOpen: KrxOpen = KrxOpen(),
     val dataGoKr: DataGoKr = DataGoKr(),
@@ -84,8 +83,6 @@ data class QuantfolioProperties(
         val appSecret: String = "",
         val accountNo: String = "",
     )
-
-    data class Krx(val id: String = "", val pw: String = "")
 
     /** KRX Open API(공식). 키는 `krx_openapi_key` 시크릿. */
     data class KrxOpen(val apiKey: String = "", val baseUrl: String = "https://data-dbg.krx.co.kr/svc/apis")

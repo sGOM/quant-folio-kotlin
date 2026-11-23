@@ -19,7 +19,6 @@ class StoresTest(
     @Autowired private val daily: StockDailyStore,
     @Autowired private val periods: StockPeriodStore,
     @Autowired private val indexes: IndexOhlcvStore,
-    @Autowired private val constituents: IndexConstituentStore,
     @Autowired private val dart: DartFinancialStore,
     @Autowired private val ticks: PriceTickStore,
 ) {
@@ -157,18 +156,6 @@ class StoresTest(
         assertEquals(2, indexes.readCoverage(code).size)
         indexes.delete(code)
         assertTrue(indexes.readCoverage(code).isEmpty())
-    }
-
-    // ── index_constituents ──
-    @Test
-    fun constituentsIgnoreDuplicates() {
-        val code = "K${uniq()}"
-        val base = LocalDate.of(2024, 6, 1)
-        constituents.write(code, base, listOf("5930", "000660"))
-        constituents.write(code, base, listOf("005930"))
-        assertEquals(setOf("005930", "000660"), constituents.read(code, base).toSet())
-        constituents.delete(code, base)
-        assertTrue(constituents.read(code, base).isEmpty())
     }
 
     // ── dart_financials ──

@@ -77,7 +77,6 @@ class RunnersTest(
     @MockitoBean lateinit var calendar: MarketCalendar
     @MockitoBean @Qualifier("local") lateinit var snapshots: SnapshotSource // 엔진이 쓰는 로컬 소스
     @MockitoBean lateinit var coverage: com.quantfolio.market.ohlcv.LocalOhlcvCoverage
-    @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
     @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoBean lateinit var mcap: McapUniverse
     @MockitoBean lateinit var dart: com.quantfolio.market.dart.DartFinancials
@@ -377,7 +376,6 @@ class RunnersTest(
         val (_, sid) = strategy(mcapCfg(fixed))
         rebal(sid).tickOnce()
         assertEquals(members.toSet(), ordersOf(sid).map { it.symbol }.toSet())
-        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
         org.mockito.Mockito.verify(mcap).members(anyDate(), org.mockito.ArgumentMatchers.eq(2))
     }
 
@@ -495,8 +493,6 @@ class RunnersTest(
         )
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isNotEmpty(), alerts.findAll().filter { it.strategyId == sid }.map { it.message }.toString())
-        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).marketCaps(anyDate())
-        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
     }
 
     @Test

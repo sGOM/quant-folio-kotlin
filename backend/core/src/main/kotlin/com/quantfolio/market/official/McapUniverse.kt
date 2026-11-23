@@ -22,6 +22,9 @@ class McapUniverse(private val daily: StockDailyStore, private val days: LocalTr
         return top(prev, daily.capsWithKind(prev, "KOSPI"), n)
     }
 
+    /** [day] **당일** 시총 상위 [n](추천 화면용 - 전략 경로는 [members]). 정렬·주권 종류 규칙은 [members] 와 같고, 당일 행이 없으면 미적재. */
+    fun membersOn(day: LocalDate, n: Int): List<String> = top(day, daily.capsWithKind(day, "KOSPI"), n)
+
     /**
      * [start, end] 의 모든 결정일 d 에 대해 직전 거래일 시총 상위 [n] 을 한 번의 조회로 구해 합집합을 만들고,
      * 결정일별 풀은 [members] 로 날짜마다 계산(메모)한다.

@@ -102,7 +102,8 @@ object RedisKeys {
 
     /** web 조회 캐시(원본 라우트와 같은 키). 스크리너 키의 실수는 Python str(float) 표기. */
     fun metricsCache(kind: String, market: String, asOf: java.time.LocalDate): String = "metrics:$kind:$market:$asOf"
-    fun recommendCache(asOf: java.time.LocalDate): String = "recommend:kospi200:$asOf"
+    /** 추천은 시총 상위 200 으로 바뀌어 원본 키(recommend:kospi200)와 다르다 - 캐시라 이어받을 상태가 없다(원본 스택 퇴역). */
+    fun recommendCache(asOf: java.time.LocalDate): String = "recommend:mcap200:$asOf"
     fun screenerTurnaroundCache(market: String, asOf: java.time.LocalDate, topN: Int, smallcapPct: Double, surge: Double, maxDebt: Double): String =
         "screener:turnaround:$market:$asOf:$topN:${com.quantfolio.quant.pyFloat(smallcapPct)}:${com.quantfolio.quant.pyFloat(surge)}:${com.quantfolio.quant.pyFloat(maxDebt)}"
 }

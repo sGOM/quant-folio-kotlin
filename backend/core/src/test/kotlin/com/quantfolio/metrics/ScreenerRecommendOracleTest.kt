@@ -2,24 +2,33 @@ package com.quantfolio.metrics
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.MarketCalendar
+import com.quantfolio.market.official.LocalTradingDays
+import com.quantfolio.market.official.McapUniverse
+import com.quantfolio.market.official.OfficialIngest
 import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.store.Bar
+import com.quantfolio.market.store.CapKind
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.StockDaily
+import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
-import com.quantfolio.test.FakeExternalHttp
+import com.quantfolio.test.InMemoryFetchLedger
 import com.quantfolio.test.Oracle
 import org.junit.jupiter.api.Test
+import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.json.JsonMapper
+import tools.jackson.databind.node.ObjectNode
 import tools.jackson.module.kotlin.convertValue
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlin.test.assertEquals
 
 /** 스크리너·추천 조립부 정답지(tools/oracle/gen_screener.py → screener.json) 대조. 외부 조회는 정답지와 같은 고정 데이터. */
 class ScreenerRecommendOracleTest {
@@ -93,13 +102,31 @@ class ScreenerRecommendOracleTest {
         }
     }
 
+    /**
+     * 시총 fake: 정답지 구성종목은 보통주, 나머지 종목은 우선주 → 당일 시총 상위 200 = 정답지 구성종목 그대로(구성종목 0개 케이스는 전부 우선주).
+     * 구성종목 입력의 출처만 바뀌고 계산 정답 비교는 그대로다.
+     */
+    private fun mcap(members: List<String>) = McapUniverse(
+        object : StockDailyStore(NamedParameterJdbcTemplate(JdbcTemplate())) {
+            override fun capsWithKind(day: LocalDate, market: String): List<CapKind> {
+                check(day == asOf && market == "KOSPI") { "당일 KOSPI 시총만 읽어야 한다: $day $market" }
+                return (codes + members).distinct().mapIndexed { i, c -> CapKind(c, 1_000_000L - i, if (c in members) OfficialIngest.COMMON_STOCK else "우선주") }
+            }
+        },
+        LocalTradingDays(InMemoryFetchLedger()),
+    )
+
     @Test
-    fun kospi200Recommend() {
+    fun mcap200Recommend() {
         for (r in data.get("recs")) {
             val members = items(r.get("members")).map { it.asString() }
             val enabled = r.get("enabled").asBoolean()
-            val svc = RecommendService({ _, _ -> members }, src, tech, inputs(enabled, if (enabled) qm else emptyMap()), catalog, common)
-            Oracle.assertDeep(r.get("out"), snake.convertValue<Map<String, Any?>>(svc.kospi200Scored(asOf)), path = "rec(enabled=$enabled, n=${members.size})")
+            val svc = RecommendService(mcap(members), src, tech, inputs(enabled, if (enabled) qm else emptyMap()), catalog, common)
+            val out = snake.convertValue<Map<String, Any?>>(svc.mcap200Scored(asOf))
+            // 의도적 차이(허용 목록): 지수 라벨 - 구성종목 소스가 KRX KOSPI200 구성종목에서 당일 시총 상위 200 으로 바뀌었다(2단계 Task 6).
+            assertEquals("MCAP200", out["index"])
+            val expected = (r.get("out").deepCopy() as ObjectNode).also { it.remove("index") }
+            Oracle.assertDeep(expected, out - "index", path = "rec(enabled=$enabled, n=${members.size})")
         }
     }
 }
