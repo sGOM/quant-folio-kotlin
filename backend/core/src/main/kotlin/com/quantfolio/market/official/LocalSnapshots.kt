@@ -86,9 +86,13 @@ class LocalSnapshots(
         }
     }
 
-    /** 결측 판정은 [max(start, 키의 첫 행), end] — 첫 행 이전은 "그때 없던 지수"다. 키에 행이 하나도 없으면 전 구간 미적재. */
+    /**
+     * 업종지수 키(`KOSPI:`·`KOSDAQ:` 접두어)는 결측 판정이 [max(start, 키의 첫 행), end] — 첫 행 이전은 "그때 없던 지수"다.
+     * 기준지수 1001·1028·2001 은 전략 경로(벤치마크·국면·잔차모멘텀)가 쓰므로 전 구간을 본다(짧은 시계열을 조용히 주지 않는다).
+     * 키에 행이 하나도 없으면 전 구간 미적재.
+     */
     override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? {
-        val first = indexes.span(ticker)?.first
+        val first = if (SECTOR_PREFIXES.any { ticker.startsWith(it) }) indexes.span(ticker)?.first else null
         val bars = indexes.read(ticker, start, end)
         val expected = days.expected(maxOf(start, first ?: start), end)
         val missing = expected.toSet() - bars.map { it.date }.toSet()
@@ -103,4 +107,9 @@ class LocalSnapshots(
     /** 거래일 하루·한 시장의 행. 없으면 미적재. */
     private fun requireDay(day: LocalDate, market: String): List<StockDaily> =
         daily.read(day, listOf(market)).ifEmpty { throw MarketDataNotLoaded("stock_daily", market, listOf(day to day)) }
+
+    private companion object {
+        /** `OfficialIngest.indexKey` 의 업종지수 접두어. */
+        val SECTOR_PREFIXES = listOf("KOSPI:", "KOSDAQ:")
+    }
 }

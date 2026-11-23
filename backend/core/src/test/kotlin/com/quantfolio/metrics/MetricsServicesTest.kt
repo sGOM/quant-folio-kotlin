@@ -152,6 +152,18 @@ class MetricsServicesTest {
         assertThrows<MarketDataNotLoaded> { SectorMetricsService(src).compute("KOSPI", asOf) }
     }
 
+    /** 업종지수 키가 아직 없는 시장(백필 전)은 빈 목록이 아니라 미적재. */
+    @Test
+    fun `sector metrics throw MarketDataNotLoaded when a market has no sector indexes`() {
+        val src = FakeSource().apply {
+            index = (0 until 130).map { IndexBar(asOf.minusDays(130L - it), close = 100.0 + it) }
+            sectors = mapOf("KOSPI" to listOf("KOSPI:음식료" to "음식료"))
+        }
+        val e = assertThrows<MarketDataNotLoaded> { SectorMetricsService(src).compute("ALL", asOf) }
+        assertEquals("index_ohlcv", e.kind)
+        assertEquals("sector_indexes|KOSDAQ", e.key)
+    }
+
     @Test
     fun sectorsListLocalKeysWithTheirNames() {
         val ref = (0 until 130).map { IndexBar(asOf.minusDays(130L - it), close = 100.0 + it) }

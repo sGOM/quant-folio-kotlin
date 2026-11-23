@@ -89,16 +89,25 @@ class LocalSnapshotsTest(
 
     @Test
     fun `index history before its first row is not missing`() {
+        val key = "KOSPI:테스트업종가"
         ledger.trading(week.take(5))
-        indexes.write("1001", listOf(week[2], week[3], week[4]).map { IndexBar(it, close = 1.0) }, null)
-        assertEquals(listOf(week[2], week[3], week[4]), snaps.indexOhlcv(week[0], week[4], "1001")!!.map { it.date }) // 첫 행 이전은 그때 없던 지수
-        assertNull(snaps.indexOhlcv(week[0], week[1], "1001")) // 구간 전체가 첫 행 이전: 예외 아님
-        indexes.delete("1001")
-        indexes.write("1001", listOf(week[2], week[4]).map { IndexBar(it, close = 1.0) }, null)
-        assertEquals(listOf(week[3] to week[3]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "1001") }.missing)
+        indexes.write(key, listOf(week[2], week[3], week[4]).map { IndexBar(it, close = 1.0) }, "테스트업종가")
+        assertEquals(listOf(week[2], week[3], week[4]), snaps.indexOhlcv(week[0], week[4], key)!!.map { it.date }) // 첫 행 이전은 그때 없던 지수
+        assertNull(snaps.indexOhlcv(week[0], week[1], key)) // 구간 전체가 첫 행 이전: 예외 아님
+        indexes.delete(key)
+        indexes.write(key, listOf(week[2], week[4]).map { IndexBar(it, close = 1.0) }, "테스트업종가")
+        assertEquals(listOf(week[3] to week[3]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], key) }.missing)
         // 행이 하나도 없는 키는 전 구간 미적재
         assertEquals(listOf(week[0] to week[4]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "KOSPI:없는업종") }.missing)
         assertThrows<MarketDataNotLoaded> { snaps.priceChange(week[0], week[1], listOf("KOSPI")) }
+    }
+
+    /** 1001·1028·2001(벤치마크·국면·잔차모멘텀)은 전략 경로가 쓴다 — 첫 행 이전도 미적재로 409, 짧은 시계열을 조용히 받지 않는다. */
+    @Test
+    fun `reference index before its first row is missing`() {
+        ledger.trading(week.take(5))
+        indexes.write("1028", listOf(week[2], week[3], week[4]).map { IndexBar(it, close = 1.0) }, null)
+        assertEquals(listOf(week[0] to week[1]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "1028") }.missing)
     }
 
     @Test
