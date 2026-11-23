@@ -130,7 +130,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 거래정지일 봉: KRX 는 시·고·저가 0, 종가 기준가로 준다. 거래량 0·시고저 ≤ 0 이면 o=h=l=종가로 저장한다(`AdjustedBars.flatIfHalted`, 봉은 버리지 않음). 원본 네이버 봉과 다를 수 있다.
 - 라이브 엔진 fail-closed(규칙 정본 `.claude/rules/trading-safety.md`): 원본은 데이터가 비면 원격으로 받거나 `config.universe` 로 폴백해 매매를 계속했다. 지금은 주문 없이 멈추고 critical 을 보낸다. 원본과 다른 점이 더 있다: 엔진 점수에도 커버리지 관문, `StrategyRunner` 시드는 기동 1회가 아니라 성공할 때까지 틱마다, 리스크오프 청산 대상은 후보풀 보유가 아니라 전체 보유.
 - 응답 `factor_warnings` 키 제거: 원본은 커버리지 낮음을 경고로 남기고 진행했다. 지금은 팩터 커버리지 < 50% 면 실패한다(value/quality 는 점수에 쓰는 컬럼 기준, 빈 유니버스는 별도 실패).
-- 1단계 거부: `flow`·`pead` 가중치(수급 순매수·공시 달력이 원격 전용)는 백테스트 422(`BacktestInputError`), 엔진은 `MarketDataNotLoaded("unsupported_in_phase1")` → 정지+critical. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
+- 1단계 거부: `pead` 가중치(공시 달력이 원격 전용; flow 는 2단계에서 삭제)는 백테스트 422(`BacktestInputError`), 엔진은 `MarketDataNotLoaded("unsupported_in_phase1")` → 정지+critical. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
 - `PanicService` UI: 시장별로 격리해 한 시장이 비면 그 시장만 `unavailable`(전체 503 아님). 백테스트의 패닉 시계열은 로컬 전용이며 priceChange 에서 기간 중 상폐 종목은 MDC 처럼 close 0·-100%·거래량 0 으로 보강한다. UI 의 `newLowRatio` 는 여전히 null.
 - 거래일·휴장: 원본은 MDC 지수 일봉 날짜, 지금은 KRX Open API 적재 원장(규칙은 `market-data.md`). **열린 문제:** 휴장 다음 거래일 아침엔 뒷날 기록이 없어 '모름' → 엔진 정지·critical(Task 1 실측 뒤 결정). 적재 범위 밖 과거일은 KIS 국내휴장일조회(vts 미지원 → 평일 규칙 폴백+로그).
 - 원본 동작 보존(고치지 않고 기록): 정기 리밸런싱의 `holdings(pool)` 필터 — 풀(상위 N)에서 빠진 보유 종목은 고아 포지션이 되어 정기 리밸런싱으로 팔리지 않는다(리스크오프만 전체 청산).

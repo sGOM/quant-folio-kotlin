@@ -46,12 +46,13 @@ paths:
 
 ## 공식 경로 (`market/official/`·`market/krxopen/`) — 전략 경로의 단일 출처
 
-전략 경로(백테스트·리밸런싱·패닉·유니버스·달력·심볼·배치)는 `CodeRulesTest` 가 MDC·네이버 클래스 참조를 금지한다. 로컬 테이블만 읽는다.
-`SnapshotSource` 주입은 `@Qualifier("local")` 필수(빠지면 `@Primary` 원격이 조용히 들어온다). 새 전략 경로 파일은 `CodeRulesTest` 의 목록에 추가한다.
+시장데이터는 전부 로컬 테이블만 읽는다(`PriceHistory`=`LocalPriceHistory`, `SnapshotSource`=`LocalSnapshots`, 둘 다 `market/official/`). `CodeRulesTest` 가 main 소스의 `data.krx.co.kr`·`stock.naver.com` 호스트 문자열을 금지한다.
+`SnapshotSource` 주입은 `@Qualifier("local")`. 새 전략 경로 파일은 `CodeRulesTest` 의 목록에 추가한다.
 
+- **업종지수 키:** `index_ohlcv.index_code` — `코스피`·`코스피 200`·`코스닥` 은 `1001`·`1028`·`2001`, 나머지 KOSPI/KOSDAQ 지수는 `KOSPI:<이름>`·`KOSDAQ:<이름>`(KRX 계열은 미저장). 접두어 키만 섹터 화면 후보이고, 첫 행 이전 비결측 취급도 접두어 키만.
 - **원장 키:** `krx_open|<서비스>|yyyyMMdd|<시장>`, 배당 `datagokr|dividends_full`. 읽는 쪽(`LocalTradingDays` 등)과 문자열이 같아야 한다.
-- **거래일 = 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`**: 행>0 거래일, 0행·final 휴장, 그 외 모름(=결측). `index_ohlcv` 는 UI 의 MDC 캐시도
-  쓰므로 달력 근거로 쓰지 않는다. 0행·미확정이라도 5호출 모두 0행이고 뒷날(행>0) 기록 **이후에** 받은 것이면 잠정 휴장 —
+- **거래일 = 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`**: 행>0 거래일, 0행·final 휴장, 그 외 모름(=결측). `index_ohlcv` 는 업종지수 등
+  전 행을 담으므로 달력 근거로 쓰지 않는다. 0행·미확정이라도 5호출 모두 0행이고 뒷날(행>0) 기록 **이후에** 받은 것이면 잠정 휴장 —
   공개 전에 받은 0행과 구분하려는 것이다. 연휴 다음 날 아침엔 뒷날 기록이 없어 이게 성립하지 않으므로, 설정 `quantfolio.market.krx-holidays`
   (`KrxHolidays`, 매년 KRX 공지로 사람이 추가)에 있는 날의 0행은 바로 휴장이다 — 행이 있거나 기록이 없으면 목록보다 원장. 직전 거래일은 `LocalTradingDays.previous` 한 곳(적재의 비교용 직전일만 예외, `previousForAppend`).
 - **Valuation `div=0.0` 규칙:** 전체 배당 적재가 있고 창(공시일 ≤ asOf, 기준일이 365일 안) 안에 행이 없으면 0.0, 적재가 없거나 배당 이력 시작+365일 이전이면 `null`. 0 과 결측을 섞지 않는다.
@@ -59,25 +60,10 @@ paths:
 - 거래정지일 봉(거래량 0·시고저 0)은 버리지 말고 `AdjustedBars.flatIfHalted` 로 o=h=l=종가 — 버리면 커버리지 결측, 그대로 두면 ATR 등 오염.
 - 휴장일과 **아직 공개 안 된 날**은 둘 다 HTTP 200·빈 `OutBlock_1` 이다(2026-11-23 실측) — 0행만으로 휴장이라 단정하지 않는다. 공개는 T+1(시각 관측 중). 필드명·지수명은 실측과 일치(`docs/migration-notes.md` "공식 경로 실측").
 
-## KRX MDC (`market/krx/`) — UI 경로 전용(2단계에서 제거 예정)
-
-| 클래스 | 원본 | 역할 |
-|---|---|---|
-| `KrxSession` | pykrx `KRXSession` + `krx_index._session` | 로그인·쿠키·1시간 만료(300s 버퍼)·쿨다운 우선 |
-| `KrxMdc.rows` | `krx_index._krx_rows` | 응답 원인 분류(HTML=Auth, 키 없음=Schema) |
-| `KrxMdc.pykrx` | pykrx `KrxWebIo` | 분류 없음, 730일 분할. 호출자가 Unavailable 로 감싼다 |
-| `KrxStockApi` | pykrx `stock.*` 9종 | 1:1 이식 |
-| `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총. `sectorMap` 은 `LocalSectorMap` 에 위임(로컬 스냅샷 전용, 전략 경로는 이쪽을 직접 씀) |
-| `KrxSnapshots` | `metrics/fetch.py` | `@Primary` — 한정자 없는 `SnapshotSource` 주입은 원격이 된다 |
-
-- `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.
-- KRX 미인증(자격증명 없음)은 실패가 아니라 빈 결과. 캐시는 **성공했을 때만**.
-
 ## 그 밖의 소스
 
 | 패키지 | 원본 | 핵심 규칙 |
 |---|---|---|
-| `ohlcv/` | `loader.py`·`ingest.py` | UI 전용: FDR→pykrx 순 네이버 차트, price_ticks 는 부족분(머리·꼬리, 5일 유예)만 보충. 전략 경로는 `LocalOhlcvCoverage`(외부 없이 빠진 거래일을 `MarketDataNotLoaded`) |
 | `kofia/` | `kofia.py` | 라벨 없는 컬럼은 확정된 것만 이름, 나머지 raw. 반대매매 비중 단독 게이트 금지 |
 | `kis/` | `kis_master.py` | cp949 고정폭. 관리·정리매매 차단은 스냅샷 10일 이내만 |
 | `dart/` | `opendart.py` | 키 없음·013 만 null, 나머지는 예외. `crtfc_key` 마스킹. account_id 우선·이름 폴백. 전략 경로는 `remote=false`(로컬만) |
@@ -85,10 +71,7 @@ paths:
 
 ## 함정
 
-- 원본 데이터 소스: 종목 일봉 = FDR → 네이버 차트(수정주가), KRX MDC 계열 = `getJsonData.cmd` POST. 전략 경로는 이제 Open API+로컬 수정주가라 **둘을 섞으면** 같은 종목의 가격 단위가 달라진다(백필 시 기존 `price_ticks` 보다 이른 날을 채울 때 특히).
 - KRX Open API(AUTH_KEY)는 지수 구성종목·업종 분류·PER/PBR·투자자별 순매수를 주지 않는다(2026-11-17 조사). 전략 경로는 PER/PBR 을 `Valuation` 으로 로컬 계산하고 구성종목은 `KOSPI_MCAP`, 업종은 KIS 마스터로 대체했다. 수급·공시 달력은 대체가 없다(`strategy-config.md`).
-  UI 경로의 MDC 로그인은 그대로다 — KRX 가 비밀번호 변경을 요구하면 `CD010` 으로 실패한다(사람이 사이트에서 바꾸고 `secrets/krx_pw.txt` 갱신).
-- KRX MDC 는 약관(제10조 2호)상 자동 수집 금지다. 2026-11-22 PIT 백테스트 2회의 대량 조회로 **IP 1일 차단**(KDM 이용 제한) — 차단 중엔 Open API 도 401 이다. 백테스트로 MDC 를 백필하지 말 것.
+- KRX MDC 는 약관(제10조 2호)상 자동 수집 금지다. 2026-11-22 PIT 백테스트 2회의 대량 조회로 **IP 1일 차단**(KDM 이용 제한) — 차단 중엔 Open API 도 401 이다. KRX MDC 를 대량 조회하지 말 것(코드는 삭제됨).
 - Open API 가 유효한 키로도 `401 Unauthorized API Call` 이면 서비스별 이용신청 미승인이다(인증키 승인과 별개, 2026-11-22). 신청은 포털 `openapi.krx.co.kr`, 호출은 데이터 호스트 `data-dbg.krx.co.kr` — 다른 주소다. IP 차단 중에도 같은 401 — 둘 다 반복 호출하지 말고 사람에게 확인.
-- KRX 로그인은 계정 차단 이력이 있다 — 반복 로그인 테스트 금지, 응답 녹화는 한 번에.
 - data.go.kr 배당 API: 구 경로 `/service/GetStocDiviInfoService/getDiviInfo` 는 code 12(서비스 없음), V2 만 동작. 필터 없이 전체 이력(약 7만 행)이 한 번에 오고 `basDt` 를 주면 0건. 공시일 필드가 없다. 개발계정 일 10,000 건.
