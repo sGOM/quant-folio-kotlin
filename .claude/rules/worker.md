@@ -7,7 +7,7 @@ paths:
 
 # 워커(배치)·알림
 
-원본 Celery beat 9개 → `WorkerSchedule`(`@Scheduled`, zone `Asia/Seoul`) + 작업 본체 `WorkerJobs`·`DbBackup`.
+원본 Celery beat 9개(시장데이터 적재는 공식 경로 잡으로 교체 — `docs/migration-notes.md`) → `WorkerSchedule`(`@Scheduled`, zone `Asia/Seoul`) + 작업 본체 `WorkerJobs`·`DbBackup`.
 본체는 결과 맵을 돌려주고 스케줄 층은 로그만 — 테스트는 본체를 직접 부른다(`quantfolio.scheduling.enabled=false`).
 
 ## 실패는 알림으로 넘긴다
@@ -21,8 +21,10 @@ paths:
 
 ## 함정
 
-- **날짜:** 원본이 `date.today()`(컨테이너 UTC)를 쓴 작업(일봉 적재·체결 정합 점검)은 UTC 그대로 보존. 스냅샷 선적재만 KST 전날.
+- **날짜:** 원본이 `date.today()`(컨테이너 UTC)를 쓴 체결 정합 점검은 UTC 그대로 보존. 공식 적재는 KST.
 - 백업은 워커 이미지에 `pg_dump`(postgresql-client)가 있어야 한다. 비밀번호는 `PGPASSWORD` 로만.
 - 뉴스 XML 은 DOCTYPE 금지(XXE). 원본 의미: XML 이 엔티티를 풀고 HTML unescape 가 한 번 더 — "고치지" 말 것.
-- 일봉 보충 실패는 `ensureCoverage` 가 삼킨다(원본 동일) — 실패율 알림은 DB 계열 오류에서만 발화한다.
-- 일봉 적재와 일별 스냅샷 선적재는 "실패율 알림" 발행 실패 처리가 다르다(한쪽만 삼킴) — 원본 `worker/tasks.py` 와 같으니 통합하지 말 것.
+- **공식 일일 적재는 30분마다 반복**(KRX Open API 공개 시각 미실측). 멱등은 원장에 맡긴다 — "목표일 끝났으면 skip" 을
+  넣지 말 것. 최근 미확정 날(휴장 0행)을 7일 확정 전까지 매번 다시 받아야 잠정 휴장 판정이 성립한다(`LocalTradingDays`).
+- **OpenDART 일 한도(20,000, 미실측)를 나눠 쓴다:** 05:00 `backfillDart` 예산 10,000 + 웹 원격 조회. 수동 `quantfolio.dart-backfill.from-year`
+  를 같은 날 돌리면 한도를 다 쓰고, 설정을 남겨 두면 재기동마다 또 쓴다 — 끝나면 지운다. 겹침은 `RedisKeys.DART_BACKFILL_LOCK`.

@@ -34,14 +34,16 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
-**예외(원본 보존):** 상장폐지 판정 `lastValid`·DART 정정공시·업종 PIT 폴백은 미래를 본다 — `docs/migration-notes.md` #10~12.
+**예외(원본 보존):** 상장폐지 판정 `lastValid`·DART 정정공시·섹터 캡의 오늘 업종(`withSectorMap`)은 미래를 본다 — `docs/migration-notes.md` #10~12.
+수정주가는 최신 인자 기준이라 **가격 수준**은 미래 분할을 반영한다(원본 네이버와 같음) — 두 날의 비율만 쓰면 무관하다(`PriceUnits`).
 교란 테스트는 cut 이후 값을 **배율로만** 바꿔 결측 패턴이 같으므로 `lastValid` 를 잡지 못한다.
 백테스트 엔진을 고치면 `PortfolioLookaheadTest`(cut 이후 교란 → cut 까지 결과 동일)가 반드시 초록이어야 한다.
 
 ## 계산부와 조회부 분리
 
 `factor/`·`metrics/` 는 순수 계산(`FactorScores`·`MetricsPure`)을 정답지로, 조회 조립(`*Service`·`UniverseScores`)을
-`SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터가 **전량** 실패하면 예외 — 중립 처리 금지.
+`SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터 입력 커버리지가 리밸런싱마다 50% 미만이면 `MarketDataNotLoaded` — 백테스트·엔진 공용 `FactorCoverage`.
+커버리지는 그 점수에 실제로 쓰는 컬럼(`FactorScores.*_INPUTS`)으로 센다. 중립 처리 금지.
 
 ## 함정
 

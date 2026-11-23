@@ -40,28 +40,23 @@ paths:
 
 - 리포지토리는 테이블별 타입 행(`StockDaily` 등, 숫자 `Double?`)을 주고받는다. upsert 는 모든 컬럼
   `COALESCE(EXCLUDED, 기존)` — 들어온 null 은 기존값 보존(여러 소스가 한 행을 나눠 채운다).
-- 저장 시 종목코드 6자리 0-패딩, 같은 종목 중복은 마지막 값, NaN/±Inf → null.
+- 저장 시 같은 종목 중복은 마지막 값, NaN/±Inf → null.
 - 시장 혼재 테이블(`stock_daily_snapshots`·`stock_period_stats`)의 단일시장 조회는 반드시 `markets` 필터.
 - 운영 테이블과 FK 없음 — 저장소는 통째로 지우고 재적재할 수 있어야 한다.
 
 ## 공식 경로 (`market/official/`·`market/krxopen/`) — 전략 경로의 단일 출처
 
 전략 경로(백테스트·리밸런싱·패닉·유니버스·달력·심볼·배치)는 `CodeRulesTest` 가 MDC·네이버 클래스 참조를 금지한다. 로컬 테이블만 읽는다.
+`SnapshotSource` 주입은 `@Qualifier("local")` 필수(빠지면 `@Primary` 원격이 조용히 들어온다). 새 전략 경로 파일은 `CodeRulesTest` 의 목록에 추가한다.
 
-| 클래스 | 역할 |
-|---|---|
-| `krxopen/` | KRX Open API(AUTH_KEY) 클라이언트·일일/백필 적재. 원장 `krx_open|<서비스>|yyyyMMdd|<시장>` |
-| `AdjustedBars` | 원주가 + 전일대비로 수정주가 계산(분할 반영). 수정 후 `price_ticks` 에 저장 |
-| `LocalSnapshots`·`LocalTradingDays` | 로컬 `SnapshotSource`·거래일(= 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`: 행>0 거래일·0행 확정 휴장·기록 없음/미확정=모름=결측). `index_ohlcv` 는 UI·MDC 도 써서 달력 근거 아님. 직전 거래일은 `LocalTradingDays.previous` 한 곳 |
-| `Valuation` | PER/PBR/DIV 로컬 계산(DART 재무·시총·배당) |
-| `DividendIngest`·`DividendFeed` | 공공데이터포털 `getDiviInfo_V2` 전체 적재(원장 `datagokr|dividends_full`)·백테스트 현금 적립 |
-| `LocalSectorMap` | 업종 PIT 스냅샷(KIS 마스터)만 읽음, 없으면 미적재 |
-| `McapUniverse` | `KOSPI_MCAP` 유니버스(직전 거래일 이하 최신 시총·종목별 최신 `stock_kind`) |
-
+- **원장 키:** `krx_open|<서비스>|yyyyMMdd|<시장>`, 배당 `datagokr|dividends_full`. 읽는 쪽(`LocalTradingDays` 등)과 문자열이 같아야 한다.
+- **거래일 = 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`**: 행>0 거래일, 0행·final 휴장, 그 외 모름(=결측). `index_ohlcv` 는 UI 의 MDC 캐시도
+  쓰므로 달력 근거로 쓰지 않는다. 0행·미확정이라도 5호출 모두 0행이고 뒷날(행>0) 기록 **이후에** 받은 것이면 잠정 휴장 —
+  공개 전에 받은 0행과 구분하려는 것이다. 직전 거래일은 `LocalTradingDays.previous` 한 곳(적재의 비교용 직전일만 예외, `previousForAppend`).
 - **Valuation `div=0.0` 규칙:** 전체 배당 적재가 있고 창(공시일 ≤ asOf, 기준일이 365일 안) 안에 행이 없으면 0.0, 적재가 없거나 배당 이력 시작+365일 이전이면 `null`. 0 과 결측을 섞지 않는다.
-- 배당 금액은 기준일 당시 주식 단위(분할 전 값)다 — `PriceUnits`(수정/원시 종가 비)로 환산: 백테스트 현금은 배당락일 비, `Valuation` DIV 는 배당락일 비 ÷ asOf 비(환산 못 하면 null). 거래정지일 봉(거래량 0·시고저 0)은 `AdjustedBars.flatIfHalted` 로 o=h=l=종가(원본과 알려진 차이). 배당락일은 "기준일 이하 마지막 거래일의 직전 거래일".
-- 0행 휴장 확정은 위 4상태 예외(7일 이상 지난 날만 `final`). 지수명→코드 매핑 밖 지수는 저장하지 않는다.
-- Open API 필드명·지수명·공개 시각은 **미실측**(문서상 이름) — 파서가 어긋나면 `SourceSchemaError` 로 드러난다.
+- 배당 금액은 기준일 당시 주식 단위(분할 전 값)다 — `PriceUnits`(수정/원시 종가 비)로 환산: 백테스트 현금은 배당락일 비, `Valuation` DIV 는 배당락일 비 ÷ asOf 비(환산 못 하면 null). 배당락일은 "기준일 이하 마지막 거래일의 직전 거래일".
+- 거래정지일 봉(거래량 0·시고저 0)은 버리지 말고 `AdjustedBars.flatIfHalted` 로 o=h=l=종가 — 버리면 커버리지 결측, 그대로 두면 ATR 등 오염.
+- 휴장일과 **아직 공개 안 된 날**은 둘 다 HTTP 200·빈 `OutBlock_1` 이다(2026-11-23 실측) — 0행만으로 휴장이라 단정하지 않는다. 공개는 T+1(시각 관측 중). 필드명·지수명은 실측과 일치(`docs/migration-notes.md` "공식 경로 실측").
 
 ## KRX MDC (`market/krx/`) — UI 경로 전용(2단계에서 제거 예정)
 
@@ -70,9 +65,9 @@ paths:
 | `KrxSession` | pykrx `KRXSession` + `krx_index._session` | 로그인·쿠키·1시간 만료(300s 버퍼)·쿨다운 우선 |
 | `KrxMdc.rows` | `krx_index._krx_rows` | 응답 원인 분류(HTML=Auth, 키 없음=Schema) |
 | `KrxMdc.pykrx` | pykrx `KrxWebIo` | 분류 없음, 730일 분할. 호출자가 Unavailable 로 감싼다 |
-| `KrxStockApi` | pykrx `stock.*` 9종 | 같은 bld·파라미터·숫자 정리 규칙 |
+| `KrxStockApi` | pykrx `stock.*` 9종 | 1:1 이식 |
 | `KrxIndexService` | `krx_index.py` | 구성종목·전종목·시총. `sectorMap` 은 `LocalSectorMap` 에 위임(로컬 스냅샷 전용, 전략 경로는 이쪽을 직접 씀) |
-| `KrxSnapshots` | `metrics/fetch.py` | 위를 `StoreCache` 로 감싼 로컬 우선 조회 |
+| `KrxSnapshots` | `metrics/fetch.py` | `@Primary` — 한정자 없는 `SnapshotSource` 주입은 원격이 된다 |
 
 - `KrxStockApi` 의 숫자 정리는 함수마다 다르다(`\W` 제거는 부호·소수점까지 지움, int32 컬럼은 범위 초과 시 실패). pykrx 를 그대로 옮긴 것이니 "통일"하지 말 것.
 - KRX 미인증(자격증명 없음)은 실패가 아니라 빈 결과. 캐시는 **성공했을 때만**.
@@ -90,8 +85,9 @@ paths:
 ## 함정
 
 - 원본 데이터 소스: 종목 일봉 = FDR → 네이버 차트(수정주가), KRX MDC 계열 = `getJsonData.cmd` POST. 전략 경로는 이제 Open API+로컬 수정주가라 **둘을 섞으면** 같은 종목의 가격 단위가 달라진다(백필 시 기존 `price_ticks` 보다 이른 날을 채울 때 특히).
-- KRX Open API(AUTH_KEY)는 지수 구성종목·업종 분류·PER/PBR·투자자별 순매수를 주지 않는다(2026-11-17 조사). 전략 경로는 PER/PBR 을 `Valuation` 으로 로컬 계산하고 구성종목은 `KOSPI_MCAP`, 업종은 KIS 마스터로 대체했다. 수급(`flow`)·공시 달력(`pead`)은 대체가 없어 1단계에서 거부한다.
+- KRX Open API(AUTH_KEY)는 지수 구성종목·업종 분류·PER/PBR·투자자별 순매수를 주지 않는다(2026-11-17 조사). 전략 경로는 PER/PBR 을 `Valuation` 으로 로컬 계산하고 구성종목은 `KOSPI_MCAP`, 업종은 KIS 마스터로 대체했다. 수급·공시 달력은 대체가 없다(`strategy-config.md`).
   UI 경로의 MDC 로그인은 그대로다 — KRX 가 비밀번호 변경을 요구하면 `CD010` 으로 실패한다(사람이 사이트에서 바꾸고 `secrets/krx_pw.txt` 갱신).
 - KRX MDC 는 약관(제10조 2호)상 자동 수집 금지다. 2026-11-22 PIT 백테스트 2회의 대량 조회로 **IP 1일 차단**(KDM 이용 제한) — 차단 중엔 Open API 도 401 이다. 백테스트로 MDC 를 백필하지 말 것.
+- Open API 가 유효한 키로도 `401 Unauthorized API Call` 이면 서비스별 이용신청 미승인이다(인증키 승인과 별개, 2026-11-22). 신청은 포털 `openapi.krx.co.kr`, 호출은 데이터 호스트 `data-dbg.krx.co.kr` — 다른 주소다. IP 차단 중에도 같은 401 — 둘 다 반복 호출하지 말고 사람에게 확인.
 - KRX 로그인은 계정 차단 이력이 있다 — 반복 로그인 테스트 금지, 응답 녹화는 한 번에.
 - data.go.kr 배당 API: 구 경로 `/service/GetStocDiviInfoService/getDiviInfo` 는 code 12(서비스 없음), V2 만 동작. 필터 없이 전체 이력(약 7만 행)이 한 번에 오고 `basDt` 를 주면 0건. 공시일 필드가 없다. 개발계정 일 10,000 건.

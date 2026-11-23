@@ -54,6 +54,7 @@ paths:
 | 서로 다른 주문이 같은 사용자·계좌·전략·종목의 포지션을 갱신하면 DB 트랜잭션 잠금으로 커밋까지 직렬화(첫 생성 포함), 잠금 뒤 체결 수량 재확인 | `Fills.record` | 보유수량·평단 갱신 유실 |
 | 포지션 조회·리스크·화면 잔고 대체 조회는 활성 주문 계좌에 한정. 키 NULL(계좌 미상) 행은 V8 에서 지웠고 새로 만드는 경로가 없다 — NULL 을 다루는 분기는 남겨 둔다 | `Fills`·러너·`RiskManager`·`TradingController` | 이전 계좌 수량·평단으로 주문 |
 | 0 이하 현재가는 "시세 없음" — 손절·익절 판정에 쓰지 않는다 | 러너·`RiskManager` | −100% 로 오독해 전량 청산 |
+| 시장데이터 미적재(`MarketDataNotLoaded`)면 그 틱의 신규 매수·리밸런싱은 주문 없이 중단 + critical 에피소드 1회(국면·계획·시드 플래그 각각, 자기 경로가 정상 반환하면 초기화). `dataReadyBy`(10:30 KST, 미실측) 전 T-1 만 빈 경우(kind 가 일봉·거래일·가격·지수이고 그 앞 창이 모두 알려짐)는 경보 없이 대기. 리스크오프 청산(MDD·레짐)은 시장데이터 없이 `heldPositions()` 전체, 손절·익절은 이력 없이도 동작 | `RebalanceRunner`·`StrategyRunner`·`Runners.awaitingPreviousDay` | 모르는 데이터로 매매 / 데이터 공백 중 킬스위치 무력화 / 경보 누락·매분 폭주 |
 | 주문 순서: 실전 게이트(KIS prod·토스) → 정지/CB 게이트 → 실행기 | `BaseRunner.place` | 승인 없는 실전 주문 / CB 중 시장가 |
 | 타임아웃·종료로 버려진 틱은 주문하지 않는다(표식 검사 — 인터럽트는 `catch (e: Exception)` 가 삼킨다) | `BaseRunner.tickAborted` | 겹친 틱 이중 배분 / 정지 후 주문 |
 | start·stop·피드 동기화는 직렬(`@Synchronized`) — 제어 메시지는 각자 다른 스레드로 온다(`resolve_order` 는 `@Synchronized` 가 아니라 주문 정합 락으로 직렬화) | `EngineRuntime`·`KisRealtime` | 정지한 전략이 계속 매매 / 추적 안 되는 WS 리스너 |

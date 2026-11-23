@@ -15,15 +15,16 @@ paths:
 
 ## 응답 계약 (프론트가 무수정으로 붙기 위한 규칙)
 
-| 항목 | 규칙 | 구현 위치 |
-|---|---|---|
-| 필드명 | snake_case (DTO 는 camelCase 로 쓰면 자동 변환) | `JsonConfig` |
-| 결측 | 항상 `null` 직렬화. 0 sentinel 금지 | Jackson 기본 |
-| NaN/±Inf | `null` | `JsonConfig` |
-| 오류 | `{"detail": "한국어 메시지"}` — `throw ApiException(status, detail)` | `ApiErrorHandler` |
-| 검증 오류 | 422 `{"detail":[{"type","loc":["body"\|"query", 필드],"msg"}]}` | `ApiErrorHandler` |
-| 404·405 | `{"detail":"Not Found"}` 등 reason phrase | `ApiErrorHandler` |
-| 미처리 예외 | 500 `{"detail":"Internal Server Error"}`, 상세는 로그에만(`DEBUG_ERRORS` 는 prod 에서 무시) | `ApiErrorHandler` |
+| 항목 | 규칙 |
+|---|---|
+| 필드명 | snake_case (DTO 는 camelCase 로 쓰면 자동 변환) |
+| 결측 | 항상 `null` 직렬화. 0 sentinel 금지 |
+| NaN/±Inf | `null` |
+| 오류 | `{"detail": "한국어 메시지"}` — `throw ApiException(status, detail)` |
+| 검증 오류 | 422 `{"detail":[{"type","loc":["body"\|"query", 필드],"msg"}]}` |
+| 시장데이터 미적재 | 409 `{"detail","kind","key","missing"}` — `MarketDataNotLoaded`. 외부 조회 실패(`DataSourceError`, 503/502/500)와 다른 사건 |
+| 404·405 | `{"detail":"Not Found"}` 등 reason phrase |
+| 미처리 예외 | 500 `{"detail":"Internal Server Error"}`, 상세는 로그에만(`DEBUG_ERRORS` 는 prod 에서 무시) |
 
 결측을 정렬할 땐 맨 뒤로, 필터링할 땐 탈락시킨다 — 결측은 기준 충족을 증명할 수 없다.
 
