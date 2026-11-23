@@ -10,7 +10,7 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 /**
- * 로컬 전용 일봉 커버리지 점검 — [OhlcvLoader.ensureCoverage] 와 달리 외부(Naver)를 절대 부르지 않고
+ * 로컬 전용 일봉 커버리지 점검 — 외부를 부르지 않고
  * 빠진 거래일을 [MarketDataNotLoaded] 로 알린다. 거래일은 [LocalTradingDays].
  *
  * 상장 전·상장폐지 후의 날은 결측이 아니다: 빠진 날에 시장 전체 행(stock_daily_snapshots)은 있는데 그 종목 행이 없으면 상장 상태가 아니었던 날이다.

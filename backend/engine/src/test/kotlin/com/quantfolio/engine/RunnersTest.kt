@@ -79,7 +79,6 @@ class RunnersTest(
     @MockitoBean lateinit var calendar: MarketCalendar
     @MockitoBean @Qualifier("local") lateinit var snapshots: SnapshotSource // 엔진이 쓰는 로컬 소스
     @MockitoBean lateinit var remoteSnapshots: com.quantfolio.market.krx.KrxSnapshots // 원격 — 라이브 틱이 부르면 안 된다
-    @MockitoBean lateinit var naver: com.quantfolio.market.ohlcv.NaverDaily
     @MockitoBean lateinit var coverage: com.quantfolio.market.ohlcv.LocalOhlcvCoverage
     @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
     @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
@@ -522,7 +521,7 @@ class RunnersTest(
         )
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isNotEmpty(), alerts.findAll().filter { it.strategyId == sid }.map { it.message }.toString())
-        org.mockito.Mockito.verifyNoInteractions(remoteSnapshots, naver)
+        org.mockito.Mockito.verifyNoInteractions(remoteSnapshots)
         org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).marketCaps(anyDate())
         org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
     }
@@ -546,7 +545,6 @@ class RunnersTest(
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
         assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid })
-        org.mockito.Mockito.verifyNoInteractions(naver)
     }
 
     @Test

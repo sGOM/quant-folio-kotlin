@@ -47,6 +47,10 @@ class LocalTradingDays(private val ledger: FetchLedger, private val listed: KrxH
         return null
     }
 
+    /** [day] 포함 거꾸로 [MAX_BACK] 일 안에서 원장상 행>0 인 가장 최근 날. 모르는 날·휴장은 건너뛴다([previous] 와 다름). */
+    fun lastTradingDayUpTo(day: LocalDate): LocalDate? =
+        generateSequence(day) { it.minusDays(1) }.take(MAX_BACK + 1).firstOrNull { isTradingDay(it) == true }
+
     /** 그날 5개 호출의 원장 기록이 모두 있고 모두 0행인가(확정 여부는 묻지 않는다). */
     fun allCallsZero(day: LocalDate): Boolean =
         CALLS.all { (svc, market) -> ledger.get(SOURCE, "$svc|${day.format(YMD)}|$market")?.rowCount == 0 }

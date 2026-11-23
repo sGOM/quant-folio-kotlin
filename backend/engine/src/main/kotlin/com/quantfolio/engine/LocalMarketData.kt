@@ -2,18 +2,16 @@ package com.quantfolio.engine
 
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.LocalPriceHistory
 import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
-import com.quantfolio.market.ohlcv.PriceHistory
-import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.FactorInputs
 import com.quantfolio.metrics.TechIndicatorLoader
 import com.quantfolio.metrics.UniverseScores
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.time.LocalDate
-import java.time.ZoneOffset
 
 /**
  * 실매매 엔진이 쓰는 시장데이터는 로컬 DB 뿐이다(원격 KRX MDC·Naver 로 내려가지 않는다). 비어 있으면 [MarketDataNotLoaded] —
@@ -23,16 +21,10 @@ import java.time.ZoneOffset
 class LocalMarketData(
     @Qualifier("local") val snapshots: SnapshotSource,
     val coverage: LocalOhlcvCoverage,
-    private val ticks: PriceTickStore,
+    private val prices: LocalPriceHistory,
     private val sectorMaps: LocalSectorMap,
     dart: DartFinancials,
 ) {
-    /** 로컬 일봉. 구간의 거래일이 빠졌으면 미적재(외부 보충 없음). */
-    private val prices = PriceHistory { symbol, start, end ->
-        coverage.require(symbol, start, end)
-        ticks.bars(symbol, start.atStartOfDay().toInstant(ZoneOffset.UTC), end.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC))
-    }
-
     private val inputs = object : FactorInputs {
         override fun qualityMetrics(codes: List<String>, asOf: LocalDate, useTtm: Boolean) = dart.metricsBySymbol(codes, asOf, useTtm, remote = false)
         override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int): Map<String, Double> = throw MarketDataNotLoaded("unsupported_in_phase1", "pead")

@@ -76,7 +76,7 @@ class CodeRulesTest {
 
     /**
      * 공식 경로 1단계: 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)는 KRX MDC·네이버 클래스를 참조하지 않는다.
-     * OhlcvLoader.kt 는 UI 경로용 Naver 보충(2단계에서 제거)이 남아 목록에서 뺐고, 전략 경로의 LocalOhlcvCoverage 를 LocalOhlcvCoverage.kt 로 분리해 대신 넣었다.
+     * 네이버 로더(OhlcvLoader)는 2단계에서 삭제됐다.
      */
     @Test
     fun strategyPathAvoidsMdcAndNaver() {
@@ -205,14 +205,14 @@ class CodeRulesTest {
     }
 
     companion object {
-        /** 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치). OhlcvLoader.kt 는 UI 경로 Naver 보충이 남아 제외. */
+        /** 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치). */
         private val STRATEGY_PATH_FILES = setOf(
             "BacktestRunner.kt", "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
             "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt", "LocalMarketData.kt",
         )
         private val SNAPSHOT_DECL = Regex("""\w+\s*:\s*SnapshotSource\b""")
         private val LOCAL_QUALIFIER = Regex("""@Qualifier\("local"\)""")
-        // KrxSnapshots 는 market.krx, NaverDaily 는 market.ohlcv 패키지(ohlcv.* 는 NaverDaily 를 끌어온다).
+        // KrxSnapshots 는 market.krx 패키지.
         private val WILDCARD_REMOTE_IMPORT = Regex("""^\s*import\s+com\.quantfolio\.market\.(krx|ohlcv)\.\*""")
         private val CATCH_ALL = Regex("""catch\s*\(\s*\w+\s*:\s*(Exception|Throwable|RuntimeException)\s*\)|\brunCatching\b""")
         private val MDNL_CATCH = Regex("""catch\s*\(\s*\w+\s*:\s*MarketDataNotLoaded\s*\)""")

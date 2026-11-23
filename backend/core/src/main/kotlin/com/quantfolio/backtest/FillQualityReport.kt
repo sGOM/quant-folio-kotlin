@@ -2,6 +2,7 @@ package com.quantfolio.backtest
 
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.strategy.StrategyRepository
+import com.quantfolio.market.official.LocalTradingDays
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.store.Bar
 import com.quantfolio.quant.Cfg
@@ -12,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 
@@ -29,6 +31,8 @@ class FillQualityReport(
     private val jdbc: NamedParameterJdbcTemplate,
     private val strategies: StrategyRepository,
     private val prices: PriceHistory,
+    private val days: LocalTradingDays,
+    private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -108,11 +112,15 @@ class FillQualityReport(
         return buy / capital / (spanDays / 365.25)
     }
 
-    /** 백테스트와 같은 소스(외부 일봉 수정종가)로 [최소 체결일−45일, 최대 체결일+10일]. 종목별 실패는 건너뛴다. */
-    private fun closePanel(orders: List<FillQuality.Order>): Panel {
+    /**
+     * 백테스트와 같은 소스(로컬 일봉 수정종가)로 [최소 체결일−45일, 최대 체결일+10일]. 끝은 마지막 적재 거래일로 자른다 —
+     * 아직 안 온 날까지 요구하면 미적재로 전 종목이 빠진다. 구간 안쪽 결손·종목별 실패는 그 종목만 건너뛴다(표본 부족은 게이트가 막는다).
+     */
+    internal fun closePanel(orders: List<FillQuality.Order>): Panel {
         if (orders.isEmpty()) return Panel(emptyList(), emptyList(), emptyMap())
         val start = orders.minOf { it.fillDate }.minusDays(45)
-        val end = orders.maxOf { it.fillDate }.plusDays(10)
+        val maxFill = orders.maxOf { it.fillDate }.plusDays(10)
+        val end = minOf(maxFill, days.lastTradingDayUpTo(MarketClock.todayKst(clock)) ?: maxFill)
         val bars = linkedMapOf<String, List<Bar>>()
         for (sym in orders.map { it.symbol }.toSortedSet()) {
             bars[sym] = try {

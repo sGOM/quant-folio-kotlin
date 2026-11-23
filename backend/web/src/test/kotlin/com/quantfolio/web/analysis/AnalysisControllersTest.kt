@@ -12,7 +12,7 @@ import com.quantfolio.domain.trading.OrderStatus
 import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
-import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.security.Passwords
@@ -59,7 +59,7 @@ class AnalysisControllersTest(
     @Autowired private val executions: ExecutionRepository,
     @Autowired private val ticks: PriceTickStore,
 ) {
-    @MockitoBean lateinit var loader: OhlcvLoader
+    @MockitoBean lateinit var loader: PriceHistory
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()

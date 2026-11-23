@@ -37,6 +37,15 @@ class LocalTradingDaysTest {
         assertFalse(days.isTradingDay(mon.plusDays(5))!!) // 일요일
     }
 
+    @Test
+    fun `lastTradingDayUpTo skips unknown and holiday days`() {
+        val mon = LocalDate.of(2026, 10, 5)
+        ledger.trading(listOf(mon)); ledger.holiday(listOf(mon.plusDays(1)))
+        assertEquals(mon, days.lastTradingDayUpTo(mon.plusDays(2))) // 수 기록 없음·화 휴장을 건너뜀
+        assertEquals(mon, days.lastTradingDayUpTo(mon))
+        assertNull(days.lastTradingDayUpTo(LocalDate.of(2016, 3, 2)))
+    }
+
     // I-5b: 휴장 의심(0행·미확정) 날은 뒷날 공개 후에 받은 0행일 때만 잠정 휴장.
     private val d = LocalDate.of(2026, 10, 6) // 화
     private val next = d.plusDays(1)
