@@ -80,14 +80,73 @@ class CodeRulesTest {
      */
     @Test
     fun strategyPathAvoidsMdcAndNaver() {
-        val files = setOf(
-            "BacktestRunner.kt", "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
-            "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt", "LocalMarketData.kt",
-        )
+        val files = STRATEGY_PATH_FILES
         val found = mainCodeLines().map { it.first.substringAfterLast('/') }.toSet()
         assertTrue(files.all { it in found }, "목록의 파일을 못 찾음(이름 변경?): ${files - found}")
         val hits = mainCodeLines().filter { (f, _, l) -> f.substringAfterLast('/') in files && FORBIDDEN_SOURCE.containsMatchIn(l) }
         assertTrue(hits.isEmpty(), "전략 경로는 KRX MDC·네이버를 쓰지 않는다(공식 경로 로컬 소스만):\n${report(hits)}")
+    }
+
+    /**
+     * 전략 경로의 SnapshotSource 는 `@Qualifier("local")` 이어야 한다. 한정자 없는 주입은 원격 `@Primary KrxSnapshots` 를 조용히 받는다.
+     * 한정자는 같은 줄 또는 바로 윗줄. 와일드카드 import 는 KRX·Naver 클래스를 몰래 끌어오므로 막는다.
+     */
+    @Test
+    fun strategyPathSnapshotSourceIsLocal() {
+        val lines = strategyLines()
+        val hits = unqualifiedSnapshotSources(lines) + lines.filter { (_, _, l) -> WILDCARD_REMOTE_IMPORT.containsMatchIn(l) }
+        assertTrue(hits.isEmpty(), "전략 경로 SnapshotSource 는 @Qualifier(\"local\") 필수, krx.*·ohlcv.* 와일드카드 import 금지:\n${report(hits)}")
+    }
+
+    /**
+     * 전략 경로의 `catch (Exception/Throwable)`·`runCatching` 은 MarketDataNotLoaded 를 삼키면 안 된다(미적재가 조용히 결측·중립이 된다).
+     * 통과 조건: (1) 같은 줄에서 앞서 MDNL catch, (2) 40줄 안의 직전 MDNL catch 줄부터 이 줄 직전까지 중괄호가 정확히 1 열려 있고
+     * 이 줄이 `}` 로 시작 — 즉 MDNL 블록을 바로 닫는 형제 catch(별개 try 의 MDNL 은 이미 닫혀 있어 걸러진다),
+     * (3) 뒤 6줄 안에 `is MarketDataNotLoaded` 재던짐. 그 밖은 [CATCH_ALL_ALLOWLIST] 에 파일별 허용 건수와 이유가 있어야 하고 건수가 정확히 같아야 한다.
+     */
+    @Test
+    fun strategyPathCatchAllKeepsMarketDataNotLoaded() {
+        val hits = unguardedCatchAlls(strategyLines()).groupBy { it.first.substringAfterLast('/') }
+        val problems = (hits.keys + CATCH_ALL_ALLOWLIST.keys).sorted().mapNotNull { f ->
+            val got = hits[f].orEmpty()
+            val allowed = CATCH_ALL_ALLOWLIST[f]?.first ?: 0
+            if (got.size == allowed) null else "$f: 허용 $allowed 건, 실제 ${got.size} 건\n${report(got)}"
+        }
+        assertTrue(problems.isEmpty(), "MarketDataNotLoaded 를 삼킬 수 있는 catch-all — MDNL 분기를 먼저 두거나 재던지거나 allowlist 에 이유와 함께 등록:\n${problems.joinToString("\n")}")
+    }
+
+    private fun strategyLines() = mainCodeLines().filter { it.first.substringAfterLast('/') in STRATEGY_PATH_FILES }
+
+    private fun lines(vararg l: String) = l.mapIndexed { i, t -> Triple("X.kt", i + 1, t) }
+
+    private fun unqualifiedSnapshotSources(all: List<Triple<String, Int, String>>) = all.filterIndexed { i, (f, _, l) ->
+        SNAPSHOT_DECL.containsMatchIn(l) && !LOCAL_QUALIFIER.containsMatchIn(l) &&
+            !(i > 0 && all[i - 1].first == f && LOCAL_QUALIFIER.containsMatchIn(all[i - 1].third))
+    }
+
+    /** 첫 줄(`} catch (e: MDNL) {`)의 선행 `}` 를 뺀 깊이 1 에서 시작해, 마지막 줄까지 깊이가 1 아래로 내려간 적 없고 1 로 끝나면 MDNL 블록이 아직 열려 있다. */
+    private fun blockStillOpen(block: List<String>): Boolean {
+        var depth = 0
+        block.forEachIndexed { i, line ->
+            val t = if (i == 0) line.replaceFirst("}", "") else line
+            depth += t.count { it == '{' } - t.count { it == '}' }
+            if (depth < 1) return false
+        }
+        return depth == 1
+    }
+
+    private fun unguardedCatchAlls(all: List<Triple<String, Int, String>>): List<Triple<String, Int, String>> {
+        val byFile = all.groupBy { it.first }
+        return all.filter { (f, n, l) ->
+            val m = CATCH_ALL.find(l) ?: return@filter false
+            val file = byFile.getValue(f)
+            val k = file.indexOfFirst { it.second == n }
+            val sameLine = MDNL_CATCH.find(l)?.let { it.range.first < m.range.first } == true
+            val j = (k - 1 downTo maxOf(0, k - 40)).firstOrNull { MDNL_CATCH.containsMatchIn(file[it].third) }
+            val sibling = j != null && l.trimStart().startsWith("}") && blockStillOpen(file.subList(j, k).map { it.third })
+            val rethrown = (k..minOf(file.size - 1, k + 6)).any { RETHROW_MDNL.containsMatchIn(file[it].third) }
+            !(sameLine || sibling || rethrown)
+        }
     }
 
     /** 정규식이 아무것도 못 잡게 망가지면 위 테스트들이 조용히 통과한다 — 그걸 막는다. */
@@ -114,9 +173,61 @@ class CodeRulesTest {
                 "select not kis_balance_reconcile_blocked from users",
             ).map { BLOCKED_RELEASE.containsMatchIn(it) },
         )
+        // 전략 경로 SnapshotSource 한정자: 선언 건수 중 한정자 없는 것
+        assertEquals(
+            listOf(1, 0, 0, 0, 0),
+            listOf(
+                listOf("class A(private val snapshots: SnapshotSource)"),
+                listOf("class A(@Qualifier(\"local\") private val snapshots: SnapshotSource)"),
+                listOf("    @Qualifier(\"local\")", "    private val snapshots: SnapshotSource,"),
+                listOf("import com.quantfolio.market.krx.SnapshotSource"),
+                listOf("val x = UniverseScores(local, y)"),
+            ).map { unqualifiedSnapshotSources(lines(*it.toTypedArray())).size },
+        )
+        assertEquals(
+            listOf(true, true, false, false),
+            listOf("import com.quantfolio.market.krx.*", "import com.quantfolio.market.ohlcv.*", "import com.quantfolio.market.krx.SnapshotSource", "import com.quantfolio.market.official.*")
+                .map { WILDCARD_REMOTE_IMPORT.containsMatchIn(it) },
+        )
+        // catch-all 이 MDNL 을 삼키는가(위반 건수)
+        val guards = listOf(
+            listOf("try { f() } catch (e: Exception) { null }"),
+            listOf("val x = runCatching { f() }.getOrNull()"),
+            listOf("try { f() } catch (e: MarketDataNotLoaded) { throw e } catch (e: Exception) { null }"),
+            listOf("try {", "  f()", "} catch (e: MarketDataNotLoaded) {", "  throw e", "} catch (e: Exception) {", "  null", "}"),
+            listOf("try {", "  f()", "} catch (e: Exception) {", "  if (e is MarketDataNotLoaded) throw e", "  null", "}"),
+            // 앞 try 는 이미 닫혔다 — 그 MDNL 분기는 이 catch-all 을 보호하지 못한다.
+            listOf("try {", "  f()", "} catch (e: MarketDataNotLoaded) {", "  throw e", "}", "try {", "  g()", "} catch (e: Exception) {", "  null", "}"),
+            // catch-all 이 MDNL 보다 앞이면 MDNL 분기는 도달 불가.
+            listOf("try {", "  f()", "} catch (e: Exception) {", "  null", "} catch (e: MarketDataNotLoaded) {", "  throw e", "}"),
+        )
+        assertEquals(listOf(1, 1, 0, 0, 0, 1, 1), guards.map { unguardedCatchAlls(lines(*it.toTypedArray())).size })
     }
 
     companion object {
+        /** 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치). OhlcvLoader.kt 는 UI 경로 Naver 보충이 남아 제외. */
+        private val STRATEGY_PATH_FILES = setOf(
+            "BacktestRunner.kt", "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
+            "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt", "LocalMarketData.kt",
+        )
+        private val SNAPSHOT_DECL = Regex("""\w+\s*:\s*SnapshotSource\b""")
+        private val LOCAL_QUALIFIER = Regex("""@Qualifier\("local"\)""")
+        // KrxSnapshots 는 market.krx, NaverDaily 는 market.ohlcv 패키지(ohlcv.* 는 NaverDaily 를 끌어온다).
+        private val WILDCARD_REMOTE_IMPORT = Regex("""^\s*import\s+com\.quantfolio\.market\.(krx|ohlcv)\.\*""")
+        private val CATCH_ALL = Regex("""catch\s*\(\s*\w+\s*:\s*(Exception|Throwable|RuntimeException)\s*\)|\brunCatching\b""")
+        private val MDNL_CATCH = Regex("""catch\s*\(\s*\w+\s*:\s*MarketDataNotLoaded\s*\)""")
+        private val RETHROW_MDNL = Regex("""is\s+MarketDataNotLoaded""")
+
+        /** 파일 → (허용 건수, 이유). 그 try/runCatching 안에서 MDNL 이 나올 수 없음을 코드로 확인한 곳만. 건수가 달라지면 실패 — 다시 본다. */
+        private val CATCH_ALL_ALLOWLIST: Map<String, Pair<Int, String>> = mapOf(
+            "BacktestRunner.kt" to (2 to "배당 조회(DividendFeed: 배당·가격틱 읽기, MDNL 안 던짐) + 잔차모멘텀 runCatching(적재된 closes 위 순수 계산)"),
+            "RebalanceRunner.kt" to (3 to "ISO 시각·JSON 파싱 runCatching 2건 + 브로커 현재가 조회 1건 - 시장데이터 미접근"),
+            "Runners.kt" to (2 to "Redis 헬스 기록 + 브로커 현재가 정지 확인 - 시장데이터 미접근"),
+            "PanicService.kt" to (4 to "로컬 파일 캐시 로드·저장(Jackson/Files) - 스냅샷 미접근"),
+            "MarketCalendar.kt" to (1 to "KIS 휴장일 REST 조회 - 로컬 DB 미접근"),
+            "SymbolCatalog.kt" to (1 to "KIS 마스터 REST 조회 - 로컬 DB 미접근"),
+            "WorkerJobs.kt" to (2 to "withOutageAlert 는 알림 후 throw e 로 전부 재던짐 + 체결 정합 리포트(orders/fills DB 만)"),
+        )
         private val FORBIDDEN_SOURCE = Regex("""\b(KrxSession|KrxMdc|KrxStockApi|KrxIndexService|KrxSnapshots|NaverDaily)\b""")
         private const val BLOCKED_COLUMN = "kis_balance_reconcile_blocked"
         private val BLOCKED_RELEASE = Regex("""kis_balance_reconcile_blocked\s*:?=\s*false""", RegexOption.IGNORE_CASE)

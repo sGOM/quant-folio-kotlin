@@ -67,6 +67,8 @@ class PanicService(@Qualifier("local") private val snapshots: SnapshotSource, pr
         sig.putAll(breadth)
         sig["nlr"] = try {
             newLowRatio(mkt, asOf)
+        } catch (e: MarketDataNotLoaded) {
+            throw e
         } catch (e: Exception) {
             log.warn("패닉 지표: S9 신저가 비율 계산 실패 (market={}): {}", mkt, e.message)
             null
