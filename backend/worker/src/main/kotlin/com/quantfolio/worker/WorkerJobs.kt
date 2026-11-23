@@ -98,6 +98,13 @@ class WorkerJobs(
         return linkedMapOf("done" to r.daysDone, "calls" to r.calls, "stoppedByBudget" to r.stoppedByBudget, "failed" to r.failed)
     }
 
+    /** 업종지수 소급(`quantfolio.backfill.indexes-only=true`). 원장·주식은 건드리지 않는다. */
+    fun backfillOfficialIndexes(from: LocalDate, to: LocalDate, callBudget: Int): Map<String, Any?> {
+        val r = official.backfillIndexes(from, to, callBudget)
+        log.info("공식 지수 백필 [{}~{}] {}", from, to, r)
+        return linkedMapOf("done" to r.daysDone, "calls" to r.calls, "stoppedByBudget" to r.stoppedByBudget, "failed" to r.failed)
+    }
+
     /** 실패하면 warning(dedup 기본 24h — 원본 값 그대로) 후 예외 전파 — 스케줄러 로그에도 남는다. */
     private fun <T> withOutageAlert(code: String, label: String, dedupHours: Double = 24.0, block: () -> T): T = try {
         block()

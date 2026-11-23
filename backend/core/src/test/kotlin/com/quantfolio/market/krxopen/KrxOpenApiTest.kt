@@ -73,6 +73,17 @@ class KrxOpenApiTest {
         assertEquals(2500.55, r.close)
         assertNull(r.open)
         assertEquals("가짜지수", r.name)
+        assertNull(r.volume) // 선택 키 — 응답에 없으면 null
+        assertNull(r.tradingValue)
+    }
+
+    @Test
+    fun `index daily reads volume and trading value, dash is null`() {
+        http.onText({ it.url.endsWith("idx/kospi_dd_trd") }, body = """{"OutBlock_1":[{"BAS_DD":"20261120","IDX_CLSS":"KOSPI","IDX_NM":"전기·전자",
+            "CLSPRC_IDX":"1","OPNPRC_IDX":"1","HGPRC_IDX":"1","LWPRC_IDX":"1","ACC_TRDVOL":"1,234","ACC_TRDVAL":"-"}]}""")
+        val r = api().indexDaily(day, "KOSPI").single()
+        assertEquals(1234L, r.volume)
+        assertNull(r.tradingValue)
     }
 
     @Test

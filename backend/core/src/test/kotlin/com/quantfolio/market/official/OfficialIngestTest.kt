@@ -62,6 +62,7 @@ class OfficialIngestTest(
         val failBaseMarkets = mutableSetOf<String>()
         val halted = mutableSetOf<LocalDate>()
         var indexNames: Map<String, List<String>> = mapOf("KRX" to listOf("KRX 300"), "KOSPI" to listOf("코스피", "코스피 200"), "KOSDAQ" to listOf("코스닥"))
+        val indexValues = mutableMapOf<String, Long>()
         var dailyCalls = 0
         var indexCalls = 0
         var baseCalls = 0
@@ -88,7 +89,7 @@ class OfficialIngestTest(
             failDays[day]?.let { throw it }
             failIndexDays[day]?.let { throw it }
             if (prices[day] == null) return emptyList()
-            return indexNames.getValue(family).map { OpenIndexRow(day, it, 1.0, 2.0, 0.5, 1.5) }
+            return indexNames.getValue(family).map { OpenIndexRow(day, it, 1.0, 2.0, 0.5, 1.5, 10L, indexValues[it]) }
         }
     }
 
@@ -356,6 +357,53 @@ class OfficialIngestTest(
         assertEquals(1, r.failed.size)
         assertTrue(daily.read(weekdays[0]).isEmpty())
         assertNull(ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI")))
+    }
+
+    @Test
+    fun `daily ingest stores every index row under its key with volume and value`() {
+        trade(weekdays[0])
+        open.indexNames = open.indexNames + ("KOSPI" to listOf("코스피", "코스피 200", "전기·전자"))
+        open.indexValues["전기·전자"] = 5L
+        ingest().backfill(weekdays[0], weekdays[0], 1000)
+        assertEquals(1, indexes.read("1001", weekdays[0], weekdays[0]).size)
+        assertEquals(1, indexes.read("1028", weekdays[0], weekdays[0]).size)
+        val sector = indexes.read("KOSPI:전기·전자", weekdays[0], weekdays[0]).single()
+        assertEquals(5L, sector.tradingValue)
+        assertEquals(10L, sector.volume)
+        assertEquals(0, indexes.read("KRX:KRX 300", weekdays[0], weekdays[0]).size)
+    }
+
+    @Test
+    fun `index backfill rewrites only index rows and is idempotent`() {
+        trade(weekdays[0], weekdays[2])
+        open.indexNames = open.indexNames + ("KOSPI" to listOf("코스피", "코스피 200", "전기·전자"))
+        ingest().backfill(weekdays[0], weekdays[2], 1000) // 원장에 weekdays[0],[2] 거래일, [1] 은 기록 없음
+        fun count(sql: String) = jdbc.queryForObject(sql, mapOf("a" to LocalDate.of(2320, 1, 1), "b" to LocalDate.of(2320, 12, 31)), Int::class.java)
+        val idxSql = "SELECT count(*) FROM index_ohlcv WHERE trade_date BETWEEN :a AND :b"
+        val snapSql = "SELECT count(*) FROM stock_daily_snapshots WHERE trade_date BETWEEN :a AND :b"
+        val idxBefore = count(idxSql)
+        val snapBefore = count(snapSql)
+        val ledgerBefore = ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI"))
+        open.indexCalls = 0; open.dailyCalls = 0
+        val r1 = ingest().backfillIndexes(weekdays[0], weekdays[2], 1000)
+        val r2 = ingest().backfillIndexes(weekdays[0], weekdays[2], 1000)
+        assertEquals(8, open.indexCalls) // 거래일 2일 x 2호출 x 2회 — 비거래일은 호출 0회
+        assertEquals(0, open.dailyCalls)
+        assertEquals(2, r1.daysDone)
+        assertEquals(2, r2.daysDone)
+        assertEquals(idxBefore, count(idxSql))
+        assertEquals(snapBefore, count(snapSql))
+        assertEquals(ledgerBefore, ledger.get("krx_open", key("stk_bydd_trd", weekdays[0], "KOSPI")))
+        assertEquals(LedgerEntry(0, true), ledger.get("krx_open", key("stk_bydd_trd", weekdays[1], "KOSPI")))
+    }
+
+    @Test
+    fun `index backfill stops at the call budget`() {
+        trade(weekdays[0], weekdays[1], weekdays[2])
+        ingest().backfill(weekdays[0], weekdays[2], 1000)
+        val r = ingest().backfillIndexes(weekdays[0], weekdays[2], 3)
+        assertEquals(1, r.daysDone)
+        assertTrue(r.stoppedByBudget)
     }
 
     @Test

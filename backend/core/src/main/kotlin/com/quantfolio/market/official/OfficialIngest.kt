@@ -4,6 +4,7 @@ import com.quantfolio.common.MarketClock
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krxopen.KrxOpenApi
 import com.quantfolio.market.krxopen.OpenDailyRow
+import com.quantfolio.market.krxopen.OpenIndexRow
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.source.SourceQuotaError
@@ -160,8 +161,7 @@ class OfficialIngest(
             val dailyRows = stocks.flatMap { (market, rows) -> rows.map { it.toStockDaily(market) } }
             daily.write(day, dailyRows)
             for ((family, rows) in idx) for (r in rows) {
-                val code = INDEX_CODES.getValue(family)[r.name.trim()] ?: continue
-                indexes.write(code, listOf(IndexBar(day, r.open, r.high, r.low, r.close)), r.name.trim())
+                writeIndexRow(day, family, r)
             }
             appendPrices(day, dailyRows, run)
             ingestBase(day, baseMarkets, run)
@@ -173,6 +173,37 @@ class OfficialIngest(
             ledger.put(SOURCE, key(k.first, day, k.second), n, final = final)
         }
         return LEDGER_KEYS.all { k -> k !in fetched || ledger.get(SOURCE, key(k.first, day, k.second))?.final == true }
+    }
+
+    private fun writeIndexRow(day: LocalDate, family: String, r: OpenIndexRow) {
+        val code = indexKey(family, r.name) ?: return
+        indexes.write(code, listOf(IndexBar(day, r.open, r.high, r.low, r.close, r.volume, r.tradingValue)), r.name.trim())
+    }
+
+    /**
+     * 지수만 다시 받아 쓴다(업종지수 소급용). 원장·주식·수정주가는 건드리지 않고, 거래일로 확인된 날
+     * ([LocalTradingDays.isTradingDay] == true)만 KOSPI·KOSDAQ 계열 2호출씩 쓴다. 모르는 날(null)은 받지 않는다.
+     */
+    fun backfillIndexes(from: LocalDate, to: LocalDate, callBudget: Int): IngestReport {
+        require(!from.isBefore(API_START)) { "KRX Open API 는 $API_START 부터 제공한다: from=$from" }
+        val run = Run(callBudget)
+        for (day in weekdays(from, to)) {
+            if (tradingDays.isTradingDay(day) != true) continue
+            if (run.calls.toLong() + MARKETS.size > callBudget) {
+                run.stopped = true
+                break
+            }
+            try {
+                val fetched = MARKETS.associateWith { run.calls++; api.indexDaily(day, it) }
+                for ((family, rows) in fetched) rows.forEach { writeIndexRow(day, family, it) }
+                run.done++
+            } catch (e: DataSourceError) {
+                run.failed += "$day: ${e.message}"
+                log.warn("지수 백필 실패 {}: {}", day, e.message)
+                if (e is SourceAuthError || e is SourceQuotaError) break
+            }
+        }
+        return run.report()
     }
 
     private fun OpenDailyRow.toStockDaily(market: String) = StockDaily(
@@ -322,6 +353,13 @@ class OfficialIngest(
             "KOSPI" to mapOf("코스피" to "1001", "코스피 200" to "1028"),
             "KOSDAQ" to mapOf("코스닥" to "2001"),
         )
+
+        /** index_ohlcv 키: 기존 3개는 코드, 그 밖의 KOSPI·KOSDAQ 행은 "계열:이름", KRX 계열은 저장 안 함(null). */
+        fun indexKey(family: String, name: String): String? {
+            val n = name.trim()
+            INDEX_CODES[family]?.get(n)?.let { return it }
+            return if (family == "KOSPI" || family == "KOSDAQ") "$family:$n" else null
+        }
 
         private val MARKETS = listOf("KOSPI", "KOSDAQ")
         private val STOCK_SERVICES = mapOf("KOSPI" to "stk_bydd_trd", "KOSDAQ" to "ksq_bydd_trd")

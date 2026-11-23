@@ -187,3 +187,8 @@ KRX Open API(`data-dbg.krx.co.kr/svc/apis`, 헤더 `AUTH_KEY`)를 2026-11-23 서
 - KIS 계좌번호·HTS ID: 원본은 환경변수(`KIS_ACCOUNT_NO`·`KIS_HTS_ID`)로 받았다. Kotlin 은 compose secret `kis_account_no`(`secrets/account_num`)·`kis_hts_id`(`secrets/hts_id.txt`)를 우선 읽고 환경변수는 로컬 실행용 폴백이다(2026-11-17 소유자 결정: 시크릿은 `secrets/` 한 곳에서만 관리).
 - 유니버스 소스(2단계): 원본의 `KOSPI200`·`KOSPI100`·`KRX300`(지수 구성종목) 소스를 폐지했다. 스키마는 `fixed`·`KOSPI_MCAP` 만 받고 `pool_size`(1~300, 기본 null=pick)를 추가했다. 기존 전략은 Flyway V11 이 소스값 기준으로 `KOSPI_MCAP` + `pool_size`(200/100/300)로 옮기고 `pick`·나머지는 그대로 둔다. 후보는 직전 거래일 시총 상위 `pool_size` 에서 모멘텀 상위 `pick` 으로 좁힌다(지수 구성종목과 다른 집합). 엔진의 `pit_fallback`(구성종목 없을 때 고정 universe 폴백) 경로와 `min_market_cap`(KOSPI_MCAP 에서는 원래도 무시) 입력 UI 는 없앴다.
 - flow 팩터 삭제(2단계): 원본의 투자자별 순매수 팩터(`factor_weights.flow`, `selection.flow_window`·`flow_denom`)를 지웠다. 공식 소스가 없고 쓰는 전략이 0개다. 스키마는 이제 팩터 키 7개(`momentum, value, lowvol, quality, growth, residual_momentum, pead`)만 받고, 합 검증 메시지에서도 flow 를 뺐다. V12 가 저장된 전략 설정에서 세 키를 제거한다. 원본 정답지의 flow 케이스(`strategy_config`·`factors` 일부)는 테스트 허용 목록으로 뺐다.
+
+## 업종지수 적재 (공식 경로 2단계, Task 4)
+
+- 일일 적재가 KOSPI·KOSDAQ 지수 응답의 모든 행을 `index_ohlcv` 에 저장한다(거래량·거래대금 포함). 키는 기존 3개가 `1001`·`1028`·`2001`, 나머지는 `KOSPI:<이름>`·`KOSDAQ:<이름>`(`OfficialIngest.indexKey`). KRX 계열은 저장하지 않는다. `index_code` 는 V13 에서 varchar(64).
+- 소급은 `quantfolio.backfill.indexes-only=true`(+ from/to) — 거래일로 확인된 날만 하루 2호출, 원장·주식·수정주가는 건드리지 않는다. 적재는 `index_ohlcv_coverage` 를 쓰지 않는다(기존 3개와 동일).

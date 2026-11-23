@@ -25,7 +25,9 @@ data class OpenDailyRow(
 /** [stockKind] 는 주권 종류 원문(보통주·우선주 …) — 해석은 호출자 몫. */
 data class OpenBaseRow(val symbol: String, val name: String, val market: String, val stockKind: String)
 
-data class OpenIndexRow(val day: LocalDate, val name: String, val open: Double?, val high: Double?, val low: Double?, val close: Double?)
+data class OpenIndexRow(val day: LocalDate, val name: String, val open: Double?, val high: Double?, val low: Double?, val close: Double?,
+    val volume: Long? = null, val tradingValue: Long? = null,
+)
 
 /**
  * KRX Open API(공식, AUTH_KEY) 전송·파싱. 숫자는 쉼표 문자열이고 값 없음은 "-" → null(0 은 값이다).
@@ -65,7 +67,9 @@ class KrxOpenApi(
             else -> throw IllegalArgumentException("지수 계열은 KRX|KOSPI|KOSDAQ: $family")
         }
         return fetch(svc, day).map { n ->
-            OpenIndexRow(parseDay(req(n, DAY)), req(n, IDX_NAME), num(req(n, IDX_OPEN)), num(req(n, IDX_HIGH)), num(req(n, IDX_LOW)), num(req(n, IDX_CLOSE)))
+            OpenIndexRow(parseDay(req(n, DAY)), req(n, IDX_NAME), num(req(n, IDX_OPEN)), num(req(n, IDX_HIGH)), num(req(n, IDX_LOW)), num(req(n, IDX_CLOSE)),
+                optLong(n, VOLUME), optLong(n, VALUE),
+            )
         }
     }
 
@@ -111,6 +115,9 @@ class KrxOpenApi(
         if (v == null || v.isNull) throw SourceSchemaError(SOURCE, "응답 행에 필수 키 $field 가 없다")
         return v.asString("").trim()
     }
+
+    /** 필수 키가 아닌 정수 — 키가 없거나 null 이면 null. */
+    private fun optLong(n: JsonNode, field: String): Long? = n.get(field)?.takeIf { !it.isNull }?.let { long(it.asString("").trim()) }
 
     private fun parseDay(s: String): LocalDate =
         try { LocalDate.parse(s, BAS_DD) } catch (e: Exception) { throw SourceSchemaError(SOURCE, "날짜 형식 불일치: $s") }
