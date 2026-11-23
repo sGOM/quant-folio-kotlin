@@ -39,8 +39,6 @@ data class UniverseScoreParams(
     val factorWeights: Map<String, Double>? = null,
     val neutralize: String = "none",
     val financialPeriod: String = "annual",
-    val flowWindow: Int = 90,
-    val flowDenom: String = "mcap",
     val residRegWindow: Int = 36,
     val residWindow: Int = 11,
     val residSkip: Int = 1,
@@ -135,11 +133,6 @@ class UniverseScores(
             }
             if (smap.isNotEmpty()) sector = codes.map { smap[it] }
         }
-        if (weighted("flow")) {
-            val flow = guarded("수급(flow)") { flowNorm(codes, asOf, p.flowWindow, p.flowDenom) }
-            if (flow.isEmpty()) throw IllegalStateException("수급(flow) 팩터 데이터 전량 조회 실패(외국인+기관 순매수 빈 응답) — 왜곡된 목표 산출 방지 위해 리밸런싱 건너뜀(다음 주기 재시도)")
-            put("flow_norm") { flow[it] }
-        }
         if (weighted("residual_momentum")) {
             val rm = guarded("잔차 모멘텀") { residualMomentum(codes, asOf, p.residRegWindow, p.residWindow, p.residSkip) }
             if (rm.isEmpty()) throw IllegalStateException("잔차 모멘텀 팩터 데이터 전량 조회 실패(종가/KOSPI200 지수 빈 응답) — 왜곡된 목표 산출 방지 위해 리밸런싱 건너뜀(다음 주기 재시도)")
@@ -161,28 +154,6 @@ class UniverseScores(
     } catch (e: Exception) {
         log.warn("{} 팩터 조회 실패 — 중립 처리: {}", label, e.message)
         emptyMap()
-    }
-
-    /** 외국인+기관 누적 순매수 ÷ 시총(mcap) 또는 구간 거래대금(value). 순매수가 비면 분모 조회도 하지 않는다. */
-    fun flowNorm(codes: List<String>, asOf: LocalDate, window: Int = 90, denom: String = "mcap"): Map<String, Double> {
-        if (codes.isEmpty()) return emptyMap()
-        val start = MetricsCommon.approxStart(asOf, window)
-        val net = snapshots.netPurchases(start, asOf, mkts).associate { it.symbol to it.netBuyValue }
-        if (net.isEmpty()) return emptyMap()
-        val den: Map<String, Double?> = if (denom == "value") {
-            snapshots.priceChange(start, asOf, mkts).associate { it.symbol to it.tradingValue?.toDouble() }
-        } else {
-            snapshots.marketCap(asOf, mkts).associate { it.symbol to it.marketCap?.toDouble() }
-        }
-        val out = linkedMapOf<String, Double>()
-        for (c in codes.map { it.trim().padStart(6, '0') }) {
-            val nv = net[c] ?: continue
-            if (nv.isNaN()) continue
-            val dv = den[c] ?: continue
-            if (dv.isNaN() || dv <= 0) continue
-            out[c] = nv / dv
-        }
-        return out
     }
 
     /** 종가·KOSPI200(1028) 지수로 잔차 모멘텀. 지수 조회 실패는 전파, 종목별 실패는 그 종목만 제외. */

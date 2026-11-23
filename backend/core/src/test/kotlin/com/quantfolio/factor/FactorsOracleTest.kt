@@ -27,12 +27,15 @@ class FactorsOracleTest {
         val c = oracle.get("cases").get(i)
         DynamicTest.dynamicTest("${c.get("weights").asString()} ${c.get("neutralize").asString()}") {
             val weights = if (c.get("weights").asString() == "all") {
-                mapOf("momentum" to 0.2, "value" to 0.1, "lowvol" to 0.1, "quality" to 0.15, "growth" to 0.1, "flow" to 0.1, "residual_momentum" to 0.15, "pead" to 0.1)
+                mapOf("momentum" to 0.2, "value" to 0.1, "lowvol" to 0.1, "quality" to 0.15, "growth" to 0.1, "residual_momentum" to 0.15, "pead" to 0.1)
             } else {
                 null
             }
             val out = FactorScores.compute(frame, weights, c.get("neutralize").asString())
-            c.get("out").properties().forEach { (col, values) ->
+            // 정답지(원본)의 score_flow 열과, flow 가중치(0.1)를 포함한 "all" 케이스의 종합 score 는 flow 팩터 삭제로 달라진다.
+            // 2단계: flow 팩터 삭제(migration-notes) — 나머지 열은 그대로 엄격하게 대조한다.
+            val removed = if (c.get("weights").asString() == "all") setOf("score_flow", "score") else setOf("score_flow")
+            c.get("out").properties().filter { (col, _) -> col !in removed }.forEach { (col, values) ->
                 Oracle.assertClose(Oracle.doubles(values), out.getValue(col), 1e-9, col)
             }
         }

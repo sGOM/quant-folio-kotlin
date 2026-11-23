@@ -10,7 +10,7 @@ import java.time.LocalDate
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** 리밸런싱 점수 조립부: 전량 실패 가드, flow_norm 분모 규칙, 모멘텀 결측 종목 제외. */
+/** 리밸런싱 점수 조립부: 전량 실패 가드, 모멘텀 결측 종목 제외. */
 class UniverseScoresTest {
     private val asOf = LocalDate.of(2026, 10, 16)
 
@@ -40,23 +40,6 @@ class UniverseScoresTest {
     fun momentumAllEmptyAborts() {
         val e = assertThrows<IllegalStateException> { scores(Src(emptyList())).compute(listOf("5930"), asOf) }
         assertTrue(e.message!!.startsWith("모멘텀 팩터 데이터 전량 조회 실패"))
-    }
-
-    @Test
-    fun weightedFlowWithNoNetPurchasesAborts() {
-        val src = Src(listOf(StockPeriod("005930", changePct = 1.0)))
-        val w = mapOf("momentum" to 0.5, "value" to 0.0, "lowvol" to 0.0, "flow" to 0.5)
-        assertThrows<IllegalStateException> { scores(src).compute(listOf("005930"), asOf, UniverseScoreParams(factorWeights = w)) }
-    }
-
-    @Test
-    fun flowNormSkipsMissingAndNonPositiveDenominators() {
-        val src = Src(
-            emptyList(),
-            net = listOf(StockPeriod("000010", netBuyValue = 50.0), StockPeriod("000020", netBuyValue = 5.0), StockPeriod("000030", netBuyValue = 1.0)),
-            caps = listOf(StockDaily("000010", marketCap = 1000), StockDaily("000020", marketCap = 0)),
-        )
-        assertEquals(mapOf("000010" to 0.05), scores(src).flowNorm(listOf("10", "20", "30", "40"), asOf))
     }
 
     @Test

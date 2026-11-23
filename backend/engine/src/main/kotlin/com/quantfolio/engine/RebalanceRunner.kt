@@ -276,7 +276,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             @Suppress("UNCHECKED_CAST")
             val fw = (selection["factor_weights"] as? Map<String, Any?>)?.mapValues { Cfg.num(it.value) }
             val w = fw?.takeIf { it.isNotEmpty() } ?: FactorScores.DEFAULT_WEIGHTS
-            for (k in listOf("flow", "pead")) {
+            for (k in listOf("pead")) {
                 if ((w[k] ?: 0.0) > 0) throw MarketDataNotLoaded("unsupported_in_phase1", "$k 팩터(공식 경로에 입력 없음) — 가중치를 0 으로 두세요")
             }
             scores = ctx.market.scores.compute(universe, asOf, scoreParams(fw))
@@ -305,7 +305,6 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     private fun scoreParams(factorWeights: Map<String, Double>?) = UniverseScoreParams(
         factorWeights, Cfg.get(selection, "neutralize", "none").toString(), Cfg.get(cfg, "financial_period", "annual").toString(),
-        Cfg.int(Cfg.get(selection, "flow_window", 90)), Cfg.get(selection, "flow_denom", "mcap").toString(),
         Cfg.int(Cfg.get(selection, "resid_mom_reg_window", 36)), Cfg.int(Cfg.get(selection, "resid_mom_window", 11)),
         Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)), requireCoverage = true,
     )

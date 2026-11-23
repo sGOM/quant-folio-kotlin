@@ -225,14 +225,13 @@ class BacktestRunner(
         return pool.union to pool.members
     }
 
-    /** 1단계 공식 경로에 입력이 없는 팩터(flow: 투자자별 순매수, pead: 공시 달력)는 가중치를 주면 즉시 거절한다. */
+    /** 1단계 공식 경로에 입력이 없는 팩터(pead: 공시 달력)는 가중치를 주면 즉시 거절한다. */
     private fun rejectUnsupportedFactors(selection: Map<String, Any?>) {
         if (Cfg.get(selection, "method", "momentum") != "score") return
         val w = factorWeights(selection)
-        for (k in listOf("flow", "pead")) {
+        for (k in listOf("pead")) {
             if ((w[k] ?: 0.0) > 0) {
-                val input = if (k == "flow") "투자자별 순매수" else "공시 달력"
-                throw BacktestInputError("$k 팩터는 1단계(공식 경로)에서 지원하지 않습니다: 입력 데이터($input)를 공식 출처에서 구할 수 없습니다. 가중치를 0 으로 두세요.")
+                throw BacktestInputError("$k 팩터는 1단계(공식 경로)에서 지원하지 않습니다: 입력 데이터(공시 달력)를 공식 출처에서 구할 수 없습니다. 가중치를 0 으로 두세요.")
             }
         }
     }

@@ -101,19 +101,19 @@ object StrategySchemas {
     )
 
     // ── 리밸런싱 ──
-    private val FACTOR_KEYS = listOf("momentum", "value", "lowvol", "quality", "growth", "flow", "residual_momentum", "pead")
+    private val FACTOR_KEYS = listOf("momentum", "value", "lowvol", "quality", "growth", "residual_momentum", "pead")
 
     private val FACTOR_WEIGHTS = Model(
         "FactorWeights",
         listOf(
             F("momentum", FloatT, 0.4, ge = 0, le = 1), F("value", FloatT, 0.3, ge = 0, le = 1), F("lowvol", FloatT, 0.3, ge = 0, le = 1),
-            F("quality", FloatT, 0.0, ge = 0, le = 1), F("growth", FloatT, 0.0, ge = 0, le = 1), F("flow", FloatT, 0.0, ge = 0, le = 1),
+            F("quality", FloatT, 0.0, ge = 0, le = 1), F("growth", FloatT, 0.0, ge = 0, le = 1),
             F("residual_momentum", FloatT, 0.0, ge = 0, le = 1), F("pead", FloatT, 0.0, ge = 0, le = 1),
         ),
         listOf { m ->
             val total = FACTOR_KEYS.sumOf { (m[it] as Number).toDouble() }
             if (abs(total - 1.0) > 1e-6) {
-                throw ValueError("factor_weights 합은 1.0 이어야 합니다(momentum+value+lowvol+quality+growth+flow+residual_momentum+pead=${pyFixed(total, 4)}).")
+                throw ValueError("factor_weights 합은 1.0 이어야 합니다(momentum+value+lowvol+quality+growth+residual_momentum+pead=${pyFixed(total, 4)}).")
             }
         },
     )
@@ -155,8 +155,6 @@ object StrategySchemas {
             F("lookback", IntT, 120, ge = 2, le = 480),
             F("top_n", IntT, 5, ge = 1, le = 50),
             F("factor_weights", ModelT(FACTOR_WEIGHTS), DefaultModel),
-            F("flow_window", IntT, 90, ge = 20, le = 250),
-            F("flow_denom", Lit(listOf("mcap", "value")), "mcap"),
             F("resid_mom_reg_window", IntT, 36, ge = 12, le = 60),
             F("resid_mom_window", IntT, 11, ge = 3, le = 24),
             F("resid_mom_skip", IntT, 1, ge = 0, le = 3),

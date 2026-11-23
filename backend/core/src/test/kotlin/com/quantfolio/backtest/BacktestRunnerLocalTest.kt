@@ -179,9 +179,9 @@ class BacktestRunnerLocalTest(
     }
 
     @Test
-    fun `flow weight rejected in phase1`() {
-        val e = assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "flow" to 0.5)), start, end) }
-        assertTrue("flow" in e.message!!, e.message)
+    fun `pead weight rejected in phase1`() {
+        val e = assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "pead" to 0.5)), start, end) }
+        assertTrue("pead" in e.message!!, e.message)
         assertNoRemoteCalls()
     }
 
@@ -236,8 +236,8 @@ class BacktestRunnerLocalTest(
 
     @Test
     fun `string factor weights are rejected not silently skipped`() {
-        val e = assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "flow" to "0.5")), start, end) }
-        assertTrue("flow" in e.message!!, e.message)
+        val e = assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "pead" to "0.5")), start, end) }
+        assertTrue("pead" in e.message!!, e.message)
         assertThrows<BacktestInputError> { runner.run(config(mapOf("momentum" to 0.5, "quality" to "0.5")), start, end) }
         assertNoRemoteCalls()
     }

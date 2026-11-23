@@ -223,4 +223,26 @@ class BaselineMigrationTest {
         assertEquals("120", field("k200", "lookback"))
         assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
     }
+
+    /** V12 는 flow 팩터 키(가중치·창·분모)만 지우고 나머지 selection 키는 그대로 둔다. */
+    @Test
+    fun v12StripsFlowKeys() {
+        val url = freshDb("bl_v12")
+        flyway(url, target = "11").migrate()
+        val flowCfg = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"flow_window":90,"flow_denom":"mcap","factor_weights":{"momentum":0.5,"value":0.5,"flow":0.0}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'flowy', '$flowCfg'::jsonb, 'draft' from users""",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'plain', '{"type":"sma_crossover","symbol":"005930"}'::jsonb, 'draft' from users""",
+        )
+
+        flyway(url).migrate()
+
+        val expected = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"factor_weights":{"momentum":0.5,"value":0.5}}}"""
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'flowy' and config = '$expected'::jsonb") { it.getInt(1) }.single())
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
+    }
 }

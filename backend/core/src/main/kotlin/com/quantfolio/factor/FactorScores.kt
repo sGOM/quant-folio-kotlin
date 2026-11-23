@@ -24,7 +24,7 @@ class FactorFrame(val codes: List<String>, private val numeric: Map<String, Doub
 object FactorScores {
     val DEFAULT_WEIGHTS = mapOf(
         "momentum" to 0.4, "value" to 0.3, "lowvol" to 0.3, "quality" to 0.0,
-        "growth" to 0.0, "flow" to 0.0, "residual_momentum" to 0.0, "pead" to 0.0,
+        "growth" to 0.0, "residual_momentum" to 0.0, "pead" to 0.0,
     )
 
     /**
@@ -38,9 +38,9 @@ object FactorScores {
     val QUALITY_COLS = QUALITY_INPUTS + GROWTH_INPUTS
 
     /** 백테스트가 fundamentals 에서 옮겨 담는 전 컬럼(원본 dict 순서). 팩터를 추가하면 여기와 compute 를 함께 고친다. */
-    val FUNDAMENTAL_COLS = listOf("PER", "PBR", "DIV") + QUALITY_COLS + listOf("market_cap", "flow_norm", "resid_mom", "pead_sue")
+    val FUNDAMENTAL_COLS = listOf("PER", "PBR", "DIV") + QUALITY_COLS + listOf("market_cap", "resid_mom", "pead_sue")
 
-    private val CATEGORIES = listOf("momentum", "value", "lowvol", "quality", "growth", "flow", "residual_momentum", "pead")
+    private val CATEGORIES = listOf("momentum", "value", "lowvol", "quality", "growth", "residual_momentum", "pead")
 
     /** 1%·99% 분위로 자른 뒤 모집단 표준편차(ddof=0) z-score. 유효값 3개 미만이면 전부 NaN, 표준편차 0 이면 전부 0. */
     fun winsorizeZ(s: DoubleArray, invert: Boolean = false): DoubleArray {
@@ -78,7 +78,7 @@ object FactorScores {
 
         val scores = linkedMapOf(
             "score_momentum" to momentum, "score_value" to value, "score_lowvol" to lowvol, "score_quality" to quality,
-            "score_growth" to growth, "score_flow" to zc("flow_norm"), "score_residual_momentum" to zc("resid_mom"), "score_pead" to zc("pead_sue"),
+            "score_growth" to growth, "score_residual_momentum" to zc("resid_mom"), "score_pead" to zc("pead_sue"),
         )
         if (neutralize == "size" || neutralize == "size_sector") neutralizeSize(frame, scores)
         if (neutralize == "sector" || neutralize == "size_sector") neutralizeSector(frame, scores)

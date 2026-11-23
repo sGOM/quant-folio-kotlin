@@ -502,10 +502,10 @@ class RunnersTest(
     }
 
     @Test
-    fun `flow and pead weights are rejected on live with critical and no orders`() {
+    fun `pead weight is rejected on live with critical and no orders`() {
         val codes = (1..2).map { sym() }
         codes.forEach { seed(it, 30) { i -> 1000.0 + i } }
-        val (_, sid) = strategy(rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0, "flow" to 0.5)))))
+        val (_, sid) = strategy(rebalCfg(codes, mapOf("selection" to mapOf("method" to "score", "top_n" to 2, "factor_weights" to mapOf("momentum" to 1.0, "pead" to 0.5)))))
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isEmpty())
         assertEquals(1, alerts.findAll().count { it.code == "market_data_not_loaded" && it.strategyId == sid && it.severity == AlertSeverity.critical })
