@@ -5,14 +5,15 @@ import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.LocalSectorMap
 import com.quantfolio.market.official.MarketDataNotLoaded
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.quant.Series
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 
@@ -26,11 +27,17 @@ interface FactorInputs {
 }
 
 @Component
-class LiveFactorInputs(private val dart: DartFinancials, private val krx: KrxIndexService) : FactorInputs {
+class LiveFactorInputs(
+    private val dart: DartFinancials,
+    @Qualifier("local") private val snapshots: SnapshotSource,
+    private val sectorMaps: LocalSectorMap,
+) : FactorInputs {
     override fun qualityMetrics(codes: List<String>, asOf: LocalDate, useTtm: Boolean) = dart.metricsBySymbol(codes, asOf, useTtm)
     override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int) = dart.peadSueBySymbol(codes, asOf, lookbackQ)
-    override fun marketCaps(asOf: LocalDate) = krx.marketCaps(asOf)
-    override fun sectorMap(asOf: LocalDate) = krx.sectorMap(asOf)
+    /** 로컬 시총(엔진 `LocalMarketData` 와 같다). 휴장일이면 빈 맵, 미적재면 [MarketDataNotLoaded]. */
+    override fun marketCaps(asOf: LocalDate): Map<String, Long> =
+        snapshots.marketCap(asOf, listOf("KOSPI", "KOSDAQ")).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
+    override fun sectorMap(asOf: LocalDate) = sectorMaps.sectorMap(asOf)
     override fun dartEnabled() = dart.enabled()
 }
 
@@ -55,7 +62,7 @@ data class UniverseScoreParams(
  */
 @Component
 class UniverseScores(
-    private val snapshots: SnapshotSource,
+    @Qualifier("local") private val snapshots: SnapshotSource,
     private val tech: TechIndicatorLoader,
     private val inputs: FactorInputs,
     private val prices: PriceHistory,

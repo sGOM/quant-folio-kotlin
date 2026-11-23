@@ -67,6 +67,16 @@ class IndexOhlcvStore(private val jdbc: NamedParameterJdbcTemplate, private val 
         min to rs.getObject(2, LocalDate::class.java)
     }.firstOrNull()
 
+    /** [prefix] 로 시작하는 지수 키와 마지막 행의 이름, 키 오름차순. */
+    fun keys(prefix: String): List<Pair<String, String?>> = jdbc.query(
+        """
+        SELECT DISTINCT ON (index_code) index_code, index_name FROM index_ohlcv
+         WHERE starts_with(index_code, :prefix)
+         ORDER BY index_code, trade_date DESC
+        """,
+        mapOf("prefix" to prefix),
+    ) { rs, _ -> rs.getString(1) to rs.getString(2) }.sortedBy { it.first }
+
     /** 지수 일봉과 확보 구간을 함께 지운다(재적재용). */
     fun delete(code: String) {
         tx.executeWithoutResult {

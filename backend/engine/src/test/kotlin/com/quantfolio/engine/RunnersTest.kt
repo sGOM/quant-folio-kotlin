@@ -25,7 +25,7 @@ import com.quantfolio.domain.trading.RiskLimitRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.store.Bar
 import com.quantfolio.domain.alert.AlertSeverity
 import com.quantfolio.market.official.MarketDataNotLoaded
@@ -76,7 +76,6 @@ class RunnersTest(
     @MockitoBean lateinit var brokers: BrokerCredentials
     @MockitoBean lateinit var calendar: MarketCalendar
     @MockitoBean @Qualifier("local") lateinit var snapshots: SnapshotSource // 엔진이 쓰는 로컬 소스
-    @MockitoBean lateinit var remoteSnapshots: com.quantfolio.market.krx.KrxSnapshots // 원격 — 라이브 틱이 부르면 안 된다
     @MockitoBean lateinit var coverage: com.quantfolio.market.ohlcv.LocalOhlcvCoverage
     @MockitoBean lateinit var krx: com.quantfolio.market.krx.KrxIndexService
     @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
@@ -496,7 +495,6 @@ class RunnersTest(
         )
         rebal(sid).tickOnce()
         assertTrue(ordersOf(sid).isNotEmpty(), alerts.findAll().filter { it.strategyId == sid }.map { it.message }.toString())
-        org.mockito.Mockito.verifyNoInteractions(remoteSnapshots)
         org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).marketCaps(anyDate())
         org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
     }

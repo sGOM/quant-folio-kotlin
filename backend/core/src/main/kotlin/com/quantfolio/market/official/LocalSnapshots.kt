@@ -1,6 +1,5 @@
 package com.quantfolio.market.official
 
-import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.IndexOhlcvStore
 import com.quantfolio.market.store.StockDaily
@@ -12,7 +11,7 @@ import java.time.LocalDate
 
 /**
  * 로컬 DB 만 읽는 [SnapshotSource]. 원격(KRX MDC)으로 절대 내려가지 않고, 비면 [MarketDataNotLoaded].
- * 거래일이 아닌 날(휴장)은 KrxSnapshots 처럼 빈 결과·null.
+ * 거래일이 아닌 날(휴장)은 빈 결과·null.
  */
 @Component
 @Qualifier("local")
@@ -79,9 +78,6 @@ class LocalSnapshots(
         return (product - 1) * 100
     }
 
-    override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>): List<StockPeriod> =
-        throw MarketDataNotLoaded("unsupported_in_phase1", "net_purchases")
-
     override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? {
         if (day !in days.expected(day, day)) return null
         return requireDay(day, market).map {
@@ -90,19 +86,19 @@ class LocalSnapshots(
         }
     }
 
+    /** 결측 판정은 [max(start, 키의 첫 행), end] — 첫 행 이전은 "그때 없던 지수"다. 키에 행이 하나도 없으면 전 구간 미적재. */
     override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? {
+        val first = indexes.span(ticker)?.first
         val bars = indexes.read(ticker, start, end)
-        val expected = days.expected(start, end)
+        val expected = days.expected(maxOf(start, first ?: start), end)
         val missing = expected.toSet() - bars.map { it.date }.toSet()
         if (missing.isNotEmpty()) throw MarketDataNotLoaded("index_ohlcv", ticker, contiguousRanges(missing, expected))
         return bars.ifEmpty { null }
     }
 
-    override fun indexTickers(day: LocalDate, market: String): List<String> =
-        throw MarketDataNotLoaded("unsupported_in_phase1", "index_tickers|$market")
-
-    override fun indexName(day: LocalDate, ticker: String): String =
-        throw MarketDataNotLoaded("unsupported_in_phase1", "index_name|$ticker")
+    /** `index_ohlcv` 의 `<시장>:` 접두어 키(업종지수, `OfficialIngest.indexKey`). 기준지수 1001·2001(·1028)은 접두어가 없어 빠진다. */
+    override fun sectorIndexes(market: String): List<Pair<String, String>> =
+        indexes.keys("$market:").map { (key, name) -> key to (name ?: key.removePrefix("$market:")) }
 
     /** 거래일 하루·한 시장의 행. 없으면 미적재. */
     private fun requireDay(day: LocalDate, market: String): List<StockDaily> =

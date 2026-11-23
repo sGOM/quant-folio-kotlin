@@ -2,12 +2,8 @@ package com.quantfolio.metrics
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.krx.KrxMdc
-import com.quantfolio.market.krx.KrxSession
-import com.quantfolio.market.krx.KrxStockApi
-import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.MarketDataNotLoaded
-import com.quantfolio.market.source.Cooldowns
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.IndexBar
@@ -15,7 +11,6 @@ import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.test.FakeExternalHttp
-import com.quantfolio.test.FakeKrxTransport
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
@@ -32,8 +27,6 @@ import kotlin.test.assertTrue
 /** 지표 서비스 조립부: 필터·이름·라벨, 패닉 S9 캐시, 섹터 전량 실패. 계산 자체는 MetricsPureOracleTest 가 맡는다. */
 class MetricsServicesTest {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
-    private val transport = FakeKrxTransport()
-    private val cooldowns = Cooldowns(clock)
     // 거래소 응답이 없으므로 달력은 주말만 휴장으로 본다.
     private val common = MetricsCommon(
         MarketCalendar({ true }, { emptyMap() }, clock),
@@ -47,17 +40,15 @@ class MetricsServicesTest {
         var index: List<IndexBar>? = null
         var indexError: Exception? = null
         var snapshot: List<StockDaily>? = null
-        var tickers: () -> List<String> = { emptyList() }
+        var sectors = mapOf<String, List<Pair<String, String>>>()
         var periodError: Exception? = null
         var periodErrorMarkets: Set<String>? = null // null 이면 전 시장
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = emptyList<StockDaily>()
         override fun marketCap(asOf: LocalDate, markets: List<String>) = caps
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periodError?.takeIf { periodErrorMarkets?.let { m -> markets.any { it in m } } ?: true }?.let { throw it } ?: periods
-        override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = emptyList<StockPeriod>()
         override fun marketOhlcvSnapshot(day: LocalDate, market: String) = snapshot
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = indexError?.let { throw it } ?: index
-        override fun indexTickers(day: LocalDate, market: String) = tickers()
-        override fun indexName(day: LocalDate, ticker: String) = "업종$ticker"
+        override fun sectorIndexes(market: String) = sectors[market].orEmpty()
     }
 
     private fun bars(n: Int) = (0 until n).map {
@@ -150,10 +141,25 @@ class MetricsServicesTest {
         assertEquals(PanicService.CAVEATS, out.caveats)
     }
 
+    /** 업종지수 하나라도 첫 행 이후 미적재면 빈 목록·일부 목록이 아니라 화면 전체 409(종목 화면과 같은 동작). */
     @Test
-    fun sectorsRaiseWhenEveryTickerListFails() {
-        val src = FakeSource().apply { tickers = { throw SourceAuthError("krx", "차단") } }
-        assertThrows<SourceAuthError> { SectorMetricsService(src).compute("ALL", asOf) }
+    fun `sector metrics propagate MarketDataNotLoaded instead of returning an empty list`() {
+        val ref = (0 until 130).map { IndexBar(asOf.minusDays(130L - it), close = 100.0 + it) }
+        val src = object : FakeSource() {
+            override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? =
+                if (ticker == "KOSPI:전기전자") throw MarketDataNotLoaded("index_ohlcv", ticker) else ref
+        }.apply { sectors = mapOf("KOSPI" to listOf("KOSPI:음식료" to "음식료", "KOSPI:전기전자" to "전기전자")) }
+        assertThrows<MarketDataNotLoaded> { SectorMetricsService(src).compute("KOSPI", asOf) }
+    }
+
+    @Test
+    fun sectorsListLocalKeysWithTheirNames() {
+        val ref = (0 until 130).map { IndexBar(asOf.minusDays(130L - it), close = 100.0 + it) }
+        val src = FakeSource().apply {
+            index = ref
+            sectors = mapOf("KOSPI" to listOf("KOSPI:음식료" to "음식료"), "KOSDAQ" to listOf("KOSDAQ:제약" to "제약"))
+        }
+        assertEquals(listOf("음식료" to "KOSPI", "제약" to "KOSDAQ"), SectorMetricsService(src).compute("ALL", asOf).items.map { it.name to it.market })
     }
 
     /** 기준지수(1001·2001) 조회 실패는 "rs 결측"이 아니라 실패 — 원본은 감싸지 않아 503, 캐시 안 됨. 결측으로 굳혀 6시간 캐시하면 안 된다. */

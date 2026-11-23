@@ -1,6 +1,6 @@
 package com.quantfolio.metrics
 
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockPeriod
@@ -14,15 +14,13 @@ import kotlin.test.assertTrue
 class UniverseScoresTest {
     private val asOf = LocalDate.of(2026, 10, 16)
 
-    private class Src(var pc: List<StockPeriod>, var net: List<StockPeriod> = emptyList(), var caps: List<StockDaily> = emptyList()) : SnapshotSource {
+    private class Src(var pc: List<StockPeriod>, var caps: List<StockDaily> = emptyList()) : SnapshotSource {
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = emptyList<StockDaily>()
         override fun marketCap(asOf: LocalDate, markets: List<String>) = caps
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = pc
-        override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = net
         override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? = null
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = null
-        override fun indexTickers(day: LocalDate, market: String) = emptyList<String>()
-        override fun indexName(day: LocalDate, ticker: String) = ""
+        override fun sectorIndexes(market: String) = emptyList<Pair<String, String>>()
     }
 
     private val noInputs = object : FactorInputs {

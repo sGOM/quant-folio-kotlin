@@ -3,15 +3,14 @@ package com.quantfolio.metrics
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.market.kofia.KofiaClient
-import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.MarketDataNotLoaded
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.PriceHistory
-import com.quantfolio.market.source.DataSourceError
-import com.quantfolio.market.source.DataSourceErrors
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.market.symbols.SymbolCatalog
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 
@@ -37,7 +36,7 @@ class TechIndicatorLoader(private val prices: PriceHistory) {
  */
 @Component
 class StockMetricsService(
-    private val snapshots: SnapshotSource,
+    @Qualifier("local") private val snapshots: SnapshotSource,
     private val common: MetricsCommon,
     private val tech: TechIndicatorLoader,
     private val catalog: SymbolCatalog,
@@ -116,9 +115,12 @@ class StockMetricsService(
     }
 }
 
-/** 업종지수 지표 화면(원본 `metrics/sectors.compute_sectors`). 기준시장 지수(1001·2001)는 목록에서 뺀다. */
+/**
+ * 업종지수 지표 화면(원본 `metrics/sectors.compute_sectors`). 지수 목록·이름은 로컬 `index_ohlcv` 키([SnapshotSource.sectorIndexes]),
+ * 기준시장 지수(1001·2001)는 목록에 없다. 업종지수 하나라도 미적재면 화면 전체가 [MarketDataNotLoaded](409).
+ */
 @Component
-class SectorMetricsService(private val snapshots: SnapshotSource) {
+class SectorMetricsService(@Qualifier("local") private val snapshots: SnapshotSource) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     fun compute(market: String, asOf: LocalDate): SectorsOut {
@@ -133,32 +135,19 @@ class SectorMetricsService(private val snapshots: SnapshotSource) {
             }
         }
         val items = mutableListOf<SectorMetric>()
-        val tickerErrors = mutableListOf<DataSourceError>()
         for (mkt in MetricsCommon.mkts(market)) {
-            val tickers = try {
-                snapshots.indexTickers(asOf, mkt)
-            } catch (e: DataSourceError) {
-                log.warn("업종지수 목록 조회 실패로 시장 건너뜀 ({}): {}", mkt, e.message)
-                tickerErrors += e
-                continue
-            }
-            for (ticker in tickers) {
-                if (ticker == REF_KOSPI || ticker == REF_KOSDAQ) continue
+            for ((key, name) in snapshots.sectorIndexes(mkt)) {
                 try {
-                    val bars = try {
-                        snapshots.indexOhlcv(histStart, asOf, ticker)
-                    } catch (e: DataSourceError) {
-                        log.warn("업종지수 건너뜀 ({}): {}", ticker, e.message)
-                        null
-                    } ?: continue
+                    val bars = snapshots.indexOhlcv(histStart, asOf, key) ?: continue
                     if (bars.size < 21) continue
-                    SectorMetric.of(snapshots.indexName(asOf, ticker), mkt, bars, refReturns[mkt])?.let { items += it }
+                    SectorMetric.of(name, mkt, bars, refReturns[mkt])?.let { items += it }
+                } catch (e: MarketDataNotLoaded) {
+                    throw e // 미적재는 그 지수만 빼지 않고 화면 전체 409
                 } catch (e: Exception) {
-                    log.warn("섹터 계산 오류 (ticker={} {}): {}", ticker, mkt, e.message)
+                    log.warn("섹터 계산 오류 (index={} {}): {}", key, mkt, e.message)
                 }
             }
         }
-        if (tickerErrors.isNotEmpty() && items.isEmpty()) throw DataSourceErrors.representative(tickerErrors)
         return SectorsOut(asOf, items)
     }
 

@@ -192,3 +192,10 @@ KRX Open API(`data-dbg.krx.co.kr/svc/apis`, 헤더 `AUTH_KEY`)를 2026-11-23 서
 
 - 일일 적재가 KOSPI·KOSDAQ 지수 응답의 모든 행을 `index_ohlcv` 에 저장한다(거래량·거래대금 포함). 키는 기존 3개가 `1001`·`1028`·`2001`, 나머지는 `KOSPI:<이름>`·`KOSDAQ:<이름>`(`OfficialIngest.indexKey`). KRX 계열은 저장하지 않는다. `index_code` 는 V13 에서 varchar(64).
 - 소급은 `quantfolio.backfill.indexes-only=true`(+ from/to) — 거래일로 확인된 날만 하루 2호출, 원장·주식·수정주가는 건드리지 않는다. 적재는 `index_ohlcv_coverage` 를 쓰지 않는다(기존 3개와 동일).
+
+## 화면의 로컬 스냅샷 전환 (공식 경로 2단계, Task 5)
+
+- 종목 지표·턴어라운드 스크리너·섹터 화면의 `SnapshotSource` 가 로컬(`LocalSnapshots`)뿐이다. 원격 `KrxSnapshots`·`KrxStockApi`(pykrx `stock.*` 이식)를 지웠다. 미적재는 원본의 MDC 조회 대신 `MarketDataNotLoaded`(409)다.
+- 섹터 화면 지수 목록: 원본은 MDC 업종지수 목록(그 시장 전 티커에서 기준지수 1001·2001 만 제외, 1028 등 대표지수 포함)·MDC 이름. 지금은 `index_ohlcv` 의 `KOSPI:`·`KOSDAQ:` 접두어 키(Task 4 적재)와 저장된 원문 이름이다. 접두어 없는 `1001`·`1028`·`2001` 은 업종 행이 아니다(원본은 KOSPI200 행이 있었다). 행 순서는 키(=이름) 오름차순(원본은 지수코드 순).
+- 섹터 결측 정책: 지수 키의 첫 행 이전은 결측이 아니다(`LocalSnapshots.indexOhlcv` 는 `[max(start, 첫 행), end]` 만 본다 — 기준지수·전략 경로 지수 조회도 같은 규칙). 첫 행 이후 빠진 거래일은 미적재이고 섹터 화면 전체가 409 다. 원본은 지수별 실패를 로그만 남기고 그 지수를 뺐다.
+- `LiveFactorInputs.marketCaps`(스크리너·UI 점수의 사이즈 중립화): 원본은 MDC 시총을 asOf 부터 최대 7일 뒤로 물러가며 찾았다. 지금은 asOf 당일 로컬 시총(엔진과 같다) — 휴장일이면 빈 맵(중립화 생략), 미적재면 `MarketDataNotLoaded` 로 전파(원본은 실패 시 중립화 생략).

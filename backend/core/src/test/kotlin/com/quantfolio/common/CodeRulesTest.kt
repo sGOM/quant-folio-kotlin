@@ -88,7 +88,7 @@ class CodeRulesTest {
     }
 
     /**
-     * 전략 경로의 SnapshotSource 는 `@Qualifier("local")` 이어야 한다. 한정자 없는 주입은 원격 `@Primary KrxSnapshots` 를 조용히 받는다.
+     * 전략 경로의 SnapshotSource 는 `@Qualifier("local")` 이어야 한다(구현은 로컬뿐이지만 원격 구현이 다시 생겨도 조용히 들어오지 않게).
      * 한정자는 같은 줄 또는 바로 윗줄. 와일드카드 import 는 KRX·Naver 클래스를 몰래 끌어오므로 막는다.
      */
     @Test
@@ -180,13 +180,13 @@ class CodeRulesTest {
                 listOf("class A(private val snapshots: SnapshotSource)"),
                 listOf("class A(@Qualifier(\"local\") private val snapshots: SnapshotSource)"),
                 listOf("    @Qualifier(\"local\")", "    private val snapshots: SnapshotSource,"),
-                listOf("import com.quantfolio.market.krx.SnapshotSource"),
+                listOf("import com.quantfolio.market.official.SnapshotSource"),
                 listOf("val x = UniverseScores(local, y)"),
             ).map { unqualifiedSnapshotSources(lines(*it.toTypedArray())).size },
         )
         assertEquals(
             listOf(true, true, false, false),
-            listOf("import com.quantfolio.market.krx.*", "import com.quantfolio.market.ohlcv.*", "import com.quantfolio.market.krx.SnapshotSource", "import com.quantfolio.market.official.*")
+            listOf("import com.quantfolio.market.krx.*", "import com.quantfolio.market.ohlcv.*", "import com.quantfolio.market.official.SnapshotSource", "import com.quantfolio.market.official.*")
                 .map { WILDCARD_REMOTE_IMPORT.containsMatchIn(it) },
         )
         // catch-all 이 MDNL 을 삼키는가(위반 건수)
@@ -212,7 +212,6 @@ class CodeRulesTest {
         )
         private val SNAPSHOT_DECL = Regex("""\w+\s*:\s*SnapshotSource\b""")
         private val LOCAL_QUALIFIER = Regex("""@Qualifier\("local"\)""")
-        // KrxSnapshots 는 market.krx 패키지.
         private val WILDCARD_REMOTE_IMPORT = Regex("""^\s*import\s+com\.quantfolio\.market\.(krx|ohlcv)\.\*""")
         private val CATCH_ALL = Regex("""catch\s*\(\s*\w+\s*:\s*(Exception|Throwable|RuntimeException)\s*\)|\brunCatching\b""")
         private val MDNL_CATCH = Regex("""catch\s*\(\s*\w+\s*:\s*MarketDataNotLoaded\s*\)""")

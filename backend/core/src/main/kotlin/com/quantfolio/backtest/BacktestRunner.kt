@@ -6,10 +6,10 @@ import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.official.LocalSectorMap
-import com.quantfolio.market.krx.SnapshotSource
 import com.quantfolio.market.official.DividendFeed
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.Bar

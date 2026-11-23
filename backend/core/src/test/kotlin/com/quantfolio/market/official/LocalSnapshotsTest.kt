@@ -26,6 +26,7 @@ import org.springframework.context.annotation.Import
 import java.time.LocalDate
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 @SpringBootTest(classes = [TestApp::class])
 @Import(ContainersConfig::class)
@@ -56,7 +57,7 @@ class LocalSnapshotsTest(
 
     @BeforeEach
     fun clean() {
-        indexes.delete("1001")
+        listOf("1001", "1028", "2001", "KOSPI:테스트업종가", "KOSPI:테스트업종나", "KOSDAQ:테스트업종다").forEach { indexes.delete(it) }
         week.forEach { daily.delete(it) }
     }
 
@@ -87,13 +88,30 @@ class LocalSnapshotsTest(
     }
 
     @Test
-    fun `range before first loaded index day is missing`() {
-        loadIndex(week[2], week[3], week[4])
-        val e = assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "1001") }
-        assertEquals(listOf(week[0] to week[1]), e.missing)
-        // 전체가 적재 이전: 빈 리스트·null 이 아니라 예외
-        assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[1], "1001") }
+    fun `index history before its first row is not missing`() {
+        ledger.trading(week.take(5))
+        indexes.write("1001", listOf(week[2], week[3], week[4]).map { IndexBar(it, close = 1.0) }, null)
+        assertEquals(listOf(week[2], week[3], week[4]), snaps.indexOhlcv(week[0], week[4], "1001")!!.map { it.date }) // 첫 행 이전은 그때 없던 지수
+        assertNull(snaps.indexOhlcv(week[0], week[1], "1001")) // 구간 전체가 첫 행 이전: 예외 아님
+        indexes.delete("1001")
+        indexes.write("1001", listOf(week[2], week[4]).map { IndexBar(it, close = 1.0) }, null)
+        assertEquals(listOf(week[3] to week[3]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "1001") }.missing)
+        // 행이 하나도 없는 키는 전 구간 미적재
+        assertEquals(listOf(week[0] to week[4]), assertThrows<MarketDataNotLoaded> { snaps.indexOhlcv(week[0], week[4], "KOSPI:없는업종") }.missing)
         assertThrows<MarketDataNotLoaded> { snaps.priceChange(week[0], week[1], listOf("KOSPI")) }
+    }
+
+    @Test
+    fun `sectorIndexes lists stored sector keys without market reference`() {
+        for (code in listOf("1001", "1028", "2001")) indexes.write(code, listOf(IndexBar(week[0], close = 1.0)), null)
+        indexes.write("KOSPI:테스트업종나", listOf(IndexBar(week[0], close = 1.0)), "테스트업종나")
+        indexes.write("KOSPI:테스트업종가", listOf(IndexBar(week[0], close = 1.0), IndexBar(week[1], close = 1.0)), "테스트업종가")
+        indexes.write("KOSDAQ:테스트업종다", listOf(IndexBar(week[0], close = 1.0)), "테스트업종다")
+        val kospi = snaps.sectorIndexes("KOSPI")
+        assertEquals(listOf("KOSPI:테스트업종가" to "테스트업종가", "KOSPI:테스트업종나" to "테스트업종나"), kospi.filter { "테스트업종" in it.first })
+        assertTrue(kospi.all { it.first.startsWith("KOSPI:") }) // 1001·1028·2001·KOSDAQ 키 없음
+        assertEquals(kospi.map { it.first }.sorted(), kospi.map { it.first })
+        assertEquals(listOf("KOSDAQ:테스트업종다" to "테스트업종다"), snaps.sectorIndexes("KOSDAQ").filter { "테스트업종" in it.first })
     }
 
     @Test
@@ -148,12 +166,5 @@ class LocalSnapshotsTest(
         assertNull(v.pbr)
         assertNull(v.div)
         assertThrows<MarketDataNotLoaded> { snaps.fundamentals(week[0], listOf("KOSDAQ")) } // 시장 적재 공백은 그대로 미적재
-    }
-
-    @Test
-    fun `unsupported methods throw not loaded`() {
-        assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.indexTickers(week[0], "KOSPI") }.kind)
-        assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.indexName(week[0], "1001") }.kind)
-        assertEquals("unsupported_in_phase1", assertThrows<MarketDataNotLoaded> { snaps.netPurchases(week[0], week[1], listOf("KOSPI")) }.kind)
     }
 }

@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter
 /**
  * 로컬이 아는 거래일 — 진실은 KRX Open API 적재 원장(`krx_open | stk_bydd_trd|yyyyMMdd|KOSPI`) 하나다.
  * 행 > 0 이면 거래일, 0행·확정이면 휴장, 기록이 없거나 미확정 0행이면 **모른다**(결측).
- * `index_ohlcv` 는 UI(원격 KrxSnapshots)·구 MDC 도 쓰는 테이블이라 달력의 근거가 될 수 없다
+ * `index_ohlcv` 는 구 MDC 캐시 행이 남아 있고 지수마다 적재 시작이 달라 달력의 근거가 될 수 없다
  * (오래된 캐시 구간이 남으면 그 앞뒤 수년이 휴장으로 보인다). 직전 거래일 계산도 여기 하나다.
  */
 @Component

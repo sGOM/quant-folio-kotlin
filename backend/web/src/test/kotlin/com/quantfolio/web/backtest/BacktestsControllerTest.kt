@@ -12,7 +12,7 @@ import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
 import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.store.Bar

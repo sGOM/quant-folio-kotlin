@@ -3,13 +3,14 @@ package com.quantfolio.metrics
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.IndexMembers
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.quant.Stats
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -86,7 +87,7 @@ private fun num(v: Any?): Double? = (v as? Number)?.toDouble()?.takeIf { it.isFi
  */
 @Component
 class ScreenerService(
-    private val snapshots: SnapshotSource,
+    @Qualifier("local") private val snapshots: SnapshotSource,
     private val inputs: FactorInputs,
     private val catalog: SymbolCatalog,
     private val common: MetricsCommon,
@@ -178,7 +179,7 @@ class ScreenerService(
 @Component
 class RecommendService(
     private val members: IndexMembers,
-    private val snapshots: SnapshotSource,
+    @Qualifier("local") private val snapshots: SnapshotSource,
     private val tech: TechIndicatorLoader,
     private val inputs: FactorInputs,
     private val catalog: SymbolCatalog,

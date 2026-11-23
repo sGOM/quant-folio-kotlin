@@ -2,11 +2,7 @@ package com.quantfolio.metrics
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.krx.KrxMdc
-import com.quantfolio.market.krx.KrxSession
-import com.quantfolio.market.krx.KrxStockApi
-import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.source.Cooldowns
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.IndexBar
@@ -14,7 +10,6 @@ import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.test.FakeExternalHttp
-import com.quantfolio.test.FakeKrxTransport
 import com.quantfolio.test.Oracle
 import org.junit.jupiter.api.Test
 import tools.jackson.databind.JsonNode
@@ -36,8 +31,6 @@ class ScreenerRecommendOracleTest {
     private val codes = items(data.get("codes")).map { it.asString() }
 
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
-    private val transport = FakeKrxTransport()
-    private val cooldowns = Cooldowns(clock)
     private val common = MetricsCommon(MarketCalendar({ true }, { emptyMap() }, clock), clock)
     private val catalog = SymbolCatalog { throw SourceAuthError("kis_master", "x") }
 
@@ -66,11 +59,9 @@ class ScreenerRecommendOracleTest {
         override fun fundamentals(asOf: LocalDate, markets: List<String>) = fund
         override fun marketCap(asOf: LocalDate, markets: List<String>) = caps
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = pcByKey.getValue(startKey.getValue(start))
-        override fun netPurchases(start: LocalDate, end: LocalDate, markets: List<String>, investors: List<String>) = emptyList<StockPeriod>()
         override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? = null
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = null
-        override fun indexTickers(day: LocalDate, market: String) = emptyList<String>()
-        override fun indexName(day: LocalDate, ticker: String) = ""
+        override fun sectorIndexes(market: String) = emptyList<Pair<String, String>>()
     }
     private val days = items(data.get("days")).map { LocalDate.parse(it.asString()) }
     private val tech = TechIndicatorLoader { code, _, _ ->
