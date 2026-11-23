@@ -126,7 +126,7 @@ class KrxOpenApi(
         private val TIMEOUT: Duration = Duration.ofSeconds(20)
         private val BAS_DD: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
 
-        // ponytail: 필드 키는 공식 문서 기준이며 Task 1 실측(KRX IP 차단 해제 후)으로 검증·교정한다. 이 한 곳만 고친다.
+        // 필드 키는 2026-11-23 실측과 일치(docs/migration-notes.md "공식 경로 실측"). 일별매매 ISU_CD 는 6자리, 기본정보 ISU_CD 는 ISIN 이라 ISU_SRT_CD 를 쓴다.
         private const val OUT_BLOCK = "OutBlock_1"
         private const val DAY = "BAS_DD"
         private const val DAILY_SYMBOL = "ISU_CD"

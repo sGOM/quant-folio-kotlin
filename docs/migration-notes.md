@@ -58,7 +58,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 | 9 | `AuthController.login` | `routes/auth.py::login` | 가입은 EmailStr 로 정규화(공백 제거·도메인 소문자)해 저장하지만 로그인은 입력 그대로 조회. | `A@Example.COM` 으로 가입하면 저장은 `A@example.com` — 같은 문자열로 로그인하면 401 |
 | 10 | `PortfolioBacktest.run`(`lastValid`) | `backtest/portfolio.py:865` | **미래참조.** 상장폐지 판정의 "마지막 유효 관측일"을 패널 전체(미래 포함)에서 잡는다. 원본 주석상 의도된 설계(거래정지 오판 방지). | ffill 한도를 넘는 결측이 d 이후 재개되면 d 에 청산하지 않고 동결 — 재개 여부를 미리 안다 |
 | 11 | `DartFinancials.metricsBySymbol` | `opendart.py` | **미래참조.** 공시 지연(`announcement_lagged_year`)만 반영하고 정정공시 접수일은 안 본다 — DART 는 최신 정정본을 준다. | 2024-07 정정된 2023 사업보고서를 2024-04 백테스트가 사용 |
-| 12 | `KrxIndexService.sectorMap` | `krx_index.py:483` | **미래참조.** asOf 이전 PIT 스냅샷이 없으면 현재 업종 분류로 폴백(경고 로그만). | 스냅샷 도입 이전 구간의 업종 중립화가 현재 분류 사용. 백테스트 섹터 한도(`BacktestRunner.withSectorMap`, 원본 `portfolio._with_sector_map`)는 오늘(UTC) 기준으로 1회 조회해 구간 전체에 그 분류를 쓴다 |
+| 12 | `KrxIndexService.sectorMap` | `krx_index.py:483` | **미래참조.** asOf 이전 PIT 스냅샷이 없으면 현재 업종 분류로 폴백(경고 로그만). 1단계부터 폴백 없이 `MarketDataNotLoaded`(`LocalSectorMap`). | (1단계 이전) 스냅샷 도입 이전 구간의 업종 중립화가 현재 분류 사용. 남은 미래참조: 백테스트 섹터 한도(`BacktestRunner.withSectorMap`, 원본 `portfolio._with_sector_map`)는 오늘(UTC) 기준으로 1회 조회해 구간 전체에 그 분류를 쓴다 |
 | 13 | `BaseRunner.place` 실전 게이트 | `base_runner.py:232` | 게이트 적용을 선택된 증권사가 아니라 전역 `KIS_ENV` 로 판단. | `KIS_ENV=vts` + 토스 계좌 → 실돈 주문이 게이트(승인·정합 등급·금액 상한) 없이 나감 |
 | 14 | `OrderExecutor.execute` | `executor.py:117-154` | ① 멱등은 신호 키 단위 — 접수불명 주문이 남아 있어도 다른 키(다음 날 리밸런싱)는 같은 매수를 다시 낸다. ② 주문번호를 체결 조회 전에 저장하지 않고, 조회의 비-`BrokerError` 예외는 그대로 전파 → pending 에 주문번호 없이 남는다. ③ 토스 성공 응답에 orderId 없으면 `BrokerError`→rejected 확정. ④ KIS 성공 응답에 `ODNO` 없으면 submitted + null 번호 → 어느 정합 쿼리에도 안 걸린다. | 이중 매수 / 접수된 주문의 장부 누락 |
 | 15 | `Reconciler`·`Fills.record` | `reconcile.py:80-199`·`record_fill` | ① 잔고 교차확인의 기록 수량 합이 매수·매도를 구분 없이 더한다. ② 증분 체결에 누적 평균가를 적용(증분 단가 아님). ③ 체결 조회가 당일 KST 만. ④ 포지션 read-modify-write 가 주문 단위 락뿐이라 같은 종목 다른 주문끼리 경쟁. | 회수 불가 체결 / 평단 왜곡 / 전날 체결 미회수 / 수량 유실 |
@@ -121,19 +121,43 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 설계 `docs/superpowers/specs/2026-11-22-official-market-data-phase1-design.md`. 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)만 바꿨고 UI 경로(스크리너·차트 등)의 MDC·네이버는 2단계까지 그대로다. 아래는 원본과 **일부러 다르게** 한 것이다.
 
 - 소스 교체: 종목 일봉·시총·지수는 KRX MDC·네이버 대신 KRX Open API 를 `market/krxopen/` 이 적재한 로컬 테이블에서 읽는다. 수정주가는 외부 수정주가 대신 원주가 + 전일대비(`prevDiff`)로 로컬에서 계산한다(`AdjustedBars`). DART 재무는 로컬 전용(`remote=false`, 종목→corp_code 는 `dart_corp_codes`), 배당은 공공데이터포털 금융위원회_주식배당정보(`getDiviInfo_V2`)다.
-  **미실측(Task 1 스파이크 대기, KRX IP 차단·401):** Open API 응답 필드명(문서상 이름으로 구현), 지수명 원문(코스피=1001·코스피 200=1028·코스닥=2001 로 매핑한 가정), 보통주 판정 문자열 `"보통주"`, 일일 공개 시각(작업은 10:00 KST 가정), TR(총수익) 지수 존재 여부.
+  실측 결과는 아래 "공식 경로 실측 (2026-11)". 남은 미실측: 일일 공개 시각(워커는 평일 07:00~20:00 30분마다 적재, 엔진은 `quantfolio.engine.dataReadyBy`=10:30 KST 전까지 T-1 미적재를 경보 없이 대기).
 - 미적재는 실패다: 로컬에 없으면 원격 폴백·조용한 저하 대신 `MarketDataNotLoaded`(백테스트 409, 원본은 비어 있으면 MDC·네이버로 내려가거나 빈 결과로 계속). 조회 실패(`DataSourceError`)와 구분된다.
-- 백테스트에 배당 포함: 락일(기준일 이하 마지막 거래일의 직전 거래일)에 직전일 종가 보유분만 적립, 세율 0.154, 금액은 수정주가 단위로 환산(`dps_raw × 수정종가/원종가`). 벤치마크는 배당 제외(TR 지수 미확인). 배당 출처는 공시일이 없어 `announcedOn=null`, Valuation 은 기준일+90일에 알려진 것으로 본다.
-- Valuation: PER/PBR/DIV 를 로컬에서 계산(시총·종가는 asOf 이하 최신 거래일). 전체 적재가 있고 창 안에 배당 행이 없으면 `div=0.0`(무배당, 원본 KRX DVD_YLD 와 같은 의미), 전체 적재가 없거나 배당 이력 시작+365일 이전이면 `null`.
+- 백테스트에 배당 포함: 락일(기준일 이하 마지막 거래일의 직전 거래일)에 직전일 종가 보유분만 적립, 세율 0.154, 금액은 분할 단위를 환산한다(`.claude/rules/market-data.md`). 벤치마크는 배당 제외(TR 지수 미확인). 배당 출처는 공시일이 없어 `announcedOn=null`, Valuation 은 기준일+90일에 알려진 것으로 본다.
+- Valuation: 원본은 KRX 가 준 PER/PBR/DVD_YLD 를 썼고, 지금은 DART 재무·시총·배당으로 로컬 계산한다. 무배당 `div=0.0` 은 원본 DVD_YLD 0 과 같은 의미(조건은 `market-data.md`).
 - 업종 체계: KRX 업종명 대신 KIS 종목마스터 중분류(`sector_map_snapshots` 를 KIS 마스터가 채움). 섹터 캡 결과가 원본과 다를 수 있다. 값 형식이 `KOSPI:0013` 과 옛 KRX 업종명이 날짜별로 섞여 있다.
 - 유니버스 `KOSPI_MCAP`: 직전 거래일 이하 최신 시총 상위 N 보통주(종목별 최신 `stock_kind`). 구성종목 조회(MDC) 대신이며 `pick` 기본값을 따른다. 보통주 여부를 아는 종목이 하나도 없으면 `MarketDataNotLoaded("stock_kind")`.
-- 라이브 엔진 fail-closed: 시장데이터 미적재면 리밸런싱을 건너뛰고 에피소드당 critical 1회만 알린다(경보 플래그는 국면용·계획용 분리). 국면(`isRiskOff`)을 모르면 새 매수·리밸런싱 정지, 청산은 하지 않는다. 리스크오프 청산은 유니버스·업종 없이 `heldPositions()` 전체를 대상으로 계속 실행한다.
+- 거래정지일 봉: KRX 는 시·고·저가 0, 종가 기준가로 준다. 거래량 0·시고저 ≤ 0 이면 o=h=l=종가로 저장한다(`AdjustedBars.flatIfHalted`, 봉은 버리지 않음). 원본 네이버 봉과 다를 수 있다.
+- 라이브 엔진 fail-closed(규칙 정본 `.claude/rules/trading-safety.md`): 원본은 데이터가 비면 원격으로 받거나 `config.universe` 로 폴백해 매매를 계속했다. 지금은 주문 없이 멈추고 critical 을 보낸다. 원본과 다른 점이 더 있다: 엔진 점수에도 커버리지 관문, `StrategyRunner` 시드는 기동 1회가 아니라 성공할 때까지 틱마다, 리스크오프 청산 대상은 후보풀 보유가 아니라 전체 보유.
 - 응답 `factor_warnings` 키 제거: 원본은 커버리지 낮음을 경고로 남기고 진행했다. 지금은 팩터 커버리지 < 50% 면 실패한다(value/quality 는 점수에 쓰는 컬럼 기준, 빈 유니버스는 별도 실패).
-- 1단계 거부: `flow`·`pead` 가중치(수급 순매수·공시 달력이 원격 전용)는 `MarketDataNotLoaded("unsupported_in_phase1")`. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
+- 1단계 거부: `flow`·`pead` 가중치(수급 순매수·공시 달력이 원격 전용)는 백테스트 422(`BacktestInputError`), 엔진은 `MarketDataNotLoaded("unsupported_in_phase1")` → 정지+critical. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
 - `PanicService` UI: 시장별로 격리해 한 시장이 비면 그 시장만 `unavailable`(전체 503 아님). 백테스트의 패닉 시계열은 로컬 전용이며 priceChange 에서 기간 중 상폐 종목은 MDC 처럼 close 0·-100%·거래량 0 으로 보강한다. UI 의 `newLowRatio` 는 여전히 null.
-- 거래일·휴장: 로컬 `index_ohlcv(1001)` 날짜가 거래일 목록, 휴장 판정은 원장 `krx_open|stk_bydd_trd|yyyyMMdd|KOSPI` 가 0행·final. 적재 범위 밖 과거일은 KIS 국내휴장일조회(vts 미지원 → 평일 규칙 폴백+로그).
-- 원본 동작 보존(고치지 않고 기록): 정기 리밸런싱의 `holdings(pool)` 필터 — 풀(상위 N)에서 빠진 보유 종목은 고아 포지션이 되어 정기 리밸런싱으로 팔리지 않는다(리스크오프만 전체 청산). 라이브 `StrategyRunner` 일봉 시드는 기동 1회(`onLoad`). 엔진의 DART 미적재는 quality/growth 가중치가 있어도 중립 0점으로 매매한다(백테스트의 커버리지 관문 없음, 최종 리뷰 판단 대기).
-- 알려진 한계(미측정): `residual_momentum` 이 필요한 로컬 일봉 깊이(~2.4년), `DividendFeed` 전체 원주가 이력 로드 비용, 기존 `price_ticks` 보다 이른 날 백필 시 원주가·수정주가 혼입 가능.
+- 거래일·휴장: 원본은 MDC 지수 일봉 날짜, 지금은 KRX Open API 적재 원장(규칙은 `market-data.md`). **열린 문제:** 휴장 다음 거래일 아침엔 뒷날 기록이 없어 '모름' → 엔진 정지·critical(Task 1 실측 뒤 결정). 적재 범위 밖 과거일은 KIS 국내휴장일조회(vts 미지원 → 평일 규칙 폴백+로그).
+- 원본 동작 보존(고치지 않고 기록): 정기 리밸런싱의 `holdings(pool)` 필터 — 풀(상위 N)에서 빠진 보유 종목은 고아 포지션이 되어 정기 리밸런싱으로 팔리지 않는다(리스크오프만 전체 청산).
+- 알려진 한계(미측정): `residual_momentum` 이 필요한 로컬 일봉 깊이(엔진 `(36+3)×22` 거래일 ≈ 3.4년), `DividendFeed` 전체 원주가 이력 로드 비용, 기존 `price_ticks` 보다 이른 날 백필 시 원주가·수정주가 혼입 가능.
+
+## 공식 경로 실측 (2026-11)
+
+KRX Open API(`data-dbg.krx.co.kr/svc/apis`, 헤더 `AUTH_KEY`)를 2026-11-23 서비스 7개 승인 직후 한 번씩 호출했다(총 15회). 응답은 커밋하지 않는다(재배포 제한).
+
+- **필드명:** 구현 상수와 모두 일치. 일별매매(`sto/stk_bydd_trd`·`ksq_bydd_trd`)는 `BAS_DD, ISU_CD, ISU_NM, MKT_NM, SECT_TP_NM, TDD_CLSPRC, CMPPREVDD_PRC, FLUC_RT, TDD_OPNPRC, TDD_HGPRC, TDD_LWPRC, ACC_TRDVOL, ACC_TRDVAL, MKTCAP, LIST_SHRS`이다. 여기서 `ISU_CD` 는 6자리 단축코드다. 종목기본정보의 `ISU_CD` 는 ISIN 이고 단축코드는 `ISU_SRT_CD` 다. 지수(`idx/*_dd_trd`)는 `IDX_CLSS, IDX_NM, CLSPRC_IDX, CMPPREVDD_IDX, FLUC_RT, OPNPRC_IDX, HGPRC_IDX, LWPRC_IDX, ACC_TRDVOL, ACC_TRDVAL, MKTCAP` 이다. 숫자는 쉼표 없는 문자열이다.
+- **지수명:** `코스피`·`코스피 200`·`코스닥` 원문이 있다. 매핑과 일치하며, `코스피 (외국주포함)` 같은 이름과 섞이지 않는다.
+- **보통주 판정:** `KIND_STKCERT_TP_NM` 값은 `보통주`·`구형우선주`·`신형우선주`·`종류주권` 네 가지다. 2026-11-20 기준 건수는 다음과 같다.
+
+  | 시장 | 보통주 | 구형우선주 | 신형우선주 | 종류주권 |
+  |---|---|---|---|---|
+  | KOSPI | 828 | 76 | 19 | 12 |
+  | KOSDAQ | 1834 | 0 | 1 | 1 |
+
+- **전일대비 전제:** 005930 은 액면분할 거래정지일인 2018-05-03 에 종가 2,650,000, 전일대비 0, 시·고·저가 0 이다. 재개일 2018-05-04 는 종가 51,900, 전일대비 −1,100(−2.08%)이다. 즉 전일대비는 조정된 기준가 대비다. 수정주가 체인 식은 `53,000/2,650,000 = 1/50` 로 분할을 잡는다. 설계 전제가 성립한다.
+- **현금배당락:** 기준가가 조정되지 않는다. 2025-12-29 배당락일에 고배당 8종목(024110·033780·005940·088980·316140·055550·105560·086790)을 보면, 모두 `종가 − 전일대비 == 전일 종가` 다. 따라서 `DividendFeed` 현금 적립과 이중 계산이 아니다.
+- **상폐 종목:** 과거 날짜 응답에 포함된다. 2012-01-02 KOSPI 코드 가운데 234개가 2026-11-20 응답에는 없다.
+- **거래정지:** 시·고·저가 0, 거래량 0, 종가는 기준가로 온다(2026-11-20 KOSPI 23종목). `AdjustedBars.flatIfHalted` 의 근거다.
+- **휴장일·미공개일:** 둘 다 HTTP 200 에 `OutBlock_1` 이 빈 배열이라 응답만으로는 구분할 수 없다. 휴장일 예는 2026-09-25 추석이다. 미공개일 예로, 2026-11-23 당일분을 같은 날 20:13 KST 에 조회했을 때도 0행이었다. 그래서 0행은 7일 확정 규칙과 잠정 휴장 판정이 필요하다.
+- **공개 시각:** 당일 20:13 KST 에는 미공개였으므로 T+1 공개다. 정확한 시각은 2026-11-24 오전 관측 중이다.
+- **TR 지수:** 일반 KOSPI200 총수익지수는 없다. `코스피 200 25/50 NTR 지수` 만 있는데, 비중 상한과 순배당을 반영한 별도 지수다. 그래서 벤치마크는 배당 제외로 유지한다.
+- **한도 초과 응답:** 일부러 초과시키지 않았다. 미확인이다.
+- **배당 출처 결정:** 공공데이터포털 금융위원회_주식배당정보(`getDiviInfo_V2`)를 쓴다. DART `alotMatter` 는 사업연도별 연간 주당배당 합계만 주고 배당기준일이 없어 배당락일을 정할 수 없다. 공공데이터포털은 `dvdnBasDt`(기준일)와 종목·종류별 주당배당금을 준다. 다만 공시일이 없고, 금액은 기준일 당시 주식 단위다(예: 005930 2018-03-31 은 분할 전 1주당 금액).
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 
