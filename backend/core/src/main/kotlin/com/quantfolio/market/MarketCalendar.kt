@@ -42,6 +42,7 @@ class MarketCalendar(
     private val past: PastTradingDays,
     private val kis: KisHolidays,
     private val clock: Clock = Clock.systemUTC(),
+    private val listed: KrxHolidays = KrxHolidays(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -53,6 +54,7 @@ class MarketCalendar(
 
     fun isBusinessDay(d: LocalDate): Boolean {
         if (d.dayOfWeek == DayOfWeek.SATURDAY || d.dayOfWeek == DayOfWeek.SUNDAY) return false
+        if (d in listed) return false // KIS 조회 실패(vts) 때 평일 규칙으로 휴장일에 장을 여는 것을 막는다
         val today = MarketClock.todayKst(clock)
         if (d.isBefore(today)) past.isTradingDay(d)?.let { return it }
         return kisOpen(d, today) ?: true

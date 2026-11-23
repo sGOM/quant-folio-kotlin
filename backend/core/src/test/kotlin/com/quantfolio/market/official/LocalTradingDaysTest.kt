@@ -74,4 +74,29 @@ class LocalTradingDaysTest {
         zeroRows(d, t0.plusSeconds(60), only = 4)
         assertNull(days.isTradingDay(d))
     }
+
+    @Test
+    fun `listed holiday with a zero-row record is a holiday the morning after, rows or no record still win`() {
+        val listed = LocalTradingDays(ledger, com.quantfolio.market.KrxHolidays("2026-10-06"))
+        ledger.trading(listOf(d.minusDays(1)))
+        zeroRows(d, t0, only = 1) // 공개 전 조회와 구분할 뒷날 기록이 아직 없다
+        assertNull(days.isTradingDay(d)) // 목록 없으면 모름
+        assertNull(days.previous(next))
+        assertFalse(listed.isTradingDay(d)!!)
+        assertEquals(d.minusDays(1), listed.previous(next)) // 연휴 다음 날 직전 거래일
+        ledger.put("krx_open", "stk_bydd_trd|20261006|KOSPI", 5, false)
+        assertTrue(listed.isTradingDay(d)!!) // 행이 있으면 목록보다 원장
+    }
+
+    @Test
+    fun `listed holiday without any ledger record stays unknown`() {
+        val listed = LocalTradingDays(ledger, com.quantfolio.market.KrxHolidays("2026-10-06"))
+        assertNull(listed.isTradingDay(d))
+    }
+
+    @Test
+    fun `malformed holiday list fails at construction`() {
+        org.junit.jupiter.api.assertThrows<java.time.format.DateTimeParseException> { com.quantfolio.market.KrxHolidays("2026-13-01") }
+        assertEquals(setOf(LocalDate.of(2026, 12, 25), LocalDate.of(2026, 12, 31)), com.quantfolio.market.KrxHolidays(" 2026-12-25, 2026-12-31 ,").days)
+    }
 }

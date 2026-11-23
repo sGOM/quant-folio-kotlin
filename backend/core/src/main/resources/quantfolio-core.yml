@@ -53,3 +53,6 @@ quantfolio:
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
   debug-errors: ${DEBUG_ERRORS:false}
   cache-dir: ${CACHE_DIR:.cache}
+  market:
+    # KRX 평일 휴장일(yyyy-MM-dd, 쉼표). 매년 KRX 휴장일 공지(12월)로 다음 해를 추가한다 — 빠지면 연휴 다음 날 리밸런싱이 멈추고 critical.
+    krx-holidays: ${KRX_HOLIDAYS:2026-12-25,2026-12-31}

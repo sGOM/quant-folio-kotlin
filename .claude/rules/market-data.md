@@ -52,7 +52,8 @@ paths:
 - **원장 키:** `krx_open|<서비스>|yyyyMMdd|<시장>`, 배당 `datagokr|dividends_full`. 읽는 쪽(`LocalTradingDays` 등)과 문자열이 같아야 한다.
 - **거래일 = 원장 `krx_open|stk_bydd_trd|날짜|KOSPI`**: 행>0 거래일, 0행·final 휴장, 그 외 모름(=결측). `index_ohlcv` 는 UI 의 MDC 캐시도
   쓰므로 달력 근거로 쓰지 않는다. 0행·미확정이라도 5호출 모두 0행이고 뒷날(행>0) 기록 **이후에** 받은 것이면 잠정 휴장 —
-  공개 전에 받은 0행과 구분하려는 것이다. 직전 거래일은 `LocalTradingDays.previous` 한 곳(적재의 비교용 직전일만 예외, `previousForAppend`).
+  공개 전에 받은 0행과 구분하려는 것이다. 연휴 다음 날 아침엔 뒷날 기록이 없어 이게 성립하지 않으므로, 설정 `quantfolio.market.krx-holidays`
+  (`KrxHolidays`, 매년 KRX 공지로 사람이 추가)에 있는 날의 0행은 바로 휴장이다 — 행이 있거나 기록이 없으면 목록보다 원장. 직전 거래일은 `LocalTradingDays.previous` 한 곳(적재의 비교용 직전일만 예외, `previousForAppend`).
 - **Valuation `div=0.0` 규칙:** 전체 배당 적재가 있고 창(공시일 ≤ asOf, 기준일이 365일 안) 안에 행이 없으면 0.0, 적재가 없거나 배당 이력 시작+365일 이전이면 `null`. 0 과 결측을 섞지 않는다.
 - 배당 금액은 기준일 당시 주식 단위(분할 전 값)다 — `PriceUnits`(수정/원시 종가 비)로 환산: 백테스트 현금은 배당락일 비, `Valuation` DIV 는 배당락일 비 ÷ asOf 비(환산 못 하면 null). 배당락일은 "기준일 이하 마지막 거래일의 직전 거래일".
 - 거래정지일 봉(거래량 0·시고저 0)은 버리지 말고 `AdjustedBars.flatIfHalted` 로 o=h=l=종가 — 버리면 커버리지 결측, 그대로 두면 ATR 등 오염.

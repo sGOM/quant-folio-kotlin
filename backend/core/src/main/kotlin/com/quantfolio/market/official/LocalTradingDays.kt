@@ -1,5 +1,6 @@
 package com.quantfolio.market.official
 
+import com.quantfolio.market.KrxHolidays
 import com.quantfolio.market.PastTradingDays
 import com.quantfolio.market.store.FetchLedger
 import com.quantfolio.market.store.LedgerEntry
@@ -15,7 +16,7 @@ import java.time.format.DateTimeFormatter
  * (오래된 캐시 구간이 남으면 그 앞뒤 수년이 휴장으로 보인다). 직전 거래일 계산도 여기 하나다.
  */
 @Component
-class LocalTradingDays(private val ledger: FetchLedger) : PastTradingDays {
+class LocalTradingDays(private val ledger: FetchLedger, private val listed: KrxHolidays = KrxHolidays()) : PastTradingDays {
     /** 주말 false, 원장대로 true/false, 모르면 null. */
     override fun isTradingDay(day: LocalDate): Boolean? {
         if (isWeekend(day)) return false
@@ -54,6 +55,9 @@ class LocalTradingDays(private val ledger: FetchLedger) : PastTradingDays {
         e == null -> null
         e.rowCount > 0 -> true
         e.final -> false
+        // 공지 휴장일의 0행은 휴장 — 연휴 다음 날 아침엔 뒷날 기록이 없어 잠정 휴장이 성립하지 않는다.
+        // 목록이 원장을 이기지는 않는다: 행이 있으면 거래일, 아직 안 받았으면(기록 없음) 모름.
+        day in listed -> false
         provisionalHoliday(day, e) -> false
         else -> null
     }

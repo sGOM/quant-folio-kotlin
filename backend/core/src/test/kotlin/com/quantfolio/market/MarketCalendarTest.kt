@@ -126,4 +126,11 @@ class MarketCalendarTest {
         assertEquals(365 * 5.0 / 7 - 365 * (15.0 / 365), days, 1e-9)
         assertEquals(0.0, MarketCalendar.estimatedTradingDays(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1)))
     }
+
+    @Test
+    fun `listed KRX holiday is closed even when KIS lookup fails`() {
+        val listed = MarketCalendar(LocalTradingDays(ledger), { error("vts 미지원") }, clock, KrxHolidays("2026-10-19"))
+        assertFalse(listed.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        assertTrue(listed.isBusinessDay(LocalDate.of(2026, 10, 20))) // 목록 밖·조회 실패는 평일 규칙
+    }
 }
