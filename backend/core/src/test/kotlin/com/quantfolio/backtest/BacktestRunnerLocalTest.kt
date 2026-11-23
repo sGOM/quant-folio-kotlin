@@ -152,7 +152,7 @@ class BacktestRunnerLocalTest(
     }
 
     @Test
-    fun `pool size 200 with pick 40 narrows the mcap pool by momentum`() {
+    fun `pool size 4 with pick 2 narrows the mcap pool by momentum`() {
         capsInverse()
         // 시총 상위 4(L10001~L10004) 중 모멘텀 상위만 산다: 모멘텀 1위 L10004 는 있고, 시총 5위(풀 밖)인 L10005 는 없다.
         // pool_size 를 무시하면 풀이 시총 상위 pick(2)=L10001·L10002 뿐이라 L10004 가 없다.

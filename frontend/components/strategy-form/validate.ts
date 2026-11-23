@@ -61,6 +61,8 @@ function validateRebalance(config: Extract<StrategyConfig, { type: "rebalance" }
     return "중복 종목코드가 있습니다.";
   const isSelect = config.selection.method === "momentum" || config.selection.method === "score";
   if (isPit) {
+    if (rule.pool_size != null && rule.pick != null && rule.pick > rule.pool_size)
+      return "후보 종목 수(pick)는 후보 풀 크기(pool_size) 이하여야 합니다.";
     // PIT + 상대강도 축소(pick) 사용 시 top_n ≤ pick 이어야 한다.
     if (isSelect && rule.type === "momentum" && rule.pick != null && config.selection.top_n > rule.pick)
       return "선정 종목 수(top_n)는 후보 종목 수(pick) 이하여야 합니다.";

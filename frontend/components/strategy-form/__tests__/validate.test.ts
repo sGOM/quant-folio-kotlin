@@ -72,6 +72,17 @@ describe("validateStrategyForm — 리밸런싱", () => {
     expect(validateStrategyForm("s", cfg)).toBeNull();
   });
 
+  it("pick 이 pool_size 를 넘으면 거부, 같거나 pool_size 가 없으면 통과한다", () => {
+    const withRule = (r: { pick?: number; pool_size?: number }) => {
+      const cfg = rebal({ universe: [] });
+      cfg.selection = { ...cfg.selection, universe_rule: { source: "KOSPI_MCAP", type: "momentum", ...r } };
+      return validateStrategyForm("s", cfg);
+    };
+    expect(withRule({ pick: 40, pool_size: 30 })).toMatch(/pool_size/);
+    expect(withRule({ pick: 30, pool_size: 30 })).toBeNull();
+    expect(withRule({ pick: 40 })).toBeNull();
+  });
+
   it("중복 종목코드를 거부한다", () => {
     expect(
       validateStrategyForm("s", rebal({ universe: ["005930", "005930"] })),

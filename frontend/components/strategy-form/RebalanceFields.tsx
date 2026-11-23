@@ -223,7 +223,7 @@ export function RebalanceFields({
       <Field
         label={
           pitSource
-            ? `폴백 종목 (선택 · ${config.universe.length}개)`
+            ? `종목 목록 (KOSPI_MCAP 에선 미사용 · ${config.universe.length}개)`
             : `운용 종목 (universe · ${config.universe.length}개)`
         }
       >
