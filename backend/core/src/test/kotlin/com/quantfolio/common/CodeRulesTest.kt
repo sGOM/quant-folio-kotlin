@@ -223,7 +223,7 @@ class CodeRulesTest {
             "BacktestRunner.kt" to (2 to "배당 조회(DividendFeed: 배당·가격틱 읽기, MDNL 안 던짐) + 잔차모멘텀 runCatching(적재된 closes 위 순수 계산)"),
             "RebalanceRunner.kt" to (3 to "ISO 시각·JSON 파싱 runCatching 2건 + 브로커 현재가 조회 1건 - 시장데이터 미접근"),
             "Runners.kt" to (2 to "Redis 헬스 기록 + 브로커 현재가 정지 확인 - 시장데이터 미접근"),
-            "PanicService.kt" to (4 to "로컬 파일 캐시 로드·저장(Jackson/Files) - 스냅샷 미접근"),
+            "PanicService.kt" to (5 to "로컬 파일 캐시 로드·저장 4건(스냅샷 미접근) + UI compute 의 S9 newLowRatio 1건(원본처럼 S9 만 null, PanicOut 이 결측 표시)"),
             "MarketCalendar.kt" to (1 to "KIS 휴장일 REST 조회 - 로컬 DB 미접근"),
             "SymbolCatalog.kt" to (1 to "KIS 마스터 REST 조회 - 로컬 DB 미접근"),
             "WorkerJobs.kt" to (2 to "withOutageAlert 는 알림 후 throw e 로 전부 재던짐 + 체결 정합 리포트(orders/fills DB 만)"),

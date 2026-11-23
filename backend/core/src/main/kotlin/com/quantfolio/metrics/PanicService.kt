@@ -67,9 +67,7 @@ class PanicService(@Qualifier("local") private val snapshots: SnapshotSource, pr
         sig.putAll(breadth)
         sig["nlr"] = try {
             newLowRatio(mkt, asOf)
-        } catch (e: MarketDataNotLoaded) {
-            throw e
-        } catch (e: Exception) {
+        } catch (e: Exception) { // UI 화면 전용(compute) — S9 만 결측(null)으로 두는 원본 계약. 미적재도 시장 전체를 unavailable 로 만들지 않는다
             log.warn("패닉 지표: S9 신저가 비율 계산 실패 (market={}): {}", mkt, e.message)
             null
         }
