@@ -48,7 +48,7 @@ class MetricsServicesTest {
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = periodError?.takeIf { periodErrorMarkets?.let { m -> markets.any { it in m } } ?: true }?.let { throw it } ?: periods
         override fun marketOhlcvSnapshot(day: LocalDate, market: String) = snapshot
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = indexError?.let { throw it } ?: index
-        override fun sectorIndexes(market: String) = sectors[market].orEmpty()
+        override fun sectorIndexes(market: String, day: LocalDate) = sectors[market].orEmpty()
     }
 
     private fun bars(n: Int) = (0 until n).map {

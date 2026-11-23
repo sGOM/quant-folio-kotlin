@@ -61,7 +61,7 @@ class ScreenerRecommendOracleTest {
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = pcByKey.getValue(startKey.getValue(start))
         override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? = null
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = null
-        override fun sectorIndexes(market: String) = emptyList<Pair<String, String>>()
+        override fun sectorIndexes(market: String, day: LocalDate) = emptyList<Pair<String, String>>()
     }
     private val days = items(data.get("days")).map { LocalDate.parse(it.asString()) }
     private val tech = TechIndicatorLoader { code, _, _ ->

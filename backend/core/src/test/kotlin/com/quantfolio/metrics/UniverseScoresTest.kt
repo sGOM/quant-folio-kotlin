@@ -20,7 +20,7 @@ class UniverseScoresTest {
         override fun priceChange(start: LocalDate, end: LocalDate, markets: List<String>) = pc
         override fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>? = null
         override fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>? = null
-        override fun sectorIndexes(market: String) = emptyList<Pair<String, String>>()
+        override fun sectorIndexes(market: String, day: LocalDate) = emptyList<Pair<String, String>>()
     }
 
     private val noInputs = object : FactorInputs {

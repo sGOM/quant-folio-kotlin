@@ -116,7 +116,7 @@ class StockMetricsService(
 }
 
 /**
- * 업종지수 지표 화면(원본 `metrics/sectors.compute_sectors`). 지수 목록·이름은 로컬 `index_ohlcv` 키([SnapshotSource.sectorIndexes]),
+ * 업종지수 지표 화면(원본 `metrics/sectors.compute_sectors`). 지수 목록·이름은 기준일에 행이 있는 로컬 `index_ohlcv` 키([SnapshotSource.sectorIndexes]),
  * 기준시장 지수(1001·2001)는 목록에 없다. 업종지수 키가 없거나 하나라도 미적재면 화면 전체가 [MarketDataNotLoaded](409).
  */
 @Component
@@ -136,7 +136,7 @@ class SectorMetricsService(@Qualifier("local") private val snapshots: SnapshotSo
         }
         val items = mutableListOf<SectorMetric>()
         for (mkt in MetricsCommon.mkts(market)) {
-            val sectors = snapshots.sectorIndexes(mkt).ifEmpty { throw MarketDataNotLoaded("index_ohlcv", "sector_indexes|$mkt") } // 백필 전
+            val sectors = snapshots.sectorIndexes(mkt, asOf).ifEmpty { throw MarketDataNotLoaded("index_ohlcv", "sector_indexes|$mkt") } // 백필 전
             for ((key, name) in sectors) {
                 try {
                     val bars = snapshots.indexOhlcv(histStart, asOf, key) ?: continue

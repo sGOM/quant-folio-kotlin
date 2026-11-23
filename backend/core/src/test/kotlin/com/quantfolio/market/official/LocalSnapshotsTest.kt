@@ -15,6 +15,8 @@ import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.IndexOhlcvStore
 import com.quantfolio.market.store.StockDaily
 import com.quantfolio.market.store.StockDailyStore
+import com.quantfolio.metrics.MetricsCommon
+import com.quantfolio.metrics.SectorMetricsService
 import com.quantfolio.test.ContainersConfig
 import com.quantfolio.test.InMemoryFetchLedger
 import org.junit.jupiter.api.BeforeEach
@@ -57,7 +59,7 @@ class LocalSnapshotsTest(
 
     @BeforeEach
     fun clean() {
-        listOf("1001", "1028", "2001", "KOSPI:테스트업종가", "KOSPI:테스트업종나", "KOSDAQ:테스트업종다").forEach { indexes.delete(it) }
+        listOf("1001", "1028", "2001", "KOSPI:테스트업종가", "KOSPI:테스트업종나", "KOSPI:테스트업종폐지", "KOSDAQ:테스트업종다").forEach { indexes.delete(it) }
         week.forEach { daily.delete(it) }
     }
 
@@ -112,15 +114,34 @@ class LocalSnapshotsTest(
 
     @Test
     fun `sectorIndexes lists stored sector keys without market reference`() {
-        for (code in listOf("1001", "1028", "2001")) indexes.write(code, listOf(IndexBar(week[0], close = 1.0)), null)
-        indexes.write("KOSPI:테스트업종나", listOf(IndexBar(week[0], close = 1.0)), "테스트업종나")
+        for (code in listOf("1001", "1028", "2001")) indexes.write(code, listOf(IndexBar(week[1], close = 1.0)), null)
+        indexes.write("KOSPI:테스트업종나", listOf(IndexBar(week[1], close = 1.0)), "테스트업종나")
         indexes.write("KOSPI:테스트업종가", listOf(IndexBar(week[0], close = 1.0), IndexBar(week[1], close = 1.0)), "테스트업종가")
-        indexes.write("KOSDAQ:테스트업종다", listOf(IndexBar(week[0], close = 1.0)), "테스트업종다")
-        val kospi = snaps.sectorIndexes("KOSPI")
+        indexes.write("KOSPI:테스트업종폐지", listOf(IndexBar(week[0], close = 1.0)), "테스트업종폐지") // 마지막 행이 day 이전: 폐지·이름 변경
+        indexes.write("KOSDAQ:테스트업종다", listOf(IndexBar(week[1], close = 1.0)), "테스트업종다")
+        val kospi = snaps.sectorIndexes("KOSPI", week[1])
         assertEquals(listOf("KOSPI:테스트업종가" to "테스트업종가", "KOSPI:테스트업종나" to "테스트업종나"), kospi.filter { "테스트업종" in it.first })
         assertTrue(kospi.all { it.first.startsWith("KOSPI:") }) // 1001·1028·2001·KOSDAQ 키 없음
         assertEquals(kospi.map { it.first }.sorted(), kospi.map { it.first })
-        assertEquals(listOf("KOSDAQ:테스트업종다" to "테스트업종다"), snaps.sectorIndexes("KOSDAQ").filter { "테스트업종" in it.first })
+        assertEquals(listOf("KOSDAQ:테스트업종다" to "테스트업종다"), snaps.sectorIndexes("KOSDAQ", week[1]).filter { "테스트업종" in it.first })
+        assertTrue(snaps.sectorIndexes("KOSPI", week[7]).isEmpty()) // 행이 없는 날(미적재)은 빈 목록 → 섹터 화면이 409
+    }
+
+    /** 폐지·이름 변경된 옛 키는 기준일에 행이 없어 목록에서 빠진다 — 마지막 행 뒤 거래일을 결측으로 보고 화면을 영구 409 로 만들지 않는다. */
+    @Test
+    fun `retired sector key is not listed and does not 409 the sector screen`() {
+        val asOf = week[4]
+        val all = generateSequence(MetricsCommon.approxStart(asOf, 252, buffer = 30)) { it.plusDays(1) }
+            .takeWhile { !it.isAfter(asOf) }.filter { it.dayOfWeek.value <= 5 }.toList()
+        ledger.trading(all)
+        val bars = all.mapIndexed { i, d -> IndexBar(d, close = 100.0 + i) }
+        indexes.write("1001", bars, null)
+        indexes.write("2001", bars, null)
+        indexes.write("KOSPI:테스트업종가", bars, "테스트업종가")
+        indexes.write("KOSPI:테스트업종폐지", bars.take(30), "테스트업종폐지")
+        val out = SectorMetricsService(snaps).compute("KOSPI", asOf)
+        assertEquals(listOf("테스트업종가"), out.items.map { it.name }.filter { "테스트업종" in it })
+        assertTrue(out.items.none { it.name == "테스트업종폐지" })
     }
 
     @Test

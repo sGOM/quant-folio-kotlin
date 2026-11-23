@@ -7,6 +7,7 @@ import com.quantfolio.domain.news.NewsArticleSymbol
 import com.quantfolio.domain.news.NewsArticleSymbolRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.market.symbols.SymbolInfo
 import com.quantfolio.metrics.MetricsCommon
@@ -143,6 +144,21 @@ class QueryControllersTest(
         given(sectors.compute("KOSDAQ", asOf)).willReturn(SectorsOut(asOf, emptyList()))
         mvc.get("/api/metrics/sectors?market=KOSDAQ") { cookie(cookie) }.andExpect { status { isOk() } }
         assertNull(redis.opsForValue().get("metrics:sectors:KOSDAQ:2026-10-16"))
+    }
+
+    /** 로컬 미적재는 지표 계산 오류(503)가 아니라 ApiErrorHandler 의 409 — 사람이 적재해야 풀린다. */
+    @Test
+    fun metricsNotLoadedIs409() {
+        given(sectors.compute("KOSPI", asOf)).willThrow(MarketDataNotLoaded("index_ohlcv", "sector_indexes|KOSPI"))
+        mvc.get("/api/metrics/sectors?market=KOSPI") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.key") { value("sector_indexes|KOSPI") }
+        }
+        given(stocks.compute("KOSPI", asOf)).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        mvc.get("/api/metrics/stocks?market=KOSPI") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.kind") { value("stock_daily") }
+        }
     }
 
     @Test

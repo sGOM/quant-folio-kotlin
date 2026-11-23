@@ -13,6 +13,9 @@ interface SnapshotSource {
     fun marketOhlcvSnapshot(day: LocalDate, market: String): List<StockDaily>?
     fun indexOhlcv(start: LocalDate, end: LocalDate, ticker: String): List<IndexBar>?
 
-    /** 그 시장의 업종지수 (키, 원문 이름), 키 오름차순. 기준지수(1001·2001)는 없다. */
-    fun sectorIndexes(market: String): List<Pair<String, String>>
+    /**
+     * [day] 에 행이 있는 그 시장의 업종지수 (키, 그날 원문 이름), 키 오름차순. 기준지수(1001·2001)는 없다.
+     * 폐지·이름 변경된 옛 키는 그날 행이 없어 빠지고, [day] 가 미적재면 빈 목록이다.
+     */
+    fun sectorIndexes(market: String, day: LocalDate): List<Pair<String, String>>
 }

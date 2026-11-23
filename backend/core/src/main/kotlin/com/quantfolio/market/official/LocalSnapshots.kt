@@ -100,9 +100,12 @@ class LocalSnapshots(
         return bars.ifEmpty { null }
     }
 
-    /** `index_ohlcv` 의 `<시장>:` 접두어 키(업종지수, `OfficialIngest.indexKey`). 기준지수 1001·2001(·1028)은 접두어가 없어 빠진다. */
-    override fun sectorIndexes(market: String): List<Pair<String, String>> =
-        indexes.keys("$market:").map { (key, name) -> key to (name ?: key.removePrefix("$market:")) }
+    /**
+     * [day] 에 행이 있는 `<시장>:` 접두어 키(업종지수, `OfficialIngest.indexKey`). 기준지수 1001·2001(·1028)은 접두어가 없어 빠진다.
+     * 적재는 한 계열의 그날 행을 모두 함께 쓰므로 살아 있는 지수는 적재된 날 행이 있다.
+     */
+    override fun sectorIndexes(market: String, day: LocalDate): List<Pair<String, String>> =
+        indexes.keys("$market:", day).map { (key, name) -> key to (name ?: key.removePrefix("$market:")) }
 
     /** 거래일 하루·한 시장의 행. 없으면 미적재. */
     private fun requireDay(day: LocalDate, market: String): List<StockDaily> =
