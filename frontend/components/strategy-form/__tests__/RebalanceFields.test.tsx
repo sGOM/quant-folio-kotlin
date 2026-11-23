@@ -62,3 +62,18 @@ describe("RebalanceFields — 종목 추가(append) 입력", () => {
     expect(screen.getByText("005930")).toBeInTheDocument();
   });
 });
+
+describe("RebalanceFields — KOSPI_MCAP 후보 풀 크기", () => {
+  it("pool_size 가 없으면 pick 을 풀 크기로 보여준다(백엔드 pool_size ?: pick 과 같게)", () => {
+    vi.spyOn(api, "searchSymbols").mockResolvedValue([]);
+    const initial = defaultConfig("rebalance") as RebalanceConfig;
+    initial.selection = {
+      ...initial.selection,
+      universe_rule: { source: "KOSPI_MCAP", type: "momentum", lookback: 250, pick: 40, pool_size: null },
+    };
+    render(<Harness initial={initial} />, { wrapper: makeWrapper() });
+
+    expect(screen.getByLabelText("후보 풀 크기")).toHaveValue(40);
+    expect(screen.getByText(/비우면 pick 과 같음/)).toBeInTheDocument();
+  });
+});

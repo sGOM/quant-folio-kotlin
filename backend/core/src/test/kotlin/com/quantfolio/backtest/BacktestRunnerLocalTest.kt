@@ -72,7 +72,7 @@ class BacktestRunnerLocalTest(
     )
     private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger, ticks, days))
     private val runner = BacktestRunner(
-        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), daily, panic, dividendFeed, clock,
+        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), panic, dividendFeed, clock,
     )
 
     private val symbols = listOf("L10001", "L10002", "L10003", "L10004", "L10005")

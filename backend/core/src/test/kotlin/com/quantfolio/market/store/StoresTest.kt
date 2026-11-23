@@ -17,7 +17,6 @@ import kotlin.test.assertTrue
 @Import(ContainersConfig::class)
 class StoresTest(
     @Autowired private val daily: StockDailyStore,
-    @Autowired private val periods: StockPeriodStore,
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired private val dart: DartFinancialStore,
     @Autowired private val ticks: PriceTickStore,
@@ -105,22 +104,7 @@ class StoresTest(
         assertTrue(daily.read(day).isEmpty())
     }
 
-    // ── stock_period_stats ──
-    @Test
-    fun periodKeyedByStartEndInvestors() {
-        val s = freshDay()
-        val e = s.plusDays(30)
-        periods.write(s, e, "외국인", listOf(StockPeriod("005930", market = "KOSPI", name = "삼성전자", netBuyValue = 1.5e12)))
-        periods.write(s, e, "기관합계", listOf(StockPeriod("005930", market = "KOSPI", netBuyValue = -3.0)))
-        val foreign = periods.read(s, e, "외국인").single()
-        assertEquals(1.5e12, foreign.netBuyValue)
-        assertEquals("삼성전자", foreign.name)
-        assertEquals(-3.0, periods.read(s, e, "기관합계").single().netBuyValue)
-        periods.delete(s, e, "외국인")
-        assertTrue(periods.read(s, e, "외국인").isEmpty())
-    }
-
-    // ── index_ohlcv + coverage ──
+    // ── index_ohlcv ──
     @Test
     fun indexBarsSortedAndUpserted() {
         val code = "T${uniq()}"
@@ -132,30 +116,6 @@ class StoresTest(
         assertEquals(listOf(d2, d1), bars.map { it.date })
         assertEquals(11.0, bars[1].close)
         assertEquals(5L, bars[1].volume)
-    }
-
-    @Test
-    fun coverageMergesAdjacent() {
-        val code = "C${uniq()}"
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 1, 10))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 11), LocalDate.of(2024, 1, 20))
-        assertEquals(listOf(LocalDate.of(2024, 1, 1) to LocalDate.of(2024, 1, 20)), indexes.readCoverage(code))
-    }
-
-    @Test
-    fun coverageMergesOverlapAndKeepsDisjoint() {
-        val code = "C${uniq()}"
-        indexes.mergeCoverage(code, LocalDate.of(2024, 3, 1), LocalDate.of(2024, 3, 31))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 1, 31))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 15), LocalDate.of(2024, 2, 10))
-        assertEquals(
-            listOf(LocalDate.of(2024, 1, 1) to LocalDate.of(2024, 2, 10), LocalDate.of(2024, 3, 1) to LocalDate.of(2024, 3, 31)),
-            indexes.readCoverage(code),
-        )
-        indexes.mergeCoverage(code, LocalDate.of(2024, 5, 2), LocalDate.of(2024, 5, 1)) // end < start 는 무시
-        assertEquals(2, indexes.readCoverage(code).size)
-        indexes.delete(code)
-        assertTrue(indexes.readCoverage(code).isEmpty())
     }
 
     // ── dart_financials ──

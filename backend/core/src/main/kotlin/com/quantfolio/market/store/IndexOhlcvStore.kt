@@ -2,7 +2,6 @@ package com.quantfolio.market.store
 
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import org.springframework.stereotype.Component
-import org.springframework.transaction.support.TransactionTemplate
 import java.time.LocalDate
 
 data class IndexBar(
@@ -15,9 +14,9 @@ data class IndexBar(
     val tradingValue: Long? = null,
 )
 
-/** 지수 일봉 + 확보 구간(index_ohlcv_coverage). 범위 조회는 [StoreCache.cachedRange] 가 이 구간으로 판정한다. */
+/** 지수 일봉(index_ohlcv). 옛 확보 구간 테이블 index_ohlcv_coverage 는 남아 있지만 쓰지 않는다. */
 @Component
-class IndexOhlcvStore(private val jdbc: NamedParameterJdbcTemplate, private val tx: TransactionTemplate) {
+class IndexOhlcvStore(private val jdbc: NamedParameterJdbcTemplate) {
     fun write(code: String, bars: List<IndexBar>, indexName: String?) {
         if (bars.isEmpty()) return
         jdbc.batchUpdate(
@@ -73,50 +72,8 @@ class IndexOhlcvStore(private val jdbc: NamedParameterJdbcTemplate, private val 
         mapOf("prefix" to prefix, "day" to day),
     ) { rs, _ -> rs.getString(1) to rs.getString(2) }.sortedBy { it.first }
 
-    /** 지수 일봉과 확보 구간을 함께 지운다(재적재용). */
+    /** 지수 일봉을 지운다(재적재·테스트 준비용). */
     fun delete(code: String) {
-        tx.executeWithoutResult {
-            jdbc.update("DELETE FROM index_ohlcv WHERE index_code = :code", mapOf("code" to code))
-            jdbc.update("DELETE FROM index_ohlcv_coverage WHERE index_code = :code", mapOf("code" to code))
-        }
-    }
-
-    fun readCoverage(code: String): List<Pair<LocalDate, LocalDate>> = jdbc.query(
-        "SELECT covered_from, covered_to FROM index_ohlcv_coverage WHERE index_code = :code ORDER BY covered_from",
-        mapOf("code" to code),
-    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) to rs.getObject(2, LocalDate::class.java) }
-
-    /**
-     * [start, end] 를 확보 구간에 병합한다. 겹치거나 **하루 차로 맞닿은** 구간은 하나로 합친다.
-     * 동시 병합이 서로의 결과를 지우지 않게 지수코드 단위 advisory lock 안에서 한다.
-     */
-    fun mergeCoverage(code: String, start: LocalDate, end: LocalDate) {
-        if (end.isBefore(start)) return
-        tx.executeWithoutResult {
-            jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtext(:code))", mapOf("code" to code))
-            val overlapping = jdbc.query(
-                """
-                SELECT covered_from, covered_to FROM index_ohlcv_coverage
-                 WHERE index_code = :code AND covered_to >= :startMinus AND covered_from <= :endPlus
-                """,
-                mapOf("code" to code, "startMinus" to start.minusDays(1), "endPlus" to end.plusDays(1)),
-            ) { rs, _ -> rs.getObject(1, LocalDate::class.java) to rs.getObject(2, LocalDate::class.java) }
-            val from = (overlapping.map { it.first } + start).min()
-            val to = (overlapping.map { it.second } + end).max()
-            if (overlapping.isNotEmpty()) {
-                jdbc.update(
-                    "DELETE FROM index_ohlcv_coverage WHERE index_code = :code AND covered_from IN (:froms)",
-                    mapOf("code" to code, "froms" to overlapping.map { it.first }),
-                )
-            }
-            jdbc.update(
-                """
-                INSERT INTO index_ohlcv_coverage (index_code, covered_from, covered_to, updated_at)
-                VALUES (:code, :from, :to, now())
-                ON CONFLICT (index_code, covered_from) DO UPDATE SET covered_to = :to, updated_at = now()
-                """,
-                mapOf("code" to code, "from" to from, "to" to to),
-            )
-        }
+        jdbc.update("DELETE FROM index_ohlcv WHERE index_code = :code", mapOf("code" to code))
     }
 }

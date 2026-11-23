@@ -72,6 +72,7 @@ class RunnersTest(
     @Autowired private val ticks: PriceTickStore,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val reports: com.quantfolio.backtest.FillQualityReport,
+    @Autowired private val daily: com.quantfolio.market.store.StockDailyStore,
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
     @MockitoBean lateinit var calendar: MarketCalendar
@@ -377,6 +378,21 @@ class RunnersTest(
         rebal(sid).tickOnce()
         assertEquals(members.toSet(), ordersOf(sid).map { it.symbol }.toSet())
         org.mockito.Mockito.verify(mcap).members(anyDate(), org.mockito.ArgumentMatchers.eq(2))
+    }
+
+    /** 풀 크기는 pool_size, 없으면 pick(백테스트 `BacktestRunner` 와 같다). */
+    @Test
+    fun `KOSPI_MCAP pool size is pool_size else pick`() {
+        val fixed = listOf(sym())
+        seed(fixed[0], 30) { i -> 1000.0 + i }
+        given(mcap.members(anyDate(), org.mockito.ArgumentMatchers.anyInt())).willReturn(emptyList())
+        fun cfg(rule: Map<String, Any?>) = rebalCfg(fixed, mapOf("selection" to mapOf("method" to "all", "universe_rule" to rule)))
+        val (_, withPool) = strategy(cfg(mapOf("source" to "KOSPI_MCAP", "pool_size" to 200, "pick" to 40)))
+        rebal(withPool).tickOnce()
+        org.mockito.Mockito.verify(mcap).members(anyDate(), org.mockito.ArgumentMatchers.eq(200))
+        val (_, noPool) = strategy(cfg(mapOf("source" to "KOSPI_MCAP", "pick" to 40)))
+        rebal(noPool).tickOnce()
+        org.mockito.Mockito.verify(mcap).members(anyDate(), org.mockito.ArgumentMatchers.eq(40))
     }
 
     @Test
@@ -756,7 +772,7 @@ class RunnersTest(
     private fun realMcapCtx(h: Int, m: Int, loaded: List<LocalDate>): RunnerContext {
         val ledger = com.quantfolio.test.InMemoryFetchLedger().also { it.trading(loaded) }
         val days = com.quantfolio.market.official.LocalTradingDays(ledger)
-        return at(h, m).copy(days = days, mcap = McapUniverse(ctx.daily, days))
+        return at(h, m).copy(days = days, mcap = McapUniverse(daily, days))
     }
 
     private fun mcapGapSid(): Int {
@@ -787,11 +803,11 @@ class RunnersTest(
         val wd = weekdaysBack(12)
         val sid = mcapGapSid()
         val t1 = wd[0]
-        ctx.daily.write(t1, listOf(StockDaily("999991", market = "KOSPI", marketCap = 1000L, close = 1000.0))) // 주권 종류 없음
+        daily.write(t1, listOf(StockDaily("999991", market = "KOSPI", marketCap = 1000L, close = 1000.0))) // 주권 종류 없음
         try {
             RebalanceRunner(sid, realMcapCtx(9, 30, wd)).also { assertTrue(it.load()) }.tickOnce()
         } finally {
-            ctx.daily.delete(t1)
+            daily.delete(t1)
         }
         assertEquals(1, gapAlerts(sid).size)
     }

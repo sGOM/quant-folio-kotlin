@@ -245,4 +245,21 @@ class BaselineMigrationTest {
         assertEquals(1, query(url, "select count(*) from strategies where name = 'flowy' and config = '$expected'::jsonb") { it.getInt(1) }.single())
         assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
     }
+
+    /** flow 가중치 > 0 인 전략이 있으면 V12 는 조용히 지우지 않고 실패한다(사람이 먼저 가중치를 옮겨야 한다). */
+    @Test
+    fun v12RefusesPositiveFlowWeight() {
+        val url = freshDb("bl_v12_flow")
+        flyway(url, target = "11").migrate()
+        val flowCfg = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"factor_weights":{"momentum":0.7,"flow":0.3}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status) select id, 'flowy', '$flowCfg'::jsonb, 'draft' from users""",
+        )
+
+        val e = kotlin.test.assertFailsWith<org.flywaydb.core.api.FlywayException> { flyway(url).migrate() }
+        kotlin.test.assertTrue("flow" in generateSequence<Throwable>(e) { it.cause }.joinToString { it.message.orEmpty() }, e.toString())
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'flowy' and config = '$flowCfg'::jsonb") { it.getInt(1) }.single())
+    }
 }

@@ -201,10 +201,12 @@ export function summarizeConfig(c: StrategyConfig): string {
           : c.selection.method === "custom"
             ? "사용자 규칙 편입"
             : "전체 동일비중";
-    // PIT 지수 소스면 종목수 대신 소스명을 표기(universe 는 폴백일 뿐).
+    // KOSPI_MCAP 이면 종목수 대신 시총 상위 풀 크기(백엔드처럼 pool_size 없으면 pick, 둘 다 없으면 기본 pick 20).
     const rule = c.selection.universe_rule;
     const poolLabel =
-      rule != null && rule.source !== "fixed" ? rule.source : `${c.universe.length}종목`;
+      rule != null && rule.source !== "fixed"
+        ? `시총 상위 ${rule.pool_size ?? rule.pick ?? 20}`
+        : `${c.universe.length}종목`;
     return `${label} · ${poolLabel} · ${sel} · ${cadenceLabel} 리밸런싱`;
   }
   let params: string;

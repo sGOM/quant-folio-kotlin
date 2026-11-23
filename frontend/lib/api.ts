@@ -349,7 +349,7 @@ export interface UniverseRule {
   /** 상대강도 상위 몇 종목을 후보로 남길지. */
   pick?: number;
   /** 시총 상위 후보 풀 크기(1~300). 미설정이면 pick. 풀에서 상대강도 상위 pick 만 남긴다. */
-  pool_size?: number;
+  pool_size?: number | null;
   /** 유동성 필터: 시가총액(억 원) 하한. 미만 종목을 후보풀에서 제외. 미설정이면 필터 없음. */
   min_market_cap?: number | null;
 }

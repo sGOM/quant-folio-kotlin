@@ -184,9 +184,10 @@ export function RebalanceFields({
             label="후보 풀 크기"
             min={1}
             max={300}
-            value={uniRule.pool_size ?? 200}
-            onChange={(v) => patchUniverseRule({ pool_size: v })}
+            value={uniRule.pool_size ?? uniRule.pick ?? 20}
+            onChange={(v) => patchUniverseRule({ pool_size: v > 0 ? v : null })}
           />
+          <p className="-mt-2 text-[11px] text-muted-foreground">비우면 pick 과 같음</p>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

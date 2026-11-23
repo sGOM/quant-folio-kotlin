@@ -37,7 +37,10 @@ object LiveGate {
         val m3 = grades["m3_total"] as String?
         details["fill_quality"] = linkedMapOf("n_orders" to n, "min_sample" to minSample, "m1" to m1, "m3" to m3)
         if (n < minSample) {
-            failures += "체결 정합 표본 부족(n=$n < $minSample) — 판단 불가로 실전 차단"
+            // 미적재로 빠진 종목 수는 원본에 없는 사유(로컬 저장소 전환 뒤 생긴 실패 종류) — 0 이면 원본 문구 그대로.
+            val notLoaded = (sample["n_symbols_not_loaded"] as? Number)?.toInt() ?: 0
+            val why = if (notLoaded > 0) ", 시장데이터 미적재로 제외된 종목 ${notLoaded}개" else ""
+            failures += "체결 정합 표본 부족(n=$n < $minSample$why) — 판단 불가로 실전 차단"
         } else if (m1 in BLOCKING || m3 in BLOCKING) {
             failures += "체결 정합 등급 미달(M1=${m1 ?: "None"}, M3=${m3 ?: "None"}) — 실전 차단"
         }

@@ -59,10 +59,10 @@ data class UniverseScoreParams(
  * asOf 는 호출자가 정한 직전 확정 영업일이어야 한다 — 여기서 '오늘'로 보정하지 않는다(미래참조 방지).
  * 가중치가 걸린 팩터가 전량 조회 실패면 예외로 리밸런싱을 건너뛴다(조용히 중립 처리하면 §47 사고 재현).
  * `requireCoverage`(엔진)면 더 엄격하게, 입력 커버리지 50% 미만에서 [com.quantfolio.factor.FactorCoverage] 가 `MarketDataNotLoaded` 를 던진다.
+ * 빈이 아니다 — 엔진 `LocalMarketData` 가 로컬 소스로 직접 만든다.
  */
-@Component
 class UniverseScores(
-    @Qualifier("local") private val snapshots: SnapshotSource,
+    private val snapshots: SnapshotSource,
     private val tech: TechIndicatorLoader,
     private val inputs: FactorInputs,
     private val prices: PriceHistory,

@@ -14,7 +14,6 @@ import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
-import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.metrics.PanicService
 import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.Panel
@@ -46,7 +45,6 @@ class BacktestRunner(
     private val dart: DartFinancials,
     private val sectorMaps: LocalSectorMap,
     private val mcap: McapUniverse,
-    private val daily: StockDailyStore,
     private val panic: PanicService,
     private val dividendFeed: DividendFeed,
     private val clock: Clock,
@@ -311,12 +309,15 @@ class BacktestRunner(
     companion object {
         private val REGIME_TICKER = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")
         private const val MAX_DIVIDEND_WARNINGS = 20
-        private const val CAP_LOOKBACK_DAYS = 10L
         private val BENCHMARK_TICKER = mapOf("KOSPI200" to "1028", "KOSPI" to "1001", "KOSDAQ" to "2001")
 
-        /** DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다. */
+        /**
+         * DSR 동질 시행 판별 키 — 정렬 종목 + universe_rule 의 sha256 앞 16자. 원본 Python 과 바이트 동일해야 이력이 이어진다.
+         * 2단계에서 생긴 `pool_size` 가 null 이면 뺀다 — 스키마 덤프가 모든 규칙에 넣어, 빼지 않으면 이전 시행과 지문이 갈린다.
+         */
         fun universeFingerprint(universe: List<String>, rule: Map<String, Any?>?): String {
-            val payload = pyJsonDumps(mapOf("universe" to universe.sorted(), "universe_rule" to (rule ?: emptyMap<String, Any?>())), sortKeys = true)
+            val r = rule.orEmpty().filterNot { (k, v) -> k == "pool_size" && v == null }
+            val payload = pyJsonDumps(mapOf("universe" to universe.sorted(), "universe_rule" to r), sortKeys = true)
             return MessageDigest.getInstance("SHA-256").digest(payload.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
         }
     }

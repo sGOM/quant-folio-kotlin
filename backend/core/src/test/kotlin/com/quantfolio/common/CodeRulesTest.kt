@@ -74,11 +74,16 @@ class CodeRulesTest {
         assertTrue(sqlHits.isEmpty(), "마이그레이션에서 차단 표시 해제 금지:\n${report(sqlHits)}")
     }
 
-    /** KRX MDC·네이버 차트 호스트는 main 어디에도 없어야 한다(MDC 약관상 자동 수집 금지·IP 차단 이력, 재유입 방지). Open API 호스트 data-dbg 는 허용. */
+    /** KRX MDC·네이버 호스트는 main 코드·설정 어디에도 없어야 한다(MDC 약관상 자동 수집 금지·IP 차단 이력, 재유입 방지). Open API 호스트 data-dbg 는 허용. */
     @Test
     fun `main sources contain no MDC or Naver hosts`() {
-        val hits = mainCodeLines().filter { (_, _, l) -> FORBIDDEN_HOST.containsMatchIn(l) }
-        assertTrue(hits.isEmpty(), "KRX MDC(data.krx.co.kr)·네이버(stock.naver.com) 호스트 금지 - 공식 Open API·로컬 저장소만:\n${report(hits)}")
+        val configs = Files.walk(backend).use { s ->
+            s.filter { it.extension in setOf("yml", "yaml", "properties") && "/src/main/resources/" in it.invariantSeparatorsPathString }.sorted().toList()
+        }
+        assertTrue(configs.isNotEmpty(), "main 설정 파일을 못 찾음")
+        val configLines = configs.flatMap { f -> f.readLines().mapIndexed { i, l -> Triple(backend.relativize(f).invariantSeparatorsPathString, i + 1, l) } }
+        val hits = (mainCodeLines() + configLines).filter { (_, _, l) -> FORBIDDEN_HOST.containsMatchIn(l) }
+        assertTrue(hits.isEmpty(), "KRX MDC(data.krx.co.kr)·네이버(naver.com) 호스트 금지 - 공식 Open API·로컬 저장소만:\n${report(hits)}")
     }
 
     /** 아래 전략 경로 규칙들이 빈 목록 위에서 조용히 통과하지 않게, 목록의 파일이 실제로 있는지 확인한다. */
@@ -185,8 +190,11 @@ class CodeRulesTest {
             ).map { unqualifiedSnapshotSources(lines(*it.toTypedArray())).size },
         )
         assertEquals(
-            listOf(true, true, true, false),
-            listOf("\"https://data.krx.co.kr/x\"", "\"https://fchart.stock.naver.com/c\"", "\"https://api.stock.naver.com/x\"", "\"https://data-dbg.krx.co.kr/svc\"")
+            listOf(true, true, true, true, false),
+            listOf(
+                "\"https://data.krx.co.kr/x\"", "\"https://fchart.stock.naver.com/c\"", "\"https://api.stock.naver.com/x\"",
+                "  url: https://finance.naver.com/item", "\"https://data-dbg.krx.co.kr/svc\"",
+            )
                 .map { FORBIDDEN_HOST.containsMatchIn(it) },
         )
         // catch-all 이 MDNL 을 삼키는가(위반 건수)
@@ -226,7 +234,7 @@ class CodeRulesTest {
             "SymbolCatalog.kt" to (1 to "KIS 마스터 REST 조회 - 로컬 DB 미접근"),
             "WorkerJobs.kt" to (2 to "withOutageAlert 는 알림 후 throw e 로 전부 재던짐 + 체결 정합 리포트(orders/fills DB 만)"),
         )
-        private val FORBIDDEN_HOST = Regex("""data\.krx\.co\.kr|stock\.naver\.com""")
+        private val FORBIDDEN_HOST = Regex("""data\.krx\.co\.kr|naver\.com""")
         private const val BLOCKED_COLUMN = "kis_balance_reconcile_blocked"
         private val BLOCKED_RELEASE = Regex("""kis_balance_reconcile_blocked\s*:?=\s*false""", RegexOption.IGNORE_CASE)
         private val SYSTEM_ZONE_DATE = Regex("""\b(LocalDate|LocalDateTime|LocalTime|ZonedDateTime|OffsetDateTime|YearMonth|Year)\.now\(\)|systemDefault""")

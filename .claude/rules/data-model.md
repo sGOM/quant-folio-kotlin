@@ -11,7 +11,7 @@ paths:
 | 덩어리 | 성격 | 접근 |
 |---|---|---|
 | 운영 | 사용자가 만들고 엔진이 채움 — users·strategies·backtests·orders·executions·positions·risk_limits·alerts·news·스냅샷 | JPA 엔티티(`domain/**`) |
-| 시장데이터 저장소 | 외부에서 받아 굳힌 과거 데이터 — price_ticks·stock_daily_snapshots·stock_period_stats·index_*·dart_financials·external_fetches | JdbcTemplate(엔티티 없음) |
+| 시장데이터 저장소 | 외부에서 받아 굳힌 과거 데이터 — price_ticks·stock_daily_snapshots·index_ohlcv·dart_financials·external_fetches(stock_period_stats·index_ohlcv_coverage 는 테이블만 남음) | JdbcTemplate(엔티티 없음) |
 
 저장소는 언제든 통째로 지우고 재적재할 수 있어야 하므로 운영 데이터가 거기 묶이면 안 된다.
 

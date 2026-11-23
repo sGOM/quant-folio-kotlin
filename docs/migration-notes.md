@@ -186,6 +186,10 @@ KRX Open API(`data-dbg.krx.co.kr/svc/apis`, 헤더 `AUTH_KEY`)를 2026-11-23 서
 - KIS WS 종료: 원본은 `async with websockets.connect()` 종료 시 closing handshake 를 close_timeout(기본 10초)까지 기다린 뒤 TCP 를 닫는다. Kotlin `KisSocket.close()` 는 close 프레임 전송과 서버 close 대기에 각 2초 상한(측정값 아님)을 두고, 그 뒤 `abort` 와 HttpClient `shutdownNow` 로 소켓을 닫는다. 인터럽트되면 대기 없이 즉시 닫는다. JDK HttpClient 는 핸드셰이크 응답 없이 끊기면 한 번 재시도해 시도당 TCP 연결을 2개 만든다(원본 websockets 는 재시도 없음 — 바꾸지 않음).
 - KIS 계좌번호·HTS ID: 원본은 환경변수(`KIS_ACCOUNT_NO`·`KIS_HTS_ID`)로 받았다. Kotlin 은 compose secret `kis_account_no`(`secrets/account_num`)·`kis_hts_id`(`secrets/hts_id.txt`)를 우선 읽고 환경변수는 로컬 실행용 폴백이다(2026-11-17 소유자 결정: 시크릿은 `secrets/` 한 곳에서만 관리).
 - 유니버스 소스(2단계): 원본의 `KOSPI200`·`KOSPI100`·`KRX300`(지수 구성종목) 소스를 폐지했다. 스키마는 `fixed`·`KOSPI_MCAP` 만 받고 `pool_size`(1~300, 기본 null=pick)를 추가했다. 기존 전략은 Flyway V11 이 소스값 기준으로 `KOSPI_MCAP` + `pool_size`(200/100/300)로 옮기고 `pick`·나머지는 그대로 둔다. 후보는 직전 거래일 시총 상위 `pool_size` 에서 모멘텀 상위 `pick` 으로 좁힌다(지수 구성종목과 다른 집합). 엔진의 `pit_fallback`(구성종목 없을 때 고정 universe 폴백) 경로와 `min_market_cap`(KOSPI_MCAP 에서는 원래도 무시) 입력 UI 는 없앴다.
+- `min_market_cap` 소실(2단계): V11 로 지수 소스(`KOSPI200`·`KOSPI100`·`KRX300`)에서 `KOSPI_MCAP` 으로 옮긴 전략은 원래 지수 경로가 적용하던 `min_market_cap`(시총 하한) 필터를 잃는다. 값은 설정에 남지만 `KOSPI_MCAP` 은 적용하지 않고 경고 로그만 남긴다(백테스트). 배포 후 해당 전략 수를 확인한다(계획 "배포 후 확인").
+- V12 안전장치(2단계): flow 가중치 > 0 인 전략이 있으면 V12 는 키를 지우지 않고 `RAISE EXCEPTION` 으로 마이그레이션을 실패시킨다(조용히 지우면 가중치 합이 1 에서 어긋난다). 원본에는 없는 동작이다.
+- 체결 정합 표본 부족 사유(2단계): 리포트 `sample.n_symbols_not_loaded` 에 종가 미적재(`MarketDataNotLoaded`)로 빠진 종목 수를 따로 세고, 실전 게이트의 표본 부족 사유에 0 보다 크면 "시장데이터 미적재로 제외된 종목 N개" 를 덧붙인다(차단은 그대로). 0 이면 원본 문구 그대로.
+- universe_fingerprint(2단계): 스키마 덤프가 모든 `universe_rule` 에 `"pool_size": null` 을 넣으므로 지문 계산 전에 null `pool_size` 만 뺀다 — 키가 없던 이전 시행과 지문이 같다(DSR 시행 이력 유지). 값이 있으면 그대로 포함.
 - flow 팩터 삭제(2단계): 원본의 투자자별 순매수 팩터(`factor_weights.flow`, `selection.flow_window`·`flow_denom`)를 지웠다. 공식 소스가 없고 쓰는 전략이 0개다. 스키마는 이제 팩터 키 7개(`momentum, value, lowvol, quality, growth, residual_momentum, pead`)만 받고, 합 검증 메시지에서도 flow 를 뺐다. V12 가 저장된 전략 설정에서 세 키를 제거한다. 원본 정답지의 flow 케이스(`strategy_config`·`factors` 일부)는 테스트 허용 목록으로 뺐다.
 
 ## 업종지수 적재 (공식 경로 2단계, Task 4)

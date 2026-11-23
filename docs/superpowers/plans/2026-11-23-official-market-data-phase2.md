@@ -251,3 +251,7 @@
 4. 호출 시간대 `external_fetches` 를 소스별로 보고, MDC·네이버 소스 기록이 없는지 확인한다.
 5. `compare_index.py` 로 남은 구간을 비교해 설계 문서 "B 의 대가" 절에 덧붙인다.
 6. `research/hypotheses.md` 의 리서치 설정에 `pool_size: 100` 을 명시한다(비공개, 커밋 안 함).
+7. V12 전에 flow 가중치 > 0 인 전략이 0개인지 확인한다(`select id from strategies where (config->'selection'->'factor_weights'->>'flow')::numeric > 0`). 있으면 V12 가 실패한다.
+8. `min_market_cap` 을 잃은 전략을 확인한다(`select id, name from strategies where config->'selection'->'universe_rule'->>'source' = 'KOSPI_MCAP' and coalesce(config->'selection'->'universe_rule'->>'min_market_cap', 'null') <> 'null'`). 있으면 사람에게 알린다.
+9. 업종지수 백필이 섹터 계산 시작일을 덮는지 확인한다: `select min(trade_date) from index_ohlcv where index_code like 'KOSPI:%'` ≤ 오늘−383일. 덜 채우면 섹터 6개월·52주 지표가 409 가 아니라 null 이다.
+10. 실측한 업종지수 이름 목록을 `docs/migration-notes.md` "공식 경로 실측" 절에 기록한다.

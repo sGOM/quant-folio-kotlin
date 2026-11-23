@@ -155,7 +155,7 @@ describe("summarizeConfig", () => {
     );
   });
 
-  it("rebalance: universe_rule 소스가 fixed 가 아니면 소스명을 표시한다(PIT)", () => {
+  it("rebalance: KOSPI_MCAP 이면 시총 상위 풀 크기를 표시한다(pool_size 없으면 pick)", () => {
     const cfg: RebalanceConfig = {
       type: "rebalance",
       universe: ["005930"],
@@ -163,7 +163,7 @@ describe("summarizeConfig", () => {
         method: "momentum",
         lookback: 120,
         top_n: 5,
-        universe_rule: { source: "KOSPI_MCAP" },
+        universe_rule: { source: "KOSPI_MCAP", pick: 40, pool_size: null },
       },
       weighting: "equal",
       cadence: "monthly",
@@ -178,7 +178,11 @@ describe("summarizeConfig", () => {
       tax: 0.002,
     };
     expect(summarizeConfig(cfg)).toBe(
-      "리밸런싱(포트폴리오) · KOSPI_MCAP · 모멘텀 상위 5 · 월간 리밸런싱",
+      "리밸런싱(포트폴리오) · 시총 상위 40 · 모멘텀 상위 5 · 월간 리밸런싱",
+    );
+    cfg.selection.universe_rule = { source: "KOSPI_MCAP", pick: 40, pool_size: 200 };
+    expect(summarizeConfig(cfg)).toBe(
+      "리밸런싱(포트폴리오) · 시총 상위 200 · 모멘텀 상위 5 · 월간 리밸런싱",
     );
   });
 });

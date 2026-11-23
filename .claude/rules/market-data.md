@@ -25,28 +25,25 @@ paths:
 **`MarketDataNotLoaded` 는 `DataSourceError` 가 아니다** — 외부 실패가 아니라 "로컬에 아직 없음"(`market/official/`). 전략 경로는 원격으로 내려가지 않고
 이를 던지고, 호출부는 삼키지 않는다(백테스트 409, 라이브 엔진은 주문 없이 멈춤+critical). `catch (Exception)` 이 이를 `null`·빈 값으로 바꾸는 게 가장 흔한 사고다.
 
-## 로컬 우선 4상태 (`StoreCache`)
+## 로컬 우선 4상태 (원장 `FetchLedger` — `DartFinancials`·`OfficialIngest`)
 
 확정 기록 있음 → 로컬 / 기록 없음·미확정 → 원격 1회 + 저장 + 원장 / 원격 실패 → 예외 전파 / 소스 미설정 → 진입 전 처리.
 
 - **0행은 절대 확정 금지.** "진짜 무자료"와 "스키마 변경으로 값 잃음"을 구분할 수 없고, 굳으면 수동 삭제 전까지 영구 0행(§47·§49).
   유일한 예외: KRX Open API 적재(`OfficialIngest`)의 휴장일 — 같은 날 지수·주식 5개 호출이 모두 0행이고 그날이 7일 이상 지났을 때만 `final` 로 굳힌다(7일 이내 0행은 미확정, 재조회).
-- 요청 컬럼 중 **전부 null 인 컬럼**이 있으면 확정 보류(포맷 변경으로 변환이 통째로 실패한 신호).
-- 확정은 **KST 전날까지**(`StoreCache.lastFinalDate()`). 당일분은 장중 값이 바뀐다.
-- 범위 조회(`cachedRange`)는 **개별** 확보 구간이 요청을 덮을 때만 로컬. 구간 합집합으로 판정하지 않는다.
-  실패 예외엔 로컬 확보 구간을 덧붙이되, 기간을 대신 줄이지 않는다.
+- 새 적재 경로를 만들면: 요청 컬럼 중 **전부 null 인 컬럼**이 있으면 확정 보류(포맷 변경으로 변환이 통째로 실패한 신호, 이를 하던 `StoreCache` 는 삭제됨).
 
 ## 저장소 테이블
 
 - 리포지토리는 테이블별 타입 행(`StockDaily` 등, 숫자 `Double?`)을 주고받는다. upsert 는 모든 컬럼
   `COALESCE(EXCLUDED, 기존)` — 들어온 null 은 기존값 보존(여러 소스가 한 행을 나눠 채운다).
 - 저장 시 같은 종목 중복은 마지막 값, NaN/±Inf → null.
-- 시장 혼재 테이블(`stock_daily_snapshots`·`stock_period_stats`)의 단일시장 조회는 반드시 `markets` 필터.
+- 시장 혼재 테이블(`stock_daily_snapshots`)의 단일시장 조회는 반드시 `markets` 필터. `stock_period_stats`·`index_ohlcv_coverage` 는 테이블만 남고 코드가 쓰지 않는다.
 - 운영 테이블과 FK 없음 — 저장소는 통째로 지우고 재적재할 수 있어야 한다.
 
 ## 공식 경로 (`market/official/`·`market/krxopen/`) — 전략 경로의 단일 출처
 
-시장데이터는 전부 로컬 테이블만 읽는다(`PriceHistory`=`LocalPriceHistory`, `SnapshotSource`=`LocalSnapshots`, 둘 다 `market/official/`). `CodeRulesTest` 가 main 소스의 `data.krx.co.kr`·`stock.naver.com` 호스트 문자열을 금지한다.
+시장데이터는 전부 로컬 테이블만 읽는다(`PriceHistory`=`LocalPriceHistory`, `SnapshotSource`=`LocalSnapshots`, 둘 다 `market/official/`). `CodeRulesTest` 가 main 소스·설정(yml·properties)의 `data.krx.co.kr`·`naver.com` 호스트 문자열을 금지한다.
 `SnapshotSource` 주입은 `@Qualifier("local")`. 새 전략 경로 파일은 `CodeRulesTest` 의 목록에 추가한다.
 
 - **업종지수 키:** `index_ohlcv.index_code` — `코스피`·`코스피 200`·`코스닥` 은 `1001`·`1028`·`2001`, 나머지 KOSPI/KOSDAQ 지수는 `KOSPI:<이름>`·`KOSDAQ:<이름>`(KRX 계열은 미저장). 접두어 키만 섹터 화면 후보이고, 첫 행 이전 비결측 취급도 접두어 키만.
@@ -74,4 +71,5 @@ paths:
 - KRX Open API(AUTH_KEY)는 지수 구성종목·업종 분류·PER/PBR·투자자별 순매수를 주지 않는다(2026-11-17 조사). 전략 경로는 PER/PBR 을 `Valuation` 으로 로컬 계산하고 구성종목은 `KOSPI_MCAP`, 업종은 KIS 마스터로 대체했다. 수급·공시 달력은 대체가 없다(`strategy-config.md`).
 - KRX MDC 는 약관(제10조 2호)상 자동 수집 금지다. 2026-11-22 PIT 백테스트 2회의 대량 조회로 **IP 1일 차단**(KDM 이용 제한) — 차단 중엔 Open API 도 401 이다. KRX MDC 를 대량 조회하지 말 것(코드는 삭제됨).
 - Open API 가 유효한 키로도 `401 Unauthorized API Call` 이면 서비스별 이용신청 미승인이다(인증키 승인과 별개, 2026-11-22). 신청은 포털 `openapi.krx.co.kr`, 호출은 데이터 호스트 `data-dbg.krx.co.kr` — 다른 주소다. IP 차단 중에도 같은 401 — 둘 다 반복 호출하지 말고 사람에게 확인.
+- 업종지수는 indexes-only 백필로 섹터 계산 시작일(기준일−383일)까지 채워야 한다 — 첫 행 이전은 결측이 아니라서 덜 채우면 409 대신 짧은 지표가 나온다.
 - data.go.kr 배당 API: 구 경로 `/service/GetStocDiviInfoService/getDiviInfo` 는 code 12(서비스 없음), V2 만 동작. 필터 없이 전체 이력(약 7만 행)이 한 번에 오고 `basDt` 를 주면 0건. 공시일 필드가 없다. 개발계정 일 10,000 건.

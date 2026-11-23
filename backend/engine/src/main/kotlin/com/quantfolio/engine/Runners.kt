@@ -16,7 +16,6 @@ import com.quantfolio.market.MarketCalendar
 import com.quantfolio.market.official.LocalTradingDays
 import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.official.McapUniverse
-import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.MetricsCommon
@@ -75,7 +74,6 @@ data class RunnerContext(
     val market: LocalMarketData,
     val positions: PositionRepository,
     val mcap: McapUniverse,
-    val daily: StockDailyStore,
     val days: LocalTradingDays,
     // 미실측 - KRX Open API 공개 시각은 Task 1 실측으로 확정한다. 이 시각(KST) 전에는 직전 거래일(T-1) 미적재를 경보 없이 기다린다.
     @Value("\${quantfolio.engine.dataReadyBy:10:30}") val dataReadyBy: String,
