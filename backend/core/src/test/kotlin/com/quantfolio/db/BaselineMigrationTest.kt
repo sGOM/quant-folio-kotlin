@@ -194,4 +194,33 @@ class BaselineMigrationTest {
         flyway(empty).migrate()
         assertEquals(listOf(false), query(empty, "select count(*) > 0 from orders") { it.getBoolean(1) })
     }
+
+    /** V11 은 지수 소스 전략을 KOSPI_MCAP + pool_size 로 옮기고 pick·나머지 설정은 그대로 둔다. fixed 는 건드리지 않는다. */
+    @Test
+    fun v11MovesIndexSourcesToMcapWithPoolSize() {
+        val url = freshDb("bl_v11")
+        flyway(url, target = "10").migrate()
+        fun cfg(source: String, pick: Int) =
+            """{"type":"rebalance","universe":[],"selection":{"method":"momentum","top_n":5,"universe_rule":{"type":"momentum","source":"$source","lookback":120,"pick":$pick,"min_market_cap":null}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status)
+               select id, n, c::jsonb, 'draft' from users, (values
+                 ('k200', '${cfg("KOSPI200", 40)}'), ('k100', '${cfg("KOSPI100", 100)}'),
+                 ('krx300', '${cfg("KRX300", 20)}'), ('fixed', '${cfg("fixed", 20)}')) v(n, c)""",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'plain', '{"type":"sma_crossover","symbol":"005930"}'::jsonb, 'draft' from users""",
+        )
+
+        flyway(url).migrate()
+
+        fun field(name: String, key: String) = query(url, "select config->'selection'->'universe_rule'->>'$key' from strategies where name = '$name'") { it.getString(1) }.single()
+        assertEquals(listOf("KOSPI_MCAP", "200", "40"), listOf("source", "pool_size", "pick").map { field("k200", it) })
+        assertEquals(listOf("KOSPI_MCAP", "100", "100"), listOf("source", "pool_size", "pick").map { field("k100", it) })
+        assertEquals(listOf("KOSPI_MCAP", "300", "20"), listOf("source", "pool_size", "pick").map { field("krx300", it) })
+        assertEquals(listOf("fixed", null, "20"), listOf("source", "pool_size", "pick").map { field("fixed", it) })
+        assertEquals("120", field("k200", "lookback"))
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
+    }
 }

@@ -33,7 +33,6 @@ import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.IndexBar
 import com.quantfolio.market.store.StockPeriod
 import com.quantfolio.market.store.StockDaily
-import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.test.ContainersConfig
 import org.junit.jupiter.api.BeforeEach
@@ -73,7 +72,6 @@ class RunnersTest(
     @Autowired private val ticks: PriceTickStore,
     @Autowired private val redis: StringRedisTemplate,
     @Autowired private val reports: com.quantfolio.backtest.FillQualityReport,
-    @Autowired private val constituents: IndexConstituentStore,
 ) {
     @MockitoBean lateinit var brokers: BrokerCredentials
     @MockitoBean lateinit var calendar: MarketCalendar
@@ -366,29 +364,6 @@ class RunnersTest(
         rebal(sid).tickOnce()
         assertEquals(1, alerts.findAll().count { it.code == "factor_outage" && it.strategyId == sid })
         assertTrue(ordersOf(sid).isEmpty())
-    }
-
-    /** 지수 소스는 로컬 index_constituents(월초 기준일)만 읽는다. 적재가 없으면 고정 universe 폴백 + 1회 경보(원격 조회 없음). */
-    @Test
-    fun pitUniverseReadsLocalConstituentsAndAlertsOnceOnFallback() {
-        val members = (1..2).map { sym() }
-        val fixed = listOf(sym())
-        (members + fixed).forEach { c -> seed(c, 30) { i -> 1000.0 + i } }
-        val monthStart = ctx.common.lastBusinessDay().withDayOfMonth(1)
-        constituents.delete("KOSPI100", monthStart)
-        constituents.delete("KRX300", monthStart)
-        constituents.write("KOSPI100", monthStart, members)
-        val (_, sid) = strategy(rebalCfg(fixed, mapOf("selection" to mapOf("method" to "all", "universe_rule" to mapOf("source" to "KOSPI100")))))
-        rebal(sid).tickOnce()
-        assertEquals(members.toSet(), ordersOf(sid).map { it.symbol }.toSet()) // 고정 universe 가 아니라 그 시점 구성종목
-        org.mockito.Mockito.verify(krx, org.mockito.Mockito.never()).indexMembers(anyDate(), anyString())
-
-        val (_, sid2) = strategy(rebalCfg(fixed, mapOf("selection" to mapOf("method" to "all", "universe_rule" to mapOf("source" to "KRX300")))))
-        val r = rebal(sid2)
-        r.tickOnce()
-        r.rebalanceOnce(java.time.ZonedDateTime.now(), riskOff = false, barTag = "again")
-        assertEquals(fixed.toSet(), ordersOf(sid2).map { it.symbol }.toSet())
-        assertEquals(1, alerts.findAll().count { it.code == "pit_fallback" && it.strategyId == sid2 })
     }
 
     private fun mcapCfg(fixed: List<String>, extra: Map<String, Any?> = emptyMap()) =

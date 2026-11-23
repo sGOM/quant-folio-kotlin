@@ -122,11 +122,16 @@ object StrategySchemas {
         "UniverseRule",
         listOf(
             F("type", Lit(listOf("momentum")), "momentum"),
-            F("source", Lit(listOf("fixed", "KOSPI200", "KOSPI100", "KRX300", "KOSPI_MCAP")), "fixed"),
+            F("source", Lit(listOf("fixed", "KOSPI_MCAP")), "fixed"),
             F("lookback", IntT, 120, ge = 20, le = 480),
             F("pick", IntT, 20, ge = 1, le = 100),
+            F("pool_size", IntT, null, nullable = true, ge = 1, le = 300),
             F("min_market_cap", IntT, null, nullable = true, ge = 0),
         ),
+        listOf { m ->
+            val pool = m["pool_size"] as Int?
+            if (pool != null && (m["pick"] as Int) > pool) throw ValueError("universe_rule.pick 은 pool_size 이하여야 합니다.")
+        },
     )
 
     private val VOL_GATE = Model(

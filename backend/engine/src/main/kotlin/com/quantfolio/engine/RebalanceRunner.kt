@@ -43,7 +43,6 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     override val pollIntervalSec = 60L
 
     private val json = JsonMapper.builder().build()
-    private var pitFallbackActive = false
     private var panicAlerted = false
     private var regimeGapAlerted = false // 경로별 에피소드 플래그 — 각자 자기 경로가 정상 반환하면 초기화
     private var planGapAlerted = false
@@ -263,7 +262,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     /** (후보풀, 목표비중). 위험회피(청산)는 이 계획을 거치지 않는다 — 시장데이터 없이도 보유를 정리해야 하므로. */
     private fun computePlan(asOf: LocalDate): Pair<List<String>, Map<String, Double>> {
-        val pool = resolveUniverse(asOf)
+        val pool = resolveUniverse()
         log.info("전략 {} 후보풀 확보: {}종목", strategyId, pool.size)
         val method = selection["method"]
         val weighting = Cfg.get(cfg, "weighting", "equal")
@@ -401,29 +400,17 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     }
 
     /**
-     * 유니버스. KOSPI_MCAP 은 로컬 시총 상위(미적재면 [MarketDataNotLoaded] — 폴백 없음, 호출자가 정지·경보).
-     * 지수 소스는 로컬 index_constituents(월초 기준일)만 읽고, 비어 있으면 config.universe 폴백 + 1회 경보(재발은 해소 후).
+     * 유니버스. KOSPI_MCAP 은 로컬 시총 상위 (pool_size ?: pick)(미적재면 [MarketDataNotLoaded] — 폴백 없음, 호출자가 정지·경보).
+     * pick 으로 좁히는 모멘텀 단계는 [computePlan] 의 `Rebalance.dynamicUniverse` 가 한다.
      */
-    private fun resolveUniverse(asOf: LocalDate): List<String> {
-        val source = Cfg.get(rule, "source", "fixed").toString()
-        @Suppress("UNCHECKED_CAST")
-        val fixed = (cfg["universe"] as? List<String>).orEmpty()
-        if (source == "fixed") return fixed
+    private fun resolveUniverse(): List<String> {
+        if (Cfg.get(rule, "source", "fixed").toString() == "fixed") {
+            @Suppress("UNCHECKED_CAST")
+            return (cfg["universe"] as? List<String>).orEmpty()
+        }
         // 결정일은 오늘(KST) — members 가 직전 거래일 시총을 읽는다. asOf(전 영업일)를 넘기면 하루 더 묵은 데이터로 매매한다.
-        if (source == "KOSPI_MCAP") return ctx.mcap.members(MarketClock.todayKst(ctx.clock), Cfg.int(Cfg.get(rule, "pick", 20)))
-        var members = ctx.constituents.read(source, asOf.withDayOfMonth(1)) // 백테스트와 같은 월초 기준일
-        if (members.isEmpty()) {
-            log.warn("전략 {} PIT 유니버스({}) 로컬 적재 없음 — config.universe 폴백", strategyId, source)
-            alertPitFallback(source, "로컬 구성종목 없음")
-            return fixed
-        }
-        pitFallbackActive = false
-        rule["min_market_cap"]?.takeIf { Cfg.truthy(it) }?.let { min ->
-            val caps = ctx.daily.latestUpTo(members, asOf, 10).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
-            if (caps.isEmpty()) throw MarketDataNotLoaded("min_market_cap", "stock_daily", listOf(asOf to asOf))
-            members = members.filter { (caps[it] ?: 0L) >= Cfg.num(min).toLong() * 100_000_000L }
-        }
-        return members
+        val size = rule["pool_size"]?.let { Cfg.int(it) } ?: Cfg.int(Cfg.get(rule, "pick", 20))
+        return ctx.mcap.members(MarketClock.todayKst(ctx.clock), size)
     }
 
     /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 해당 경로(국면·계획)가 다시 정상 반환하면 초기화. */
@@ -436,12 +423,6 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         if (if (regime) regimeGapAlerted else planGapAlerted) return
         if (regime) regimeGapAlerted = true else planGapAlerted = true
         ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "$what: ${e.message}. 데이터 적재 후 다음 점검에서 재시도합니다.", "market_data_not_loaded")
-    }
-
-    private fun alertPitFallback(source: String, cause: String) {
-        if (pitFallbackActive) return
-        pitFallbackActive = true
-        ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "PIT 유니버스($source) $cause — config.universe 고정 폴백으로 전환. 생존편향 검증 원칙상 지수 구성 이탈은 즉시 점검이 필요합니다.", "pit_fallback")
     }
 
     /** panic_overlay 는 백테스트에만 구현 — 실거래에서 재현할 수 없으니 매매를 중단한다(보유 유지, 킬스위치는 계속). 1회 경보. */

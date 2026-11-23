@@ -13,7 +13,6 @@ import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.Bar
-import com.quantfolio.market.store.IndexConstituentStore
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.market.store.StockDailyStore
 import com.quantfolio.metrics.PanicService
@@ -47,7 +46,6 @@ class BacktestRunner(
     private val dart: DartFinancials,
     private val sectorMaps: LocalSectorMap,
     private val mcap: McapUniverse,
-    private val constituents: IndexConstituentStore,
     private val daily: StockDailyStore,
     private val panic: PanicService,
     private val dividendFeed: DividendFeed,
@@ -211,50 +209,21 @@ class BacktestRunner(
         null
     }
 
+    /** universe_rule.source 가 KOSPI_MCAP 이면 (합집합, 결정일별 후보풀). "fixed" 면 (null, null). */
+    private fun pitPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> =
+        if (Cfg.get(rule, "source", "fixed").toString() == "fixed") null to null else mcapPool(rule, start, end)
+
     /**
-     * universe_rule.source 가 지수명이면 월별 실제 구성종목(PIT)으로 (합집합, 리밸런싱일별 후보풀). "fixed" 면 (null, null).
-     * 지수 소스는 index_constituents 로컬 캐시만 읽고(없으면 MarketDataNotLoaded), KOSPI_MCAP 은 시총 상위 pick 종목이다.
+     * KOSPI_MCAP: 결정일마다 직전 거래일 시총 상위 (pool_size ?: pick)(월 단위 아님). 그 위에 모멘텀 pick 좁히기는
+     * [PortfolioBacktest] 가 적용한다. min_market_cap 은 이 소스에서 적용하지 않는다.
      */
-    private fun pitPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> {
-        val source = Cfg.get(rule, "source", "fixed").toString()
-        if (source == "fixed") return null to null
-        if (source == "KOSPI_MCAP") return mcapPool(rule, start, end)
-        val minCapWon = rule?.get("min_market_cap")?.takeIf { Cfg.truthy(it) }?.let { Cfg.num(it).toLong() * 100_000_000L } ?: 0L
-        val byMonth = LinkedHashMap<Pair<Int, Int>, List<String>>()
-        var d = start.withDayOfMonth(1)
-        while (!d.isAfter(end.withDayOfMonth(1))) {
-            var members = localMembers(source, d)
-            if (minCapWon > 0 && members.isNotEmpty()) {
-                val caps = localCaps(members, d)
-                members = members.filter { (caps[it] ?: 0L) >= minCapWon }
-            }
-            byMonth[d.year to d.monthValue] = members
-            d = d.plusMonths(1)
-        }
-        val union = byMonth.values.flatten().toSortedSet().toList()
-        if (union.isEmpty()) {
-            log.error("PIT 후보풀이 비었다(source={}, {}~{}, {}개월 전부 0종목) — 로컬 index_constituents 적재 확인. 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", source, start, end, byMonth.size)
-        }
-        return union to { day -> byMonth[day.year to day.monthValue].orEmpty() }
-    }
-
-    /** 월 시작일 [day] 직전(10일 이내) 마지막 스냅샷의 시총(미래참조 방지: 당일 제외). 시총을 한 종목도 못 구하면 [MarketDataNotLoaded]. */
-    private fun localCaps(members: List<String>, day: LocalDate): Map<String, Long> {
-        val caps = daily.latestUpTo(members, day.minusDays(1), CAP_LOOKBACK_DAYS).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
-        if (caps.isEmpty()) throw MarketDataNotLoaded("stock_daily", "min_market_cap", listOf(day to day))
-        return caps
-    }
-
-    /** KOSPI_MCAP: 결정일마다 직전 거래일 시총 상위 pick(월 단위 아님). min_market_cap 은 이 소스에서 적용하지 않는다. */
     private fun mcapPool(rule: Map<String, Any?>?, start: LocalDate, end: LocalDate): Pair<List<String>?, PoolProvider?> {
         if (Cfg.truthy(rule?.get("min_market_cap"))) log.warn("KOSPI_MCAP 소스는 min_market_cap 을 적용하지 않는다(무시됨).")
-        val pool = mcap.pool(start, end, (rule?.get("pick") as? Number)?.toInt() ?: 20)
+        val size = (rule?.get("pool_size") as? Number)?.toInt() ?: (rule?.get("pick") as? Number)?.toInt() ?: 20
+        val pool = mcap.pool(start, end, size)
         if (pool.union.isEmpty()) log.error("KOSPI_MCAP 후보풀이 비었다({}~{}) — 이 상태로 만든 백테스트 결과는 신뢰할 수 없다.", start, end)
         return pool.union to pool.members
     }
-
-    private fun localMembers(index: String, day: LocalDate): List<String> =
-        constituents.read(index, day).ifEmpty { throw MarketDataNotLoaded("index_constituents", "$index $day", listOf(day to day)) }
 
     /** 1단계 공식 경로에 입력이 없는 팩터(flow: 투자자별 순매수, pead: 공시 달력)는 가중치를 주면 즉시 거절한다. */
     private fun rejectUnsupportedFactors(selection: Map<String, Any?>) {

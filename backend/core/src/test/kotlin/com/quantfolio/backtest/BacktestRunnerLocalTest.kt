@@ -85,7 +85,7 @@ class BacktestRunnerLocalTest(
     }
     private val snaps = LocalSnapshots(daily, indexes, days, Valuation(daily, dart, dartStore, dividends, ledger, ticks, days))
     private val runner = BacktestRunner(
-        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), constituents, daily, panic, dividendFeed, clock,
+        LocalOhlcvCoverage(ticks, daily, days), ticks, snaps, dart, LocalSectorMap(sectors), McapUniverse(daily, days), daily, panic, dividendFeed, clock,
     )
 
     private val symbols = listOf("L10001", "L10002", "L10003", "L10004", "L10005")
@@ -138,6 +138,34 @@ class BacktestRunnerLocalTest(
         val result = runner.run(config(mapOf("momentum" to 1.0, "value" to 0.0, "lowvol" to 0.0)), start, end)
         assertNotNull(result["total_return"])
         assertNoRemoteCalls()
+    }
+
+    /** 시총 순위를 모멘텀 순위와 반대로 둔다(L10001 이 시총 1위, L10005 가 모멘텀 1위) — 풀 크기가 매수 종목을 바꾸게. */
+    private fun capsInverse() = tradingDays.forEachIndexed { i, d ->
+        daily.write(d, symbols.mapIndexed { s, sym -> StockDaily(sym, market = "KOSPI", close = price(s, i), marketCap = 1_000_000_000L * (5 - s), stockKind = OfficialIngest.COMMON_STOCK) })
+    }
+
+    private fun boughtSymbols(rule: Map<String, Any?>): Set<Any?> {
+        val cfg = config(mapOf("momentum" to 1.0, "value" to 0.0, "lowvol" to 0.0)).let { it + ("selection" to (it["selection"] as Map<*, *> + ("universe_rule" to rule))) }
+        @Suppress("UNCHECKED_CAST")
+        return (runner.run(cfg, start, end)["trades"] as List<Map<String, Any?>>).filter { it["side"] == "buy" }.map { it["symbol"] }.toSet()
+    }
+
+    @Test
+    fun `pool size 200 with pick 40 narrows the mcap pool by momentum`() {
+        capsInverse()
+        // 시총 상위 4(L10001~L10004) 중 모멘텀 상위만 산다: 모멘텀 1위 L10004 는 있고, 시총 5위(풀 밖)인 L10005 는 없다.
+        // pool_size 를 무시하면 풀이 시총 상위 pick(2)=L10001·L10002 뿐이라 L10004 가 없다.
+        val bought = boughtSymbols(mapOf("source" to "KOSPI_MCAP", "pool_size" to 4, "pick" to 2))
+        assertTrue("L10004" in bought && "L10005" !in bought, bought.toString())
+    }
+
+    @Test
+    fun `pool size falls back to pick`() {
+        capsInverse()
+        // pool_size 없음 -> 풀 = 시총 상위 pick(3) = L10001~L10003. 그 밖(L10004·L10005)은 사지 않는다.
+        val bought = boughtSymbols(mapOf("source" to "KOSPI_MCAP", "pick" to 3))
+        assertTrue(bought.isNotEmpty() && bought.all { it in setOf("L10001", "L10002", "L10003") }, bought.toString())
     }
 
     @Test

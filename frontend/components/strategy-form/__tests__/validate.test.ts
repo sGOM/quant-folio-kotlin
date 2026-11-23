@@ -68,7 +68,7 @@ describe("validateStrategyForm — 리밸런싱", () => {
 
   it("PIT 소스면 universe 를 비워도 된다", () => {
     const cfg = rebal({ universe: [] });
-    cfg.selection = { ...cfg.selection, universe_rule: { source: "KOSPI200" } };
+    cfg.selection = { ...cfg.selection, universe_rule: { source: "KOSPI_MCAP" } };
     expect(validateStrategyForm("s", cfg)).toBeNull();
   });
 

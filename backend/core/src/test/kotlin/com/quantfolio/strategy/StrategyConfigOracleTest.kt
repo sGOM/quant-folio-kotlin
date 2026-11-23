@@ -13,6 +13,8 @@ class StrategyConfigOracleTest {
     private val json = JsonMapper.builder().build()
     /** 원본 스키마에 없는 Kotlin 전용 필드(원본 정답지엔 없다). 대조에서만 뺀다 — 값은 PortfolioDividendTest 가 검증. */
     private val KOTLIN_ADDED = setOf("dividend_tax")
+    /** 정답지(원본)가 쓰는 지수 소스(KOSPI200 등)는 2단계에서 폐지했다 — 원본과 달라지는 의도적 차이. 정답지 JSON 은 고치지 않는다. */
+    private val REMOVED_INDEX_SOURCE_CASES = setOf("rebalance_pit_empty_universe") // 2단계: 지수 소스 폐지(migration-notes)
     private val cases = Oracle.load("strategy_config").get("cases")
 
     /** 숫자는 값으로 비교(pydantic 기본값 int 10000000 == 1.0E7), 나머지는 구조 그대로. */
@@ -26,6 +28,7 @@ class StrategyConfigOracleTest {
     @TestFactory
     fun matchesPydantic(): List<DynamicTest> = (0 until cases.size()).map { i ->
         val c = cases.get(i)
+        if (c.get("name").asString() in REMOVED_INDEX_SOURCE_CASES) return@map DynamicTest.dynamicTest("${c.get("name").asString()} (skipped)") {}
         DynamicTest.dynamicTest(c.get("name").asString()) {
             val input = json.convertValue<Map<String, Any?>>(c.get("input"))
             val result = runCatching { StrategyConfigParser.parse(input) }

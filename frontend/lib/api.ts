@@ -337,17 +337,19 @@ export interface RebalanceSelection {
 /**
  * 후보풀(universe) 소스 규칙.
  * - source="fixed"(기본): 아래 universe 목록을 고정 후보풀로 사용.
- * - source=지수명: 각 리밸런싱 시점의 실제 지수 구성종목(PIT)을 후보풀로 사용 → 생존편향 제거.
+ * - source="KOSPI_MCAP": 각 리밸런싱 직전 거래일 시가총액 상위 pool_size(보통주)를 후보풀로 사용 → 생존편향 제거.
  *   type 을 지정하면 그 후보풀에서 상대강도 상위 pick 종목만 추려 선정에 넘긴다.
  */
 export interface UniverseRule {
-  source: "fixed" | "KOSPI200" | "KOSPI100" | "KRX300";
+  source: "fixed" | "KOSPI_MCAP";
   /** 동적 축소 방식. "momentum"=상대강도. 미설정이면 축소 없이 전체 구성종목 사용. */
   type?: "momentum";
   /** 상대강도 측정 봉 수. */
   lookback?: number;
   /** 상대강도 상위 몇 종목을 후보로 남길지. */
   pick?: number;
+  /** 시총 상위 후보 풀 크기(1~300). 미설정이면 pick. 풀에서 상대강도 상위 pick 만 남긴다. */
+  pool_size?: number;
   /** 유동성 필터: 시가총액(억 원) 하한. 미만 종목을 후보풀에서 제외. 미설정이면 필터 없음. */
   min_market_cap?: number | null;
 }

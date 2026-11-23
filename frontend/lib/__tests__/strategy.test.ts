@@ -163,7 +163,7 @@ describe("summarizeConfig", () => {
         method: "momentum",
         lookback: 120,
         top_n: 5,
-        universe_rule: { source: "KOSPI200" },
+        universe_rule: { source: "KOSPI_MCAP" },
       },
       weighting: "equal",
       cadence: "monthly",
@@ -178,7 +178,7 @@ describe("summarizeConfig", () => {
       tax: 0.002,
     };
     expect(summarizeConfig(cfg)).toBe(
-      "리밸런싱(포트폴리오) · KOSPI200 · 모멘텀 상위 5 · 월간 리밸런싱",
+      "리밸런싱(포트폴리오) · KOSPI_MCAP · 모멘텀 상위 5 · 월간 리밸런싱",
     );
   });
 });
