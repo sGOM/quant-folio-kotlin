@@ -245,13 +245,14 @@
 
 ## 배포 후 확인 (qf-paper, 백필·검증 3종 완료 뒤 — 사람이 승인)
 
+0. **재빌드 전에** 확인한다 — V11·V12 는 재빌드·기동 때 적용된다.
+   - flow 가중치 > 0 인 전략이 0개인지(`select id from strategies where case when jsonb_typeof(config->'selection'->'factor_weights'->'flow')='number' then (config->'selection'->'factor_weights'->>'flow')::numeric > 0 end`). 있으면 V12 가 실패해 web 이 뜨지 않는다.
+   - V11 로 `min_market_cap` 을 잃을 전략(`select id, name, config->'selection'->'universe_rule'->>'min_market_cap' from strategies where config->'selection'->'universe_rule'->>'source' in ('KOSPI200','KOSPI100','KRX300') and coalesce(config->'selection'->'universe_rule'->>'min_market_cap','null') <> 'null'`). 있으면 사람에게 알린다.
 1. 이미지 재빌드·기동한다. Flyway V11~V13 적용을 확인한다(`select version from flyway_schema_history order by installed_rank desc limit 3`).
 2. 업종지수 백필을 실행한다. 범위는 오늘−400일 ~ 오늘이고 설정은 `quantfolio.backfill.indexes-only=true`, 예산 1,000이다.
 3. 화면 4종(`/api/metrics/stocks`·`/sectors`·`/api/screener/turnaround`·`/api/recommend/mcap200`)이 200을 내는지 확인한다.
 4. 호출 시간대 `external_fetches` 를 소스별로 보고, MDC·네이버 소스 기록이 없는지 확인한다.
 5. `compare_index.py` 로 남은 구간을 비교해 설계 문서 "B 의 대가" 절에 덧붙인다.
 6. `research/hypotheses.md` 의 리서치 설정에 `pool_size: 100` 을 명시한다(비공개, 커밋 안 함).
-7. V12 전에 flow 가중치 > 0 인 전략이 0개인지 확인한다(`select id from strategies where (config->'selection'->'factor_weights'->>'flow')::numeric > 0`). 있으면 V12 가 실패한다.
-8. `min_market_cap` 을 잃은 전략을 확인한다(`select id, name from strategies where config->'selection'->'universe_rule'->>'source' = 'KOSPI_MCAP' and coalesce(config->'selection'->'universe_rule'->>'min_market_cap', 'null') <> 'null'`). 있으면 사람에게 알린다.
-9. 업종지수 백필이 섹터 계산 시작일을 덮는지 확인한다: `select min(trade_date) from index_ohlcv where index_code like 'KOSPI:%'` ≤ 오늘−383일. 덜 채우면 섹터 6개월·52주 지표가 409 가 아니라 null 이다.
-10. 실측한 업종지수 이름 목록을 `docs/migration-notes.md` "공식 경로 실측" 절에 기록한다.
+7. 업종지수 백필이 섹터 계산 시작일을 덮는지 확인한다: `select min(trade_date) from index_ohlcv where index_code like 'KOSPI:%'` ≤ 오늘−383일. 덜 채우면 섹터 6개월·52주 지표가 409 가 아니라 null 이다.
+8. 실측한 업종지수 이름 목록을 `docs/migration-notes.md` "공식 경로 실측" 절에 기록한다.

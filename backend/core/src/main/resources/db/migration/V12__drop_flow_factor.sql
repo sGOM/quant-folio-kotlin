@@ -4,8 +4,9 @@ DO $$
 DECLARE ids text;
 BEGIN
     SELECT string_agg(id::text, ',' ORDER BY id) INTO ids FROM strategies
-    WHERE jsonb_typeof(config->'selection'->'factor_weights'->'flow') = 'number'
-      AND (config->'selection'->'factor_weights'->>'flow')::numeric > 0;
+    -- CASE 로 형 검사를 먼저 강제한다(AND 는 평가 순서가 보장되지 않아 문자열 값에서 캐스트 오류가 날 수 있다).
+    WHERE CASE WHEN jsonb_typeof(config->'selection'->'factor_weights'->'flow') = 'number'
+               THEN (config->'selection'->'factor_weights'->>'flow')::numeric > 0 END;
     IF ids IS NOT NULL THEN
         RAISE EXCEPTION 'V12: flow 가중치 > 0 인 전략이 있다(id %) — 가중치를 다른 팩터로 옮긴 뒤 다시 배포', ids;
     END IF;
