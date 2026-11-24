@@ -121,6 +121,15 @@ class McapUniverseTest(
     }
 
     @Test
+    fun `pool carries stock kind from a base-info day before the range`() {
+        seed3(d0, 30, 20, 10, kind = true) // 주권 종류는 월초(구간 앞)에만 있다
+        seed3(d1, 10, 20, 30)
+        seed3(d2, 10, 20, 30)
+        val pool = universe.pool(d2, days[3], 1) // 첫 기준일 d1 — 종류 없음, d0 에서 이월돼야 한다
+        assertEquals(listOf("000003"), pool.members(d2))
+    }
+
+    @Test
     fun `pool union covers every day's members in range`() {
         seed3(d0, 30, 20, 10, kind = true)
         seed3(d1, 10, 20, 30)

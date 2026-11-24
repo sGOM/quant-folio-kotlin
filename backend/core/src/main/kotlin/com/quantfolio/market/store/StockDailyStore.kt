@@ -154,13 +154,14 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
         mapOf("day" to day, "market" to market),
     ) { rs, _ -> CapKind(rs.getString("symbol"), rs.getLong("market_cap"), rs.getString("stock_kind")) }
 
-    /** [from, to] 의 [market] 시총 행들과 각 행 날짜 기준 종목별 최신 주권 종류(이월). 구간 앞의 기본정보 적재일도 이월에 쓴다. */
+    /** [from, to] 의 [market] 시총 행들과 각 행 날짜 기준 종목별 최신 주권 종류(이월). 구간 앞의 기본정보 적재일도 이월에 쓴다 — 창 함수는 같은 단계의 WHERE 뒤에 돌므로 구간 필터는 바깥에서. */
     fun capsWithKindRange(from: LocalDate, to: LocalDate, market: String): List<Pair<LocalDate, CapKind>> = jdbc.query(
         """
-        SELECT trade_date, symbol, market_cap, max(stock_kind) OVER (PARTITION BY symbol, grp) AS kind FROM (
-          SELECT trade_date, symbol, market, market_cap, stock_kind,
-                 count(stock_kind) OVER (PARTITION BY symbol ORDER BY trade_date) AS grp
-            FROM stock_daily_snapshots WHERE trade_date <= :to) t
+        SELECT trade_date, symbol, market_cap, kind FROM (
+          SELECT trade_date, symbol, market, market_cap, max(stock_kind) OVER (PARTITION BY symbol, grp) AS kind FROM (
+            SELECT trade_date, symbol, market, market_cap, stock_kind,
+                   count(stock_kind) OVER (PARTITION BY symbol ORDER BY trade_date) AS grp
+              FROM stock_daily_snapshots WHERE trade_date <= :to) t) k
          WHERE trade_date >= :from AND market = :market AND market_cap IS NOT NULL
         """,
         mapOf("from" to from, "to" to to, "market" to market),
