@@ -53,3 +53,4 @@ paths:
 - 세션을 쓰는 web 테스트는 그 사용자를 소유자로 지정해야 한다(`@MockitoSpyBean props` + `willReturn(id).given(props).tradingOwnerUserId`).
   스파이 조합이 다른 테스트 클래스마다 Spring 컨텍스트가 늘어 Postgres 접속 수가 바닥난다(`too many clients`) — 기존 조합에 맞춘다.
 - MockMvc `jsonPath` 가 **배열을 돌려주는 식**(`$.items[*].x`, `$.a.list`)은 null 로 평가돼 실패한다. 원소 단위(`[0]`)로 단언하거나 본문을 파싱해 비교한다.
+- 시장데이터 계산을 감싸는 `catch (e: Exception)` 는 그 앞에서 `MarketDataNotLoaded` 를 다시 던진다 — 안 그러면 미적재 409 가 "계산 중 오류" 503 으로 뭉개진다(2단계 `MetricsController.cached` 실제 결함). `CodeRulesTest` 가 검사하고, 웹 테스트로 409 를 단언한다.

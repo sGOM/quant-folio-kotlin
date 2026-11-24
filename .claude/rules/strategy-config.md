@@ -30,4 +30,4 @@ paths:
 ## 함정
 
 - Python 실수 포맷: 메시지 안 `{x:.3f}` 는 `pyFixed`(half-even), 실수 repr 은 `pyFloat`. Java `%.3f` 는 half-up 이라 0.0625 에서 갈린다.
-- 스키마는 `pead` 가중치를 받지만 `pead` > 0 은 백테스트 422·엔진 critical 정지다(공식 경로에 공시 달력이 없다). flow 팩터와 지수 소스(KOSPI200 등)는 2단계에서 삭제했다(V11·V12).
+- 스키마는 `pead` 가중치를 받지만 `pead` > 0 은 백테스트 422·엔진 critical 정지다(공식 경로에 공시 달력이 없다). 원본의 flow 팩터·지수 소스(KOSPI200 등)는 없다 — 공식 경로에 수급·구성종목이 없다(저장된 config 는 V11·V12 가 정리).
