@@ -228,6 +228,7 @@ class BacktestsControllerTest(
             jsonPath("$.period_start") { value("2022-12-31T15:00:00+00:00") }
             jsonPath("$.period_end") { value("2023-12-29T14:59:59+00:00") }
             jsonPath("$.N") { value(2) }
+            jsonPath("$.pbo") { value(org.hamcrest.Matchers.nullValue()) } // 날짜 아닌 곡선 → 공통 월 없음 → null(0 아님)
         }
     }
 }

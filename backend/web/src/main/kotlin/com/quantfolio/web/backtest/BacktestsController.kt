@@ -2,6 +2,7 @@ package com.quantfolio.web.backtest
 
 import com.quantfolio.backtest.BacktestRunner
 import com.quantfolio.backtest.DeflatedSharpe
+import com.quantfolio.backtest.Pbo
 import com.quantfolio.common.MarketClock
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
@@ -92,6 +93,7 @@ class BacktestsController(
 
     /**
      * Deflated Sharpe(과최적화 방어). 동질 시행 = 같은 전략·같은 기간의 이력, 유니버스 지문이 있으면 지문까지 같은 것만.
+     * `pbo` 는 원본에 없는 추가 필드 — 같은 동질 시행의 공통 월 수익률로 [Pbo.cscv](시행 < 2·월 < 8 이면 null).
      */
     @GetMapping("/backtests/{id}/dsr")
     fun dsr(@CurrentUser user: User, @PathVariable id: Int): Map<String, Any?> {
@@ -101,7 +103,7 @@ class BacktestsController(
         val fp = target["universe_fingerprint"]
         val homogeneous = if (fp != null && fp != "") candidates.filter { it["universe_fingerprint"] == fp } else candidates
         return linkedMapOf<String, Any?>("backtest_id" to bt.id, "strategy_id" to bt.strategyId, "period_start" to iso(bt.periodStart), "period_end" to iso(bt.periodEnd)) +
-            DeflatedSharpe.analyze(target, homogeneous)
+            DeflatedSharpe.analyze(target, homogeneous) + ("pbo" to Pbo.cscv(Pbo.monthlyMatrix(homogeneous)))
     }
 
     /** 원본 DSR 라우트는 응답 모델 없이 jsonable_encoder(= isoformat, `+00:00`) — `Instant` 그대로면 Jackson 이 `Z` 로 쓴다. */
