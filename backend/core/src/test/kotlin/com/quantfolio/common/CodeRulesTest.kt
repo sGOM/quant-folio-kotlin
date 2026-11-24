@@ -213,10 +213,11 @@ class CodeRulesTest {
     }
 
     companion object {
-        /** 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치). */
+        /** 로컬 시장데이터만 읽는 경로: 전략(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치) + UI 계산(지표·스크리너·추천 — 미적재 409). */
         private val STRATEGY_PATH_FILES = setOf(
             "BacktestRunner.kt", "PortfolioBacktest.kt", "RebalanceRunner.kt", "Runners.kt", "PanicService.kt", "MarketCalendar.kt",
             "SymbolCatalog.kt", "LocalOhlcvCoverage.kt", "WorkerJobs.kt", "LocalMarketData.kt",
+            "MetricsController.kt", "MetricsServices.kt", "ScreenerRecommend.kt",
         )
         private val SNAPSHOT_DECL = Regex("""\w+\s*:\s*SnapshotSource\b""")
         private val LOCAL_QUALIFIER = Regex("""@Qualifier\("local"\)""")
@@ -232,6 +233,8 @@ class CodeRulesTest {
             "PanicService.kt" to (5 to "로컬 파일 캐시 로드·저장 4건(스냅샷 미접근) + UI compute 의 S9 newLowRatio 1건(원본처럼 S9 만 null, PanicOut 이 결측 표시)"),
             "MarketCalendar.kt" to (1 to "KIS 휴장일 REST 조회 - 로컬 DB 미접근"),
             "SymbolCatalog.kt" to (1 to "KIS 마스터 REST 조회 - 로컬 DB 미접근"),
+            "MetricsServices.kt" to (1 to "종목명 catalog.nameMap() - KIS 마스터 REST 조회, 로컬 DB 미접근"),
+            "ScreenerRecommend.kt" to (2 to "종목명 catalog.nameMap() 2건 - KIS 마스터 REST 조회, 로컬 DB 미접근"),
             "WorkerJobs.kt" to (2 to "withOutageAlert 는 알림 후 throw e 로 전부 재던짐 + 체결 정합 리포트(orders/fills DB 만)"),
         )
         private val FORBIDDEN_HOST = Regex("""data\.krx\.co\.kr|naver\.com""")
