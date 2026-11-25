@@ -126,6 +126,10 @@ class StockDailyStore(private val jdbc: NamedParameterJdbcTemplate) {
     ) { rs, _ -> rs.getString(1) }.toSet()
 
     /** 어느 종목이든 행이 있는 거래일(오름차순). */
+    fun symbols(): List<String> = jdbc.query(
+        "SELECT DISTINCT symbol FROM stock_daily_snapshots ORDER BY symbol", emptyMap<String, Any>(),
+    ) { rs, _ -> rs.getString(1) }
+
     fun tradeDates(): List<LocalDate> = jdbc.query(
         "SELECT DISTINCT trade_date FROM stock_daily_snapshots ORDER BY trade_date", emptyMap<String, Any>(),
     ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }

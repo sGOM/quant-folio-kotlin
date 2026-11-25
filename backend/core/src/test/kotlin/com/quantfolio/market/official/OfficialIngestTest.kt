@@ -244,6 +244,16 @@ class OfficialIngestTest(
     }
 
     @Test
+    fun `full rebuild restores every symbol from raw rows`() {
+        trade(weekdays[0], weekdays[1], closes = listOf(1000.0 to 0.0, 1100.0 to 100.0))
+        ingest().backfill(weekdays[0], weekdays[0], 1000)
+        val bar = ticks.bars("000001", allRange.first, allRange.second).single()
+        ticks.upsert("000001", listOf(bar.copy(volume = 999)))
+        assertEquals(emptyList<String>(), ingest().rebuildAllAdjusted().failed)
+        assertEquals(bar.volume, ticks.bars("000001", allRange.first, allRange.second).single().volume)
+    }
+
+    @Test
     fun `normal day appends one adjusted bar`() {
         trade(weekdays[0], weekdays[1], closes = listOf(1000.0 to 0.0, 1100.0 to 100.0))
         ingest().backfill(weekdays[0], weekdays[0], 1000)

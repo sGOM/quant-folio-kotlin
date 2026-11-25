@@ -105,6 +105,13 @@ class WorkerJobs(
         return linkedMapOf("done" to r.daysDone, "calls" to r.calls, "stoppedByBudget" to r.stoppedByBudget, "failed" to r.failed)
     }
 
+    /** 전 종목 수정주가 재계산(`quantfolio.backfill.rebuild-adjusted=true`). 외부 호출 없음. */
+    fun rebuildAllAdjusted(): Map<String, Any?> {
+        val r = official.rebuildAllAdjusted()
+        log.info("전 종목 수정주가 재계산 {}", r)
+        return linkedMapOf("symbols" to r.daysDone, "failed" to r.failed)
+    }
+
     /** 실패하면 warning(dedup 기본 24h — 원본 값 그대로) 후 예외 전파 — 스케줄러 로그에도 남는다. */
     private fun <T> withOutageAlert(code: String, label: String, dedupHours: Double = 24.0, block: () -> T): T = try {
         block()

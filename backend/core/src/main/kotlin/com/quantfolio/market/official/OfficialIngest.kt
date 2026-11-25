@@ -293,6 +293,16 @@ class OfficialIngest(
     /** 저장된 원주가·전일대비로 이 종목의 수정주가 전체를 다시 만들어 price_ticks 를 바꾼다. */
     fun rebuildAdjusted(symbol: String) = rebuild(symbol, marketGaps())
 
+    /**
+     * 전 종목 수정주가 재계산 — 백필이 끝의 재계산([rebuildDirty]) 전에 끊겼을 때 쓴다(재계산 대상은 메모리에만 있어 함께 사라진다).
+     * 휴장 공백([marketGaps])은 한 번만 구한다. daysDone 은 시도한 종목 수, 실패 종목은 failed.
+     */
+    fun rebuildAllAdjusted(): IngestReport = Run(0).also {
+        it.dirty += daily.symbols()
+        it.done = it.dirty.size
+        rebuildDirty(it)
+    }.report()
+
     private fun rebuild(symbol: String, gaps: Set<LocalDate>) {
         val rows = daily.readSymbol(symbol)
         val input = rows.map { (d, r) -> if (d in gaps) r.copy(prevDiff = null) else r }
