@@ -29,6 +29,8 @@ services:
   db:
     image: timescale/timescaledb:latest-pg16
     restart: unless-stopped
+    # Docker 기본 /dev/shm 64MB 로는 병렬 쿼리 공유 메모리가 모자란다 — 2026-11-25 백필 중 52MB 세그먼트 확보 실패(No space left on device).
+    shm_size: 1g
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-quant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
