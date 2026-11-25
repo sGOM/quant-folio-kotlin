@@ -65,6 +65,21 @@ object DeflatedSharpe {
         return resp
     }
 
+    /**
+     * 최소 표본 길이 MinTRL(Bailey & López de Prado 2012, https://www.risk.net/journal-risk/2223785/sharpe-ratio-efficient-frontier) —
+     * "샤프비 > 0" 을 신뢰수준 1−[alpha] 로 말하려면 필요한 일간 관측 수 = 1 + (1 − γ3·SR + (γ4−1)/4·SR²)·(z₁₋α / SR)².
+     * 원본에 없는 추가 계산. SR·γ3·γ4 는 [compute] 와 같은 정의. null = 계산 불가(표본 부족·샤프 없음) 또는 SR ≤ 0(도달 불가, psr0 ≤ 0.5 로 구분).
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun minTrl(target: Map<String, Any?>, ann: Int = 252, alpha: Double = 0.05): Double? {
+        val r = returnsFromCurve(target["equity_curve"] as List<Map<String, Any?>>?)
+        val sr = ((target["sharpe"] as Number?)?.toDouble() ?: return null) / sqrt(ann.toDouble())
+        if (r.size < MIN_OBS || !r.all { it.isFinite() } || sr <= 0) return null
+        val seSq = 1.0 - skewUnbiased(r) * sr + (kurtosisUnbiased(r) - 1.0) / 4.0 * sr * sr
+        if (seSq <= 0) return null
+        return 1.0 + seSq * (NORMAL.inverseCumulativeProbability(1.0 - alpha) / sr).pow(2)
+    }
+
     data class Core(val dsr: Double?, val psr0: Double, val srDaily: Double, val sr0Daily: Double?, val skew: Double, val kurt: Double, val n: Int)
 
     fun compute(r: DoubleArray, sharpeAnnual: Double, nTrials: Int, vDaily: Double, ann: Int = 252): Core {

@@ -145,6 +145,21 @@ A5 는 A4 와 A1 이 각각 합격하지 않아도 독립 판정하되, Kotlin �
 - 통과분 Kotlin 옵션 + 테스트 + 정답지.
 - 사용자 보고: 알고리즘별 합격/불합격과 항목별 결과, 데이터 문제(밸류 결측 → H2 영향, 2024~2025 시총 결측).
 
+## 보조 보고와 다음 라운드 (2026-11-25 추가, 이번 판정 불변)
+
+이번 선별의 합격 규칙은 그대로 둔다 — 결과를 본 뒤 기준을 바꾸지 않는다. 대신 `algorithm/screen_eval.py` 의 평가 수식을
+**보조 보고**(`<알고리즘>.json` 의 `supplement`, 판정에 쓰지 않음)로 함께 낸다:
+Ledoit-Wolf(2008) Sharpe 차 검정(+알고리즘 간 Holm·BHY 보정 p, |t|>3 표시), PSR(0)·MinTRL, 기준 대비 스패닝 α(NW t),
+Lo(2002) 자기상관 보정 Sharpe, 선별 후보 수만큼 할인한 Sharpe(Harvey-Liu 2015), Fama-MacBeth 기울기·전달계수·기본법칙 IR(신호 알고리즘),
+손익분기 비용(Novy-Marx & Velikov 2016). 논문 링크는 algorithm 폴더 README "구현 목록".
+
+**다음 라운드 합격 규칙 후보** (다음 선별을 시작하기 전에 사용자 확인으로 고정한다):
+- 항목 3(짝지은 부트스트랩 P≥0.8) → Ledoit-Wolf 스튜던트화 부트스트랩 p 로 교체하고, 알고리즘 간 **Holm** 보정 p < 0.05.
+- 신규 팩터의 신호 유의성은 Fama-MacBeth NW t > 3.0(Harvey, Liu & Zhu 2016)을 함께 요구.
+- 여러 변형 중 최고를 고를 땐 Hansen(2005) SPA 의 consistent p < 0.05.
+
+Kotlin: `/api/backtests/{id}/dsr` 응답에 `min_trl`(일간 관측 수, 95%) 추가 — 원본에 없는 필드.
+
 ## 빌더에게 남긴 것
 
 DART 지표를 Python 으로 이식할지 Kotlin 에서 내보낼지, 스냅샷 파일 형식, 모듈 구성, Kotlin 옵션 이름, PBO 노출 방식.
