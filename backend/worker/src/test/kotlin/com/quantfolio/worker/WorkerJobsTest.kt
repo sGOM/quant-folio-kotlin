@@ -189,7 +189,7 @@ class WorkerJobsTest(
 
     @Test
     fun dartBackfillPassesBudgetAndAlertsOnFailures() {
-        given(official.dartBackfill(eq(2015), eq(100))).willReturn(IngestReport(3, 100, true, listOf("000001 2024 11011: 한도")))
+        given(official.dartBackfill(eq(2015), eq(100), pause())).willReturn(IngestReport(3, 100, true, listOf("000001 2024 11011: 한도")))
         val r = jobs.dartBackfill(2015, 100)
         assertEquals(3, r["done"])
         assertEquals(true, r["stoppedByBudget"])
@@ -202,12 +202,15 @@ class WorkerJobsTest(
         try {
             val r = jobs.dartBackfill(2015, 100)
             assertEquals(true, r["busy"])
-            org.mockito.Mockito.verify(official, org.mockito.Mockito.never()).dartBackfill(anyInt(), anyInt())
+            org.mockito.Mockito.verify(official, org.mockito.Mockito.never()).dartBackfill(anyInt(), anyInt(), pause())
         } finally {
             redis.delete(RedisKeys.DART_BACKFILL_LOCK)
         }
-        given(official.dartBackfill(eq(2015), eq(100))).willReturn(IngestReport(0, 0, false, emptyList()))
+        given(official.dartBackfill(eq(2015), eq(100), pause())).willReturn(IngestReport(0, 0, false, emptyList()))
         assertEquals(0, jobs.dartBackfill(2015, 100)["done"])
         assertFalse(redis.hasKey(RedisKeys.DART_BACKFILL_LOCK)) // 끝나면 해제
     }
+
+    /** Mockito eq 는 Kotlin non-null 인자에 null 을 돌려준다 — 매처를 등록하고 실제 값을 넘긴다. */
+    private fun pause() = eq(OfficialIngest.DART_PAUSE) ?: OfficialIngest.DART_PAUSE
 }

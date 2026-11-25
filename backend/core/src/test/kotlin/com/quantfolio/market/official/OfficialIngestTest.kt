@@ -30,6 +30,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate
 import java.time.Clock
 import java.time.Instant
+import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.test.assertEquals
@@ -101,12 +102,14 @@ class OfficialIngestTest(
     private fun FakeDart(corpMap: Map<String, String>? = emptyMap(), failAt: Int = 0) = object : DartFinancials(dartClient, dartStore, ledger, cooldowns, clock) {
         var n = 0
         val called = mutableListOf<String>()
+        val calledAt = mutableListOf<Long>()
         override fun corpCodeMap() = corpMap
         override fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean): List<Map<String, Any?>>? {
             if (!remote) return listOf(mapOf("x" to 1))
             n++
             if (failAt in 1..n) throw SourceQuotaError("opendart", "020 한도")
             called += CacheKeys.of(corp, year, reprt, fsDiv)
+            calledAt += System.nanoTime()
             ledger.put("dart_accounts", CacheKeys.of(corp, year, reprt, fsDiv), 1, true)
             return listOf(mapOf("x" to 1))
         }
@@ -413,15 +416,25 @@ class OfficialIngestTest(
             StockDaily("000014", "KOSPI", close = 1.0, stockKind = "우선주") + StockDaily("000015", "KOSDAQ", close = 1.0, stockKind = "보통주"))
         val corp = (symbols + "000014" + "000015").associateWith { "C$it" }.filterKeys { it in symbols }
         val failing = FakeDart(corp, failAt = 5)
-        val r1 = ingest(failing).dartBackfill(2319, 1000)
+        val r1 = ingest(failing).dartBackfill(2319, 1000, Duration.ZERO)
         assertTrue(r1.stoppedByBudget)
         assertEquals(4, failing.called.size)
         val ok = FakeDart(corp)
-        val r2 = ingest(ok).dartBackfill(2319, 1000)
+        val r2 = ingest(ok).dartBackfill(2319, 1000, Duration.ZERO)
         assertFalse(r2.stoppedByBudget)
         // 2319: 4종, 2320: 11011 제외 3종 → 종목당 7, 3종목 21. 첫 실행 4건은 원장에 있어 다시 부르지 않는다.
         assertEquals(21 - 4, ok.called.size)
         assertEquals(0, ok.called.intersect(failing.called.toSet()).size)
+    }
+
+    @Test
+    fun `dart backfill paces remote calls`() {
+        daily.write(LocalDate.of(2320, 4, 1), listOf(StockDaily("000011", "KOSPI", close = 1.0, stockKind = "보통주")))
+        val fake = FakeDart(mapOf("000011" to "C000011"))
+        ingest(fake).dartBackfill(2319, 1000, Duration.ofMillis(40))
+        assertEquals(7, fake.calledAt.size)
+        val gaps = fake.calledAt.zipWithNext { a, b -> (b - a) / 1_000_000 }
+        assertTrue(gaps.all { it >= 40 }, "간격 $gaps")
     }
 
     /** 워커가 평일 30분마다 daily() 를 부른다 - 끝난 창은 호출 0, 미확정 날(최근 휴장 0행)은 매번 다시 받아야 잠정 휴장·7일 확정이 동작한다. */

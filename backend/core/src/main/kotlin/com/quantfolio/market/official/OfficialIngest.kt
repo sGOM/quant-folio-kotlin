@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.DayOfWeek
+import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -301,8 +302,9 @@ class OfficialIngest(
     /**
      * KOSPI 보통주 전 종목의 정기보고서 4종을 [fromYear] 부터 원격으로 받아 로컬에 쌓는다(이미 확정된 조합은 건너뜀).
      * 한도(020)·인증 오류면 즉시 멈추고 보고한다 — 다음 실행이 원장으로 이어받는다.
+     * 원격 호출 사이 [pause] 만큼 쉰다 — 2026-11-24 간격 없이 55초에 1,001회 부른 직후 OpenDART 가 이 IP 연결을 리셋했다.
      */
-    fun dartBackfill(fromYear: Int = 2015, callBudget: Int): IngestReport {
+    fun dartBackfill(fromYear: Int = 2015, callBudget: Int, pause: Duration = DART_PAUSE): IngestReport {
         val run = Run(callBudget)
         run.calls++
         val corpMap = try {
@@ -321,6 +323,7 @@ class OfficialIngest(
                         val known = dart.accountsFinal(corp, year, reprt, fs)
                         if (!known) {
                             if (run.calls >= callBudget) return run.also { it.stopped = true }.report()
+                            if (run.calls > 1) Thread.sleep(pause.toMillis()) // 1 = 기업코드표 호출
                             run.calls++
                             run.done++
                         }
@@ -342,6 +345,9 @@ class OfficialIngest(
         /** 보고서 종류 — 사업보고서·반기·1분기·3분기. */
         private val DART_REPORTS = listOf("11011", "11012", "11013", "11014")
         private const val ANNUAL_REPORT = "11011"
+
+        /** 초당 약 18회에서 차단이 관측됐다(2026-11-24). 1초는 측정으로 확인한 안전값이 아니라 그보다 크게 낮춘 보수값이다. */
+        val DART_PAUSE: Duration = Duration.ofSeconds(1)
         private val DART_FS = listOf(DartFinancials.FS_CONSOLIDATED, DartFinancials.FS_SEPARATE)
 
         /** 실측 후 확정(Task 1 라이브 측정). 한 곳만 고친다. */
