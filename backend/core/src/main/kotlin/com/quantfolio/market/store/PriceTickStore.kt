@@ -59,7 +59,11 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val t
     fun lastBars(symbols: List<String>, before: Instant): Map<String, Pair<Instant, Double>> {
         if (symbols.isEmpty()) return emptyMap()
         return jdbc.query(
-            "SELECT DISTINCT ON (symbol) symbol, time, close FROM price_ticks WHERE symbol IN (:symbols) AND time < :before ORDER BY symbol, time DESC",
+            // 종목마다 (symbol, time) 인덱스로 1행만 본다. DISTINCT ON 은 전 기간을 훑어 하루 적재마다 26초, 병렬 실행 시 DB OOM(2026-11-25).
+            """
+            SELECT s.symbol, b.time, b.close FROM (SELECT unnest(ARRAY[:symbols]) AS symbol) s
+            CROSS JOIN LATERAL (SELECT time, close FROM price_ticks p WHERE p.symbol = s.symbol AND p.time < :before ORDER BY time DESC LIMIT 1) b
+            """,
             mapOf("symbols" to symbols, "before" to Timestamp.from(before)),
         ) { rs, _ -> rs.getString(1) to (rs.getTimestamp(2).toInstant() to rs.getBigDecimal(3).toDouble()) }.toMap()
     }
@@ -68,7 +72,7 @@ class PriceTickStore(private val jdbc: NamedParameterJdbcTemplate, private val t
     fun symbolsWithBarsAfter(symbols: List<String>, after: Instant): Set<String> {
         if (symbols.isEmpty()) return emptySet()
         return jdbc.query(
-            "SELECT DISTINCT symbol FROM price_ticks WHERE symbol IN (:symbols) AND time > :after",
+            "SELECT s.symbol FROM (SELECT unnest(ARRAY[:symbols]) AS symbol) s WHERE EXISTS (SELECT 1 FROM price_ticks p WHERE p.symbol = s.symbol AND p.time > :after)",
             mapOf("symbols" to symbols, "after" to Timestamp.from(after)),
         ) { rs, _ -> rs.getString(1) }.toSet()
     }
