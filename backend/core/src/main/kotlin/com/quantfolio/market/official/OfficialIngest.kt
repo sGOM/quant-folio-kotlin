@@ -338,7 +338,7 @@ class OfficialIngest(
                             run.done++
                         }
                         // 연결재무가 없으면 별도로 넘어간다(DartFinancials.firstAvailable 과 같은 순서).
-                        if (!dart.cachedAccounts(corp, year, reprt, fs, remote = !known).isNullOrEmpty()) break
+                        if (!dart.cachedAccounts(corp, year, reprt, fs, remote = !known, memo = false).isNullOrEmpty()) break
                     }
                 } catch (e: DataSourceError) {
                     run.failed += "$symbol $year $reprt: ${e.message}"

@@ -125,6 +125,15 @@ class DartFinancialsTest(
     private data class LedgerEntryView(val rows: Int, val final: Boolean)
 
     @Test
+    fun accountsWithoutMemoAreNotRetained() {
+        serveAccounts(mapOf((2020 to DartMetrics.REPORT_ANNUAL) to 100L))
+        fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", memo = false)
+        // 메모리에 남았다면 저장소가 비어도 그 값을 돌려준다 - 백필이 전 종목을 훑으며 힙을 채운 원인(2026-11-25 OOM)
+        jdbc.update("DELETE FROM dart_financials WHERE corp_code = ?", corp)
+        assertThrows<MarketDataNotLoaded> { fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false, memo = false) }
+    }
+
+    @Test
     fun annualMetricsFallsBackToSeparate() {
         serveAccounts(mapOf((2021 to DartMetrics.REPORT_ANNUAL) to 50L), fsDiv = "OFS")
         assertEquals(50.0, fin.annualMetrics(corp, 2021)["net_income"])

@@ -46,21 +46,23 @@ class DartFinancials(
      * 무자료(013)는 확정일이 지났을 때만 '확정 무자료'로 굳힌다(정정공시로 나중에 생길 수 있다).
      *
      * @param remote false 면 원격을 부르지 않는다(백테스트·엔진 로컬 전용). 원장·저장소 확정본이 없으면 [MarketDataNotLoaded].
+     * @param memo false 면 결과를 메모리에 남기지 않는다. 메모리 캐시는 상한이 없어 전 종목을 훑는 백필이 쓰면
+     *   힙을 다 채운다(2026-11-25 dartBackfill 40분 만에 OOM, 힙 2GB).
      */
-    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean = true): List<Map<String, Any?>>? {
+    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean = true, memo: Boolean = true): List<Map<String, Any?>>? {
         val key = listOf(corp, year, reprt, fsDiv)
         accountsCache[key]?.let { return it }
         val cacheKey = CacheKeys.of(corp, year, reprt, fsDiv)
         val entry = ledger.get(LEDGER_SOURCE, cacheKey)
         if (entry != null && entry.final && entry.rowCount == 0) return null
         val stored = store.read(corp, year, reprt, fsDiv)
-        if (stored != null && stored.second) return stored.first.also { accountsCache[key] = it }
+        if (stored != null && stored.second) return stored.first.also { if (memo) accountsCache[key] = it }
         if (!remote) throw MarketDataNotLoaded("dart_accounts", cacheKey)
 
         val acc = client.accounts(corp, year, reprt, fsDiv)
         if (!acc.isNullOrEmpty()) {
             store.write(corp, year, reprt, fsDiv, acc)
-            accountsCache[key] = acc
+            if (memo) accountsCache[key] = acc
             ledger.put(LEDGER_SOURCE, cacheKey, acc.size, store.read(corp, year, reprt, fsDiv)?.second ?: false)
             return acc
         }

@@ -103,8 +103,10 @@ class OfficialIngestTest(
         var n = 0
         val called = mutableListOf<String>()
         val calledAt = mutableListOf<Long>()
+        val memos = mutableListOf<Boolean>()
         override fun corpCodeMap() = corpMap
-        override fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean): List<Map<String, Any?>>? {
+        override fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean, memo: Boolean): List<Map<String, Any?>>? {
+            memos += memo
             if (!remote) return listOf(mapOf("x" to 1))
             n++
             if (failAt in 1..n) throw SourceQuotaError("opendart", "020 한도")
@@ -445,6 +447,15 @@ class OfficialIngestTest(
         assertEquals(7, fake.calledAt.size)
         val gaps = fake.calledAt.zipWithNext { a, b -> (b - a) / 1_000_000 }
         assertTrue(gaps.all { it >= 40 }, "간격 $gaps")
+    }
+
+    @Test
+    fun `dart backfill does not memoize accounts`() {
+        daily.write(LocalDate.of(2320, 4, 1), listOf(StockDaily("000011", "KOSPI", close = 1.0, stockKind = "보통주")))
+        val fake = FakeDart(mapOf("000011" to "C000011"))
+        ingest(fake).dartBackfill(2319, 1000, Duration.ZERO)
+        ingest(fake).dartBackfill(2319, 1000, Duration.ZERO) // 두 번째는 확정본 경로(remote=false)
+        assertTrue(fake.memos.isNotEmpty() && fake.memos.none { it }, "memo ${fake.memos}")
     }
 
     /** 워커가 평일 30분마다 daily() 를 부른다 - 끝난 창은 호출 0, 미확정 날(최근 휴장 0행)은 매번 다시 받아야 잠정 휴장·7일 확정이 동작한다. */
