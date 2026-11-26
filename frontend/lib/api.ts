@@ -551,6 +551,10 @@ export interface BacktestResult {
   holdings?: Record<string, number>;
   /** 매수/매도 체결 로그. 리밸런싱 백테스트. */
   trades?: BacktestTrade[];
+  /** 결과 해석에 필요한 가정(배당 반영 방식, 섹터 한도 적용 시작일 등). 리밸런싱 백테스트. */
+  assumptions?: string[];
+  /** 배당 반영 경고(배당락일 시세 없음 등). 리밸런싱 백테스트. */
+  dividend_warnings?: string[];
 }
 
 export interface Backtest {

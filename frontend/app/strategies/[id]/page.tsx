@@ -310,6 +310,26 @@ function StrategyDetailContent({ sid }: { sid: number }) {
             </div>
 
             {isRebalance &&
+              ((latest.result.dividend_warnings?.length ?? 0) > 0 ||
+                (latest.result.assumptions?.length ?? 0) > 0) && (
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <h2 className="mb-2 text-sm text-muted-foreground">가정·경고</h2>
+                  <ul className="list-disc space-y-1 pl-5 text-xs">
+                    {latest.result.dividend_warnings?.map((w, i) => (
+                      <li key={`w${i}`} className="text-amber-600 dark:text-amber-400">
+                        {w}
+                      </li>
+                    ))}
+                    {latest.result.assumptions?.map((a, i) => (
+                      <li key={`a${i}`} className="text-muted-foreground">
+                        {a}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+            {isRebalance &&
               latest.result.holdings &&
               Object.keys(latest.result.holdings).length > 0 && (
                 <div className="rounded-lg border border-border bg-card p-4">
