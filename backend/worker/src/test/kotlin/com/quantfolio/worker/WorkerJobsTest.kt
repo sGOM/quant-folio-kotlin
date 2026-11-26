@@ -54,6 +54,7 @@ import kotlin.test.assertTrue
 class WorkerJobsTest(
     @Autowired private val jobs: WorkerJobs,
     @Autowired private val backup: DbBackup,
+    @Autowired private val freshness: com.quantfolio.alert.BackupFreshness,
     @Autowired private val alerts: AlertRepository,
     @Autowired private val users: UserRepository,
     @Autowired private val strategies: StrategyRepository,
@@ -168,7 +169,7 @@ class WorkerJobsTest(
         assertEquals("-- dump", GZIPInputStream(Files.newInputStream(path)).use { String(it.readAllBytes()) })
         assertEquals(listOf("quant_20000101_000000.sql.gz"), r["removed"])
         assertTrue(redis.opsForValue().get(RedisKeys.BACKUP_LAST_SUCCESS)!!.contains("+09:00"))
-        assertEquals(true, backup.checkFreshness()["ok"])
+        assertEquals(true, freshness.check()["ok"])
 
         backup.dumper = Dumper { _, _ -> throw IllegalStateException("pg_dump 종료코드 1: denied") }
         val failed = backup.backup()
@@ -177,7 +178,7 @@ class WorkerJobsTest(
         assertTrue(Files.list(dir).use { s -> s.noneMatch { it.toString().endsWith(".tmp") } })
 
         redis.delete(RedisKeys.BACKUP_LAST_SUCCESS)
-        assertEquals(false, backup.checkFreshness()["ok"])
+        assertEquals(false, freshness.check()["ok"])
         assertEquals("DB 백업이 최신이 아닙니다: 백업 성공 기록이 없습니다(worker/beat 미기동 가능성)", latest("db_backup_stale")!!.message)
     }
 

@@ -1,7 +1,9 @@
 package com.quantfolio.engine
 
 import com.quantfolio.alert.AlertPublisher
+import com.quantfolio.alert.BackupFreshness
 import com.quantfolio.broker.BrokerCredentials
+import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
@@ -39,6 +41,7 @@ class EngineRuntime(
     private val realtime: KisRealtime,
     private val liveGate: LiveGateService,
     private val alerts: AlertPublisher,
+    private val backupFreshness: BackupFreshness,
     private val redis: StringRedisTemplate,
     private val listeners: RedisMessageListenerContainer,
     private val props: QuantfolioProperties,
@@ -70,6 +73,8 @@ class EngineRuntime(
         loops += loop("engine-heartbeat", 5) { redis.opsForValue().set(RedisKeys.ENGINE_HEARTBEAT, "alive", Duration.ofSeconds(15)) }
         loops += loop("engine-reconcile", 60) { reconcileOnce() }
         loops += loop("engine-fill-notice", 60) { syncNoticesGuarded() }
+        // 백업 감시는 워커 밖에서(워커가 죽으면 워커 안 감시도 죽는다). 1시간 간격이라 KST 9시대에 하루 한 번 걸린다 — 원본은 09:00 배치.
+        loops += loop("engine-backup-watch", 3600) { if (MarketClock.nowKst(ctx.clock).hour == 9) backupFreshness.check() }
     }
 
     @Synchronized

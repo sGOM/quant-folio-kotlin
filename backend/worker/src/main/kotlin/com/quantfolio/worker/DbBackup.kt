@@ -99,21 +99,7 @@ class DbBackup(
         }.map { Files.deleteIfExists(it); it.fileName.toString() }
     }
 
-    /** 백업 신선도 — 성공 기록이 없거나 26시간 넘게 갱신 안 됐으면 critical(워커·beat 사망 같은 상위 침묵 실패를 잡는다). */
-    fun checkFreshness(): Map<String, Any?> {
-        val raw = redis.opsForValue().get(RedisKeys.BACKUP_LAST_SUCCESS)
-        val ageHours = raw?.let { Duration.between(java.time.OffsetDateTime.parse(it).toInstant(), clock.instant()).toMillis() / 3_600_000.0 }
-        val stale = ageHours == null || ageHours > STALE_AFTER_HOURS
-        if (stale) {
-            val reason = if (ageHours == null) "백업 성공 기록이 없습니다(worker/beat 미기동 가능성)" else "마지막 백업 성공 이후 ${com.quantfolio.quant.pyFixed(ageHours, 1)}시간 경과"
-            log.error("DB 백업 신선도 점검 실패: {}", reason)
-            alerts.publish(null, 0, AlertSeverity.critical, "DB 백업이 최신이 아닙니다: $reason", "db_backup_stale", dedupWindowHours = 20.0)
-        }
-        return linkedMapOf("ok" to !stale, "last_success_at" to raw, "age_hours" to ageHours)
-    }
-
     private companion object {
         const val RETENTION_DAYS = 14L
-        const val STALE_AFTER_HOURS = 26.0
     }
 }

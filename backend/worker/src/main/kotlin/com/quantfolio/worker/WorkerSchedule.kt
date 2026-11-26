@@ -48,9 +48,6 @@ class WorkerSchedule(private val jobs: WorkerJobs, private val backup: DbBackup)
     @Scheduled(cron = "0 0 3 * * *", zone = KST)
     fun backupDatabase() = run("backup_database") { backup.backup() }
 
-    @Scheduled(cron = "0 0 9 * * *", zone = KST)
-    fun checkBackupFreshness() = run("check_backup_freshness") { backup.checkFreshness() }
-
     @Scheduled(cron = "0 10 * * * *", zone = KST)
     fun ingestNews() = run("ingest_news") { jobs.ingestNews() }
 
