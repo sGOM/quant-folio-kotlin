@@ -46,7 +46,7 @@ class WorkerJobs(
     private val log = LoggerFactory.getLogger(javaClass)
 
     /** 원본 `date.today()` — 컨테이너 UTC 날짜(보존, migration-notes #1 과 같은 성격). */
-    private fun utcToday() = MarketClock.todayUtcLegacy(clock)
+    private fun kstToday() = MarketClock.todayKst(clock)
 
     private fun pct(ratio: Double) = pyFixed(ratio * 100, 0) + "%"
 
@@ -136,7 +136,7 @@ class WorkerJobs(
      */
     @Suppress("UNCHECKED_CAST")
     fun checkFillQualityDrift(): Map<String, Any?> {
-        val dTo = utcToday()
+        val dTo = kstToday()
         val dFrom = dTo.minusDays(FILL_QUALITY_WINDOW_DAYS)
         val pairs = jdbc.query(
             "select distinct user_id, strategy_id from orders where strategy_id is not null and status in ('partial', 'filled') and created_at >= :f",

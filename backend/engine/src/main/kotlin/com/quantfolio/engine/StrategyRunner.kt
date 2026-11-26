@@ -98,9 +98,9 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         return q.price
     }
 
-    /** 시드 + 오늘 봉(현재가 반영). 오늘은 원본 `date.today()` — 컨테이너 UTC 날짜(보존). */
+    /** 시드 + 오늘(KST) 봉(현재가 반영). 원본 `date.today()` 는 UTC 였지만 장중엔 날짜가 같아 매매 영향은 없었다(migration-notes #6). */
     private fun dataWithToday(px: Double): PriceData {
-        val today = MarketClock.todayUtcLegacy(ctx.clock)
+        val today = MarketClock.todayKst(ctx.clock)
         val rows = bars.associateBy { it.date }.toSortedMap()
         val prev = rows[today]
         rows[today] = if (ohlc && prev != null) {
@@ -119,7 +119,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         val price = currentPrice() ?: return
         val data = if (ready) dataWithToday(price.toDouble()) else null
         val sig = data?.let { Signals.latestSignal(it, cfg) }
-        val barTs = MarketClock.todayUtcLegacy(ctx.clock).toString()
+        val barTs = MarketClock.todayKst(ctx.clock).toString()
         val (acquired, _) = withPositionLock(symbol) { decide(price, data, sig, barTs) }
         if (!acquired) log.info("포지션 락 경합 — 이번 tick 건너뜀 ({})", symbol)
     }

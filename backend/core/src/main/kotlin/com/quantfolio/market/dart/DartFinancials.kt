@@ -67,8 +67,8 @@ class DartFinancials(
             return acc
         }
         if (!client.enabled()) return null
-        // 원본 date.today() — 컨테이너 UTC(보존)
-        val final = !MarketClock.todayUtcLegacy(clock).isBefore(DartFinancialStore.confirmedDate(null, year))
+        // KST 날짜 — 원본 date.today() 는 컨테이너 UTC 라 KST 00~09시에 하루 늦게 확정했다(migration-notes #1)
+        val final = !MarketClock.todayKst(clock).isBefore(DartFinancialStore.confirmedDate(null, year))
         ledger.put(LEDGER_SOURCE, cacheKey, 0, final)
         return null
     }

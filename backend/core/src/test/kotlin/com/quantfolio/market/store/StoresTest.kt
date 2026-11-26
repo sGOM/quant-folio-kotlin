@@ -20,6 +20,7 @@ class StoresTest(
     @Autowired private val indexes: IndexOhlcvStore,
     @Autowired private val dart: DartFinancialStore,
     @Autowired private val ticks: PriceTickStore,
+    @Autowired private val named: org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate,
 ) {
     private var dayCounter = 0L
     // 다른 테스트의 고정 날짜(2001~2026)와 겹치지 않는 구간 — 겹치면 공유 DB 에서 순서에 따라 깨진다
@@ -123,6 +124,15 @@ class StoresTest(
     fun confirmedDateRule() {
         assertEquals(LocalDate.of(2024, 6, 14), DartFinancialStore.confirmedDate(LocalDate.of(2024, 3, 16), 2023))
         assertEquals(LocalDate.of(2024, 12, 31), DartFinancialStore.confirmedDate(null, 2023))
+    }
+
+    /** 확정일 당일 KST 새벽(UTC 로는 전날)에도 확정이다 — 원본은 컨테이너 UTC 날짜라 하루 늦었다(migration-notes #1). */
+    @Test
+    fun dartFinalUsesKstDate() {
+        val corp = uniq()
+        dart.write(corp, 2023, "11011", "CFS", listOf(mapOf("account_nm" to "매출액", "rcept_no" to "20240316000001"))) // 확정일 2024-06-14
+        val kstDawn = java.time.Clock.fixed(Instant.parse("2024-06-13T16:00:00Z"), java.time.ZoneOffset.UTC) // KST 06-14 01:00
+        assertTrue(DartFinancialStore(named, kstDawn).read(corp, 2023, "11011", "CFS")!!.second)
     }
 
     @Test

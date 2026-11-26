@@ -21,7 +21,7 @@ paths:
 
 ## 함정
 
-- **날짜:** 원본이 `date.today()`(컨테이너 UTC)를 쓴 체결 정합 점검은 UTC 그대로 보존. 공식 적재는 KST.
+- **날짜:** 전부 KST(`MarketClock.todayKst`). 원본 `date.today()`(컨테이너 UTC) 보존분은 2026-11-26 에 걷어냈다(migration-notes #1·2·6~8).
 - 백업은 워커 이미지에 `pg_dump`(postgresql-client)가 있어야 한다. 비밀번호는 `PGPASSWORD` 로만.
 - 뉴스 XML 은 DOCTYPE 금지(XXE). 원본 의미: XML 이 엔티티를 풀고 HTML unescape 가 한 번 더 — "고치지" 말 것.
 - **공식 일일 적재는 30분마다 반복**(KRX Open API 공개 시각 미실측). 멱등은 원장에 맡긴다 — "목표일 끝났으면 skip" 을

@@ -47,14 +47,14 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 
 | # | 위치(Kotlin) | 원본 | 내용 | 영향 |
 |---|---|---|---|---|
-| 1 | `DartFinancialStore.read` | `store/dart_store.py::_select` | 확정 판정이 `date.today()`(컨테이너 UTC) 기준. 다른 곳은 KST(`now_kst`). | KST 00~09시에 하루 늦게 확정 — 안전측(재조회 1회 더) |
-| 2 | `DataSourceErrors.secondsUntilMidnight` | `errors.py` | 프로세스 로컬 시각 기준 자정(UTC 컨테이너면 KST 09시). DART 한도는 KST 자정 리셋. | 쿨다운이 길어지거나 짧아짐 — 원본 주석이 수용한 오차 |
+| 1 | `DartFinancialStore.read` | `store/dart_store.py::_select` | 확정 판정이 `date.today()`(컨테이너 UTC) 기준. 다른 곳은 KST(`now_kst`). | KST 00~09시에 하루 늦게 확정 — 안전측(재조회 1회 더) **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 2 | `DataSourceErrors.secondsUntilMidnight` | `errors.py` | 프로세스 로컬 시각 기준 자정(UTC 컨테이너면 KST 09시). DART 한도는 KST 자정 리셋. | 쿨다운이 길어지거나 짧아짐 — 원본 주석이 수용한 오차 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
 | 3 | `KrxMdc.pykrx` | pykrx `KrxWebIo.read` | 730일 초과 조회에서 두 번째 조각부터 항상 `result["output"]` 에 이어붙여, `OutBlock_1` 응답(MDCSTAT01602 기간등락률)은 KeyError 로 실패 | 2년 초과 기간등락률 조회 불가(Unavailable) |
 | 4 | `KrxStockApi` int32 컬럼 | pykrx `astype(np.int32)` | 시가·종가·거래량 등 int32 컬럼이 2^31 을 넘으면 numpy OverflowError 로 그 시장 조회 전체가 실패 | 거래량 21억 주 초과 종목이 있는 날 해당 시장 데이터 누락(Unavailable) |
 | 5 | `TrackingController` | `routes/tracking.py` + `tracking.reconstruct_realized_curve` | 가격 패널 인덱스(tz-aware UTC)와 체결일(tz-naive KST 날짜)을 한 집합에 섞어 정렬 → 체결 종목에 시세가 하나라도 있으면 `TypeError` 로 500(원본 컨테이너에서 재현 확인). **크래시는 보존 대상이 아니라고 판정** — 의도대로 날짜끼리 비교해 정상 응답 | 원본에선 사실상 항상 실패하던 화면이 동작. 원본 결과와 비교할 기준값이 없다 |
-| 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 |
-| 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) |
-| 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 |
+| 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
 | 9 | `AuthController.login` | `routes/auth.py::login` | 가입은 EmailStr 로 정규화(공백 제거·도메인 소문자)해 저장하지만 로그인은 입력 그대로 조회. | `A@Example.COM` 으로 가입하면 저장은 `A@example.com` — 같은 문자열로 로그인하면 401 |
 | 10 | `PortfolioBacktest.run`(`lastValid`) | `backtest/portfolio.py:865` | **미래참조.** 상장폐지 판정의 "마지막 유효 관측일"을 패널 전체(미래 포함)에서 잡는다. 원본 주석상 의도된 설계(거래정지 오판 방지). | ffill 한도를 넘는 결측이 d 이후 재개되면 d 에 청산하지 않고 동결 — 재개 여부를 미리 안다 **2026-11-26 Kotlin 수정**(사용자 지시): 그날 결측이면 재개 여부와 무관하게 상장폐지 현금화. 거래정지가 delisting_gap_days 를 넘으면 회수율로 현금화되는 비용을 받아들였다(재개 뒤 재편입 가능). 정답지 all_inverse_vol·score_vol_gate·risk_caps·limit_kill 은 2024-05-20(000110) 전까지만 대조. 실측(2026-11-26): 운영 일봉(KRX Open API)은 거래정지일도 행(거래량 0·종가 유지)이 있어 2023 이후 20일 넘는 중간 결측 0건 — 운영 백테스트 영향 없음. 2층 정답지는 픽스처의 데이터 공백(대형주 22개 2021-03~08 결측)에서 갈라져 원본에 없던 첫 delist 전까지만 대조 |
 | 11 | `DartFinancials.metricsBySymbol` | `opendart.py` | **미래참조.** 공시 지연(`announcement_lagged_year`)만 반영하고 정정공시 접수일은 안 본다 — DART 는 최신 정정본을 준다. | 2024-07 정정된 2023 사업보고서를 2024-04 백테스트가 사용 **2026-11-26 Kotlin 수정**(사용자 지시): 판본 접수일 ≤ asOf 만 사용, 연간은 공시지연 연도가 아직이면 직전 연도, 각 연도·TTM 분기도 공개분만(원 판본은 결측). 실측: 저장된 사업보고서 판본의 21.5% 가 4/1 이후 접수(중앙값 102일 뒤 — 정정), 2017·2018 사업연도는 3/31 주말로 마감이 4/1~2 로 밀려 80~89% — 원본 4월 규칙 자체도 그 해 미래참조였다 |

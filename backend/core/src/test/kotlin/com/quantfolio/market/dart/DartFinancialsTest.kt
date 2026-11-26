@@ -215,6 +215,17 @@ class DartFinancialsTest(
         assertEquals(100.0, m["net_income"])
     }
 
+    /** 무자료(013) 확정도 KST 날짜 — 2023 사업연도 무자료는 2024-12-31(KST) 부터 확정(migration-notes #1). */
+    @Test
+    fun noDataBecomesFinalOnKstDate() {
+        serveAccounts(emptyMap())
+        val kstDawn = Clock.fixed(Instant.parse("2024-12-30T16:00:00Z"), ZoneOffset.UTC) // KST 12-31 01:00
+        val led = InMemoryFetchLedger()
+        DartFinancials(OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), Cooldowns(kstDawn), kstDawn), store, led, Cooldowns(kstDawn), kstDawn)
+            .cachedAccounts(corp, 2023, DartMetrics.REPORT_ANNUAL, "CFS")
+        assertEquals(true, led.get("dart_accounts", com.quantfolio.market.store.CacheKeys.of(corp, 2023, DartMetrics.REPORT_ANNUAL, "CFS"))?.final)
+    }
+
     @Test
     fun quotaRaisesWithRetryAfterAndStopsAggregate() {
         serveCorpMap("900002" to "${corp}a", "900003" to "${corp}b")

@@ -187,7 +187,7 @@ class BacktestRunner(
      */
     private fun withSectorMap(config: Map<String, Any?>): Map<String, Any?> {
         if (!Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) || Cfg.truthy(config["_sector_map"])) return config
-        val smap = sectorMaps.sectorMap(MarketClock.todayUtcLegacy(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
+        val smap = sectorMaps.sectorMap(MarketClock.todayKst(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
         if (smap.isEmpty()) {
             log.warn("섹터 한도 설정됨(max_sector_pct)이나 업종 매핑 미확보 — 섹터 캡 미적용.")
             return config

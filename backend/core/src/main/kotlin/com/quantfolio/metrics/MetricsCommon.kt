@@ -14,9 +14,9 @@ import kotlin.math.sqrt
 /** 지표 계산 공통 헬퍼(원본 `metrics/common.py`). 영업일 계산만 상태(달력)가 필요하고 나머지는 순수 함수. */
 @Component
 class MetricsCommon(private val calendar: MarketCalendar, private val clock: Clock) {
-    /** 전 영업일(어제부터 최대 14일 거슬러). 원본 `date.today()` 기준 — 컨테이너 UTC(보존). */
+    /** 전 영업일(KST 어제부터 최대 14일 거슬러). 원본 `date.today()` 는 컨테이너 UTC 라 KST 00~09시에 하루 일렀다(migration-notes #8). */
     fun lastBusinessDay(): LocalDate {
-        val today = MarketClock.todayUtcLegacy(clock)
+        val today = MarketClock.todayKst(clock)
         var d = today.minusDays(1)
         repeat(14) {
             if (calendar.isBusinessDay(d)) return d

@@ -47,8 +47,8 @@ class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate, private v
         mapOf("corp" to corpCode, "year" to bsnsYear, "reprt" to reprtCode, "fs" to fsDiv),
     ) { rs, _ ->
         val confirmed = rs.getObject(2, LocalDate::class.java)
-        // 원본 동작 보존: date.today() = 컨테이너(UTC) 날짜 기준(docs/migration-notes.md).
-        val final = confirmed != null && !MarketClock.todayUtcLegacy(clock).isBefore(confirmed)
+        // KST 날짜 — 원본 date.today() 는 컨테이너 UTC 라 하루 늦게 확정했다(migration-notes #1).
+        val final = confirmed != null && !MarketClock.todayKst(clock).isBefore(confirmed)
         json.readValue<List<Map<String, Any?>>>(rs.getString(1)) to final
     }.firstOrNull()
 
