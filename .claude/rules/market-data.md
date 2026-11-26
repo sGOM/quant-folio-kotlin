@@ -71,4 +71,4 @@ paths:
 - Open API 가 유효한 키로도 `401 Unauthorized API Call` 이면 서비스별 이용신청 미승인이다(인증키 승인과 별개, 2026-11-22). 신청은 포털 `openapi.krx.co.kr`, 호출은 데이터 호스트 `data-dbg.krx.co.kr` — 다른 주소다. IP 차단 중에도 같은 401 — 둘 다 반복 호출하지 말고 사람에게 확인.
 - 업종지수는 indexes-only 백필로 섹터 계산 시작일(기준일−383일)까지 채워야 한다 — 첫 행 이전은 결측이 아니라서 덜 채우면 409 대신 짧은 지표가 나온다.
 - data.go.kr 배당 API: 구 경로 `/service/GetStocDiviInfoService/getDiviInfo` 는 code 12(서비스 없음), V2 만 동작. 필터 없이 전체 이력(약 7만 행)이 한 번에 오고 `basDt` 를 주면 0건. 공시일 필드가 없다. 개발계정 일 10,000 건.
-- OpenDART 는 일 한도(20,000)와 별개로 속도에도 막힌다: 2026-11-24 간격 없는 백필이 55초에 1,001회를 부른 직후 홈페이지까지 TCP 리셋(다음 날 풀림). `dartBackfill` 은 이제 호출 사이 `DART_PAUSE`(1초) 쉰다 — 줄이지 말 것, 끊김이 나면 재시도 반복 금지. 리포트의 `stoppedByBudget=true` 는 쿨다운·한도 정지도 포함한다.
+- OpenDART 는 일 한도와 별개로 속도에도 막힌다: 2026-11-24 간격 없는 백필이 55초에 1,001회를 부른 직후 홈페이지까지 TCP 리셋(다음 날 풀림). `dartBackfill` 은 이제 호출 사이 `DART_PAUSE`(1초) 쉰다 — 줄이지 말 것, 끊김이 나면 재시도 반복 금지. 리포트의 `stoppedByBudget=true` 는 쿨다운·한도 정지도 포함한다.

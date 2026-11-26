@@ -21,7 +21,6 @@ paths:
 
 ## 함정
 
-- **날짜:** 전부 KST(`MarketClock.todayKst`). 원본 `date.today()`(컨테이너 UTC) 보존분은 2026-11-26 에 걷어냈다(migration-notes #1·2·6~8).
 - 백업은 워커 이미지에 `pg_dump`(postgresql-client)가 있어야 한다. 비밀번호는 `PGPASSWORD` 로만.
 - 백업 신선도 감시(`BackupFreshness`)는 **엔진** 루프에서 KST 9시대에 돈다 — 워커를 감시하는 일을 워커 안에 두지 않는다.
 - 뉴스 XML 은 DOCTYPE 금지(XXE). 원본 의미: XML 이 엔티티를 풀고 HTML unescape 가 한 번 더 — "고치지" 말 것.
