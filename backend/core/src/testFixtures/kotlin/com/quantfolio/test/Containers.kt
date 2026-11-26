@@ -11,12 +11,12 @@ import org.testcontainers.utility.DockerImageName
 object Containers {
     val postgres: PostgreSQLContainer by lazy {
         PostgreSQLContainer(
-            DockerImageName.parse("timescale/timescaledb:latest-pg16").asCompatibleSubstituteFor("postgres"),
+            DockerImageName.parse("timescale/timescaledb:2.28.0-pg16").asCompatibleSubstituteFor("postgres"),
         ).apply { start() }
     }
 
     val redis: GenericContainer<*> by lazy {
-        GenericContainer(DockerImageName.parse("redis:7-alpine")).withExposedPorts(6379).apply { start() }
+        GenericContainer(DockerImageName.parse("redis:7.4.9-alpine")).withExposedPorts(6379).apply { start() }
     }
 }
 

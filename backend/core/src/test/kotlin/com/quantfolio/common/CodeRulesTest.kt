@@ -32,9 +32,7 @@ class CodeRulesTest {
 
     @Test
     fun noSystemZoneDates() {
-        // 원본 보존 예외: 프로세스 로컬 시각 기준이 원본 동작이다(DART 일일 한도 리셋 근사).
-        val allowed = setOf("core/src/main/kotlin/com/quantfolio/market/source/DataSourceError.kt")
-        val hits = mainCodeLines().filter { (f, _, l) -> f !in allowed && SYSTEM_ZONE_DATE.containsMatchIn(l) }
+        val hits = mainCodeLines().filter { (_, _, l) -> SYSTEM_ZONE_DATE.containsMatchIn(l) }
         assertTrue(hits.isEmpty(), "시스템 TZ(컨테이너 UTC) 날짜 — MarketClock.todayKst()/nowKst() 를 쓴다:\n${report(hits)}")
     }
 
@@ -47,6 +45,24 @@ class CodeRulesTest {
         val literal = redisLiteral(namespaces)
         val hits = mainCodeLines().filter { (f, _, l) -> f != keysFile && literal.containsMatchIn(l) }
         assertTrue(hits.isEmpty(), "Redis 키·채널 리터럴은 RedisKeys 에만:\n${report(hits)}")
+    }
+
+    /** db·redis·caddy 이미지는 버전 태그로 고정하고, Testcontainers 도 같은 태그를 쓴다 — 확장 버전이 다르면 CI 가 운영과 다른 DB 로 돈다(deploy.md). */
+    @Test
+    fun infraImagesPinnedAndSharedWithTests() {
+        val compose = backend.resolve("../docker-compose.yml").readLines().map { it.trim() }
+            .filter { it.startsWith("image:") }.map { it.removePrefix("image:").trim() }
+        assertTrue(compose.isNotEmpty() && compose.all { Regex(""":\d+\.\d+\.\d+""").containsMatchIn(it) }, "compose 이미지 태그 미고정: $compose")
+        val tc = Regex("""DockerImageName\.parse\("([^"]+)"\)""")
+            .findAll(backend.resolve("core/src/testFixtures/kotlin/com/quantfolio/test/Containers.kt").readText()).map { it.groupValues[1] }.toList()
+        assertTrue(tc.isNotEmpty() && tc.all { it in compose }, "Testcontainers 이미지가 compose 와 다름: $tc vs $compose")
+    }
+
+    /** 백업 신선도 감시는 엔진에서만 — 워커 안에서 부르면 워커가 멈출 때 감시도 멈춘다(worker.md). */
+    @Test
+    fun backupFreshnessCalledOnlyFromEngine() {
+        val hits = mainCodeLines().filter { (f, _, l) -> "BackupFreshness" in l && !f.startsWith("core/") }
+        assertTrue(hits.isNotEmpty() && hits.all { it.first.startsWith("engine/") }, "백업 감시는 엔진에서만:\n${report(hits)}")
     }
 
     @Test

@@ -484,4 +484,9 @@ class OfficialIngestTest(
         ingest().daily(target)
         assertTrue(open.calls > before, "미확정 날은 다음 실행에서 다시 받아야 한다")
     }
+
+    /** 2026-11-24 간격 없는 백필 직후 OpenDART 가 IP 연결을 리셋했다 — 간격을 줄이지 말 것(market-data.md). */
+    @Test
+    fun dartPauseIsNotShortened() =
+        kotlin.test.assertTrue(OfficialIngest.DART_PAUSE >= java.time.Duration.ofSeconds(1), "OpenDART 호출 간격은 1초 이상")
 }
