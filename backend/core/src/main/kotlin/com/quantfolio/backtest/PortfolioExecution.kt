@@ -147,12 +147,13 @@ internal fun applyRebalance(
 }
 
 /**
- * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없고 그 종목의 마지막 유효 관측 이후면(terminal gap)
- * 상장폐지로 보고 회수율만 현금화한다 — 중간 결측(interior gap)은 평가액을 동결.
+ * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없으면(ffill 한도 delisting_gap_days 를 넘긴 결측) 상장폐지로 보고
+ * 회수율만 현금화한다 — 결측이 나중에 재개될지는 d 에 알 수 없으므로 묻지 않는다. 원본은 패널 전체의 마지막 유효일로
+ * 재개(interior gap → 동결)와 종료(terminal gap → 현금화)를 갈라 미래를 봤다(migration-notes #10).
  */
 internal fun markToMarket(
     book: Book, prevPrices: Map<String, Double>, prices: Map<String, Double>, d: LocalDate,
-    lastValid: Map<String, LocalDate>, delistRecovery: Double, journal: Journal,
+    delistRecovery: Double, journal: Journal,
 ) {
     for (sym in book.value.keys.toList()) {
         val p0 = prevPrices[sym]
@@ -160,12 +161,9 @@ internal fun markToMarket(
         if (p1 != null && !p1.isNaN() && p0 != null && !p0.isNaN() && p0 > 0) {
             book.value[sym] = book.value.getValue(sym) * (p1 / p0)
         } else if (p1 == null || p1.isNaN()) {
-            val lv = lastValid[sym]
-            if (lv != null && d.isAfter(lv)) {
-                book.cash += book.value.remove(sym)!! * delistRecovery
-                book.cost.remove(sym)
-                journal.marker(d, "delist", "symbol" to sym)
-            }
+            book.cash += book.value.remove(sym)!! * delistRecovery
+            book.cost.remove(sym)
+            journal.marker(d, "delist", "symbol" to sym)
         }
     }
 }

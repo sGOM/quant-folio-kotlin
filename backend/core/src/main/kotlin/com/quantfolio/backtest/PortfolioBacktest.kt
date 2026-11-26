@@ -29,7 +29,7 @@ typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<St
  *   next_close(기본) 는 d 의 결정을 다음 거래일 종가에, same_close 는 d 종가에.
  * - 비용: 매수 fees+슬리피지, 매도 fees+tax+슬리피지. 드리프트 밴드 이내 보유 종목은 매매 안 함.
  * - 결정 우선순위: MDD 킬스위치 → 패닉 오버레이 → (쿨다운 대기) → 레짐 청산 → 정기 리밸런싱/재진입.
- * - 상장폐지: ffill 은 delisting_gap_days 까지만, 그 뒤 **terminal gap** 이면 회수율만 현금화(interior gap 은 동결).
+ * - 상장폐지: ffill 은 delisting_gap_days 까지만, 그 뒤에도 결측인 보유 종목은 회수율만 현금화(재개 여부는 보지 않는다 — 미래참조).
  * - 체결 정밀도: 정수주(기본), ADV 참여율 캡(강제청산 면제), 호가단위·상하한가(opt-in).
  *
  * 수치는 원본과 같은 연산 순서(dict 삽입 순서, 정렬된 종목 순회, 매도→매수)로 계산해 정답지와 1e-8 이내로 맞춘다.
@@ -194,7 +194,6 @@ object PortfolioBacktest {
     ): Map<String, Any?> {
         val symbols = closePanel.symbols
         val raw = symbols.associateWith { closePanel.column(it) }
-        val lastValid = raw.mapNotNull { (s, c) -> c.values.indexOfLast { !it.isNaN() }.takeIf { it >= 0 }?.let { s to c.index[it] } }.toMap()
         // 원본 `int(config.get("delisting_gap_days", 10) or 0)` — 키가 없으면 10, 있는데 None·0·"" 이면 0(ffill 무제한)
         val gap = Cfg.int(if (config.containsKey("delisting_gap_days")) Cfg.or(config, "delisting_gap_days", 0) else 10)
         val delistRecovery = Cfg.num(Cfg.get(config, "delisting_recovery", 0.9)).coerceIn(0.0, 1.0)
@@ -289,7 +288,7 @@ object PortfolioBacktest {
             val prices = panel.row(d)!!
             val limitRef = prevPrices
             // 1) 마크투마켓 + 상장폐지(terminal gap) 확정
-            prevPrices?.let { markToMarket(book, it, prices, d, lastValid, delistRecovery, journal) }
+            prevPrices?.let { markToMarket(book, it, prices, d, delistRecovery, journal) }
             dividendsByDay[d]?.let { dividendIncome += accrueDividends(book, it, prices, dividendTax, d, dividendSkipped) }
             prevPrices = prices
             // 2) 전일 결정의 지연 체결

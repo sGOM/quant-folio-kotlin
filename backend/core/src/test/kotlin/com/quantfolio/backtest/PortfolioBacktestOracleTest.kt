@@ -48,7 +48,25 @@ class PortfolioBacktestOracleTest {
                 panic = if (on("panic")) panic else null,
                 volume = if (on("volume")) volume else null,
             )
-            Oracle.assertDeep(run.get("out"), out, rel = 1e-8)
+            val name = run.get("name").asString()
+            if (name !in DELIST_DIVERGES) return@dynamicTest Oracle.assertDeep(run.get("out"), out, rel = 1e-8)
+            // 의도적 차이(migration-notes #10): 000110 의 중간 결측(22거래일)을 원본은 재개를 미리 알고 동결, Kotlin 은 ffill 한도를
+            // 넘긴 날(DELIST_DAY) 상장폐지로 현금화한다. 그 전날까지는 원본 정답지와 같아야 한다.
+            for (key in listOf("equity_curve", "trades", "markers")) {
+                val expected = items(run.get("out").get(key)).filter { it.get("t").asString().take(10) < DELIST_DAY }
+                @Suppress("UNCHECKED_CAST")
+                val actual = (out[key] as List<Map<String, Any?>>).filter { (it["t"] as String).take(10) < DELIST_DAY }
+                Oracle.assertDeep(json.valueToTree(expected), actual, rel = 1e-8, path = "$name.$key")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val delist = (out["markers"] as List<Map<String, Any?>>).filter { it["type"] == "delist" && it["symbol"] == "000110" }
+            kotlin.test.assertEquals(listOf(DELIST_DAY), delist.map { (it["t"] as String).take(10) }, name)
         }
+    }
+
+    private companion object {
+        /** 000110 결측(2024-05-06~06-04) 중 ffill 10일을 넘긴 첫날 — 이 종목을 그때 보유하는 시나리오. */
+        const val DELIST_DAY = "2024-05-20"
+        val DELIST_DIVERGES = setOf("all_inverse_vol", "score_vol_gate", "risk_caps", "limit_kill")
     }
 }

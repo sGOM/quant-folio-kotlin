@@ -101,6 +101,25 @@ class PortfolioLookaheadTest {
         assertTrue(upToCut(base, "trades").isNotEmpty())
     }
 
+    /**
+     * 결측 패턴 교란(migration-notes #10): cut 전에 시작해 ffill 한도를 넘긴 결측이 cut 뒤 재개되든 끝까지 이어지든
+     * cut 까지의 결과는 같아야 한다. 원본은 패널 전체의 마지막 유효일(lastValid)로 재개 여부를 미리 알고 동결/상장폐지를 갈랐다.
+     */
+    @Test
+    fun missingRunResumingAfterCutDoesNotChangePast() {
+        val config = mapOf("universe" to symbols, "selection" to mapOf("method" to "all"), "cadence" to "monthly", "weighting" to "equal")
+        fun go(resumes: Boolean): Map<String, Any?> {
+            val cols = symbols.withIndex().associate { (k, s) -> s to walk(k, 5000.0 + 3000 * k) }.toMutableMap()
+            val gapStart = 320 // cut(340) 보다 20거래일 앞 — 기본 delisting_gap_days 10 을 cut 전에 넘긴다
+            cols[symbols[0]] = cols.getValue(symbols[0]).mapIndexed { i, v -> if (i >= gapStart && !(resumes && dates[i].isAfter(cut))) Double.NaN else v }.toDoubleArray()
+            return PortfolioBacktest.run(Panel(dates, symbols, cols), config, dates[260], dates.last())
+        }
+        val ends = go(resumes = false)
+        val resumes = go(resumes = true)
+        for (key in listOf("equity_curve", "trades", "markers")) assertEquals(upToCut(ends, key), upToCut(resumes, key), "missing-run/$key")
+        assertTrue(upToCut(ends, "markers").any { it["type"] == "delist" && it["symbol"] == symbols[0] })
+    }
+
     /** 배당 이벤트: cut 이하 배당락은 고정, cut 이후 이벤트(금액·추가 종목)만 시드마다 바꾼다 — cut 까지의 결과는 같아야 한다. */
     private fun dividends(future: Int?): Map<String, List<Map<String, Any?>>> = symbols.withIndex().associate { (k, s) ->
         val past = listOf(mapOf<String, Any?>("ex_date" to dates[270 + k], "dps" to 100.0 + k), mapOf("ex_date" to dates[330], "dps" to 50.0))

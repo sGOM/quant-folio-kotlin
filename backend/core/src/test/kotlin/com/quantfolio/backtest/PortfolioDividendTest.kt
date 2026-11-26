@@ -80,16 +80,18 @@ class PortfolioDividendTest {
     }
 
     @Test
-    fun `ex date close missing while holding skips the event with a warning`() {
-        // 중간 결측이 ffill 한도(10일)를 넘으면 배당락일 종가가 NaN — 평가액만 동결되고 배당은 못 받는다. 조용히 넘기지 않고 경고한다.
+    fun `gap beyond ffill limit delists before the ex date so no dividend`() {
+        // 중간 결측이 ffill 한도(10일)를 넘은 날(110) 상장폐지로 현금화된다(재개 여부는 보지 않는다 — migration-notes #10).
+        // 배당락일(120)엔 보유가 없어 배당도 경고도 없다. 원본은 재개를 미리 알고 평가액을 동결한 채 배당만 건너뛰며 경고했다.
         val gapped = prices.copyOf().also { for (i in 100..125) it[i] = Double.NaN }
         val out = PortfolioBacktest.run(
             Panel(dates, listOf(sym), mapOf(sym to gapped)),
             config(mapOf("_dividends" to mapOf(sym to listOf(event(120, 300.0))))), dates.first(), dates.last(),
         )
         assertEquals(0.0, out["dividend_income"])
-        val w = out["dividend_warnings"] as List<*>
-        assertEquals(1, w.size)
-        assertTrue(w.single().toString().contains(sym))
+        assertEquals(null, out["dividend_warnings"])
+        @Suppress("UNCHECKED_CAST")
+        val delist = (out["markers"] as List<Map<String, Any?>>).filter { it["type"] == "delist" }
+        assertEquals(listOf(dates[110].toString()), delist.map { (it["t"] as String).take(10) })
     }
 }
