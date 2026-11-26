@@ -17,7 +17,7 @@ object LiveGate {
 
     data class Result(val passed: Boolean, val reasons: List<String>, val details: Map<String, Any?>)
 
-    /** 주문 단위 호출일 때만. maxPositionSize=전략별(없으면 사용자 공통) 리스크 한도, dailyUsed=당일 체결 명목 합계. */
+    /** 주문 단위 호출일 때만. maxPositionSize=전략별(없으면 사용자 공통) 리스크 한도, dailyUsed=당일 체결 명목 + 당일 미체결 잔량 명목. */
     data class OrderCheck(val notional: BigDecimal, val maxPositionSize: BigDecimal?, val dailyUsed: BigDecimal, val dailyCap: Double?)
 
     /** Python `f"{Decimal:,.0f}"`(HALF_EVEN, 천 단위 쉼표). */

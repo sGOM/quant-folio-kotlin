@@ -260,8 +260,8 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     // ── 계획·주문 ──
 
-    /** (후보풀, 목표비중). 위험회피(청산)는 이 계획을 거치지 않는다 — 시장데이터 없이도 보유를 정리해야 하므로. */
-    private fun computePlan(asOf: LocalDate): Pair<List<String>, Map<String, Double>> {
+    /** 목표비중. 위험회피(청산)는 이 계획을 거치지 않는다 — 시장데이터 없이도 보유를 정리해야 하므로. */
+    private fun computePlan(asOf: LocalDate): Map<String, Double> {
         val pool = resolveUniverse()
         log.info("전략 {} 후보풀 확보: {}종목", strategyId, pool.size)
         val method = selection["method"]
@@ -286,7 +286,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             val smap = if (Cfg.truthy(riskLayer["max_sector_pct"])) sectors() else null
             targets = RiskCaps.apply(targets, Panel.fromSeries(history), riskLayer, smap)
         }
-        return pool to targets
+        return targets
     }
 
     /** 가격 히스토리가 필요하면 최소 봉 수(동적 유니버스·모멘텀·역변동성·변동성 타깃·변동성 게이트 중 최대), 필요 없으면 null. */
@@ -320,11 +320,12 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
      * 계획 계산 중 시장데이터 미적재([MarketDataNotLoaded]: 유니버스·업종·시총·일봉)면 주문 없이 건너뛰고 critical 경보(fail-closed).
      * MCAP 유니버스는 config.universe 로 대체하지 않는다. 건너뛰었으면 false.
      * [riskOff](청산)는 계획·시장데이터 없이 이 전략·계좌의 보유 전부를 판다 — 후보풀 밖 보유도 포함.
+     * 정기 리밸런싱도 보유 전부를 본다 — 후보풀에서 밀려난 종목은 목표비중 0 으로 청산(원본은 풀 안 보유만 봐서 영구 잔류, migration-notes #16①).
      */
     fun rebalanceOnce(now: ZonedDateTime, riskOff: Boolean, barTag: String = "rebal", liqKind: String = "regime"): Boolean {
         val asOf = ctx.common.lastBusinessDay()
-        val (pool, targets) = if (riskOff) {
-            emptyList<String>() to emptyMap()
+        val targets = if (riskOff) {
+            emptyMap()
         } else {
             try {
                 computePlan(asOf).also { planGapAlerted = false } // 해소 — 다음 결손은 새 에피소드
@@ -340,7 +341,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "리밸런싱 발화 시점에 선정 종목이 하나도 산정되지 않아 이번 리밸런싱을 건너뜁니다(팩터/가격 데이터 조회 장애 가능). 다음 주기 재시도.", "factor_outage")
             return true
         }
-        val positions = if (riskOff) heldPositions().associate { it.first to it.second } else holdings(pool)
+        val positions = heldPositions().associate { it.first to it.second }
         if (targets.isEmpty() && positions.isEmpty()) {
             log.info("리밸런싱 전략 {} 레짐 위험회피 & 보유 없음 — 매매 없음", strategyId)
             return true
@@ -451,14 +452,6 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
             if ((i + 1) % 20 == 0 || i + 1 == universe.size) log.info("전략 {} 히스토리 시딩 진행: {}/{}", strategyId, i + 1, universe.size)
         }
         return out
-    }
-
-    private fun holdings(universe: List<String>): Map<String, BigDecimal> {
-        if (universe.isEmpty()) return emptyMap()
-        return ctx.jdbc.query(
-            "select symbol, qty from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0 and symbol in (:syms)",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey).addValue("syms", universe),
-        ) { rs, _ -> rs.getString(1) to rs.getBigDecimal(2) }.toMap()
     }
 
     /** 종목별 현재가. 실패·0 이하는 이번 리밸런싱에서 제외(결측을 0 원으로 흘리지 않는다). */

@@ -85,25 +85,54 @@ class RiskManagerTest(
         val b = strategy(uid)
         fun buy(sid: Int, sym: String, qty: Int, price: String, accountKey: String? = TEST_KIS_ACCOUNT_KEY) {
             val o = orders.save(Order(uid, sid, sym, "buy", d(qty.toString()), d(price), status = OrderStatus.filled, idempotencyKey = UUID.randomUUID().toString(), brokerAccountKey = accountKey))
-            executions.save(Execution(o.id!!, sid, d(qty.toString()), d(price), d("0"), Instant.now()))
+            executions.save(Execution(o.id!!, sid, d(qty.toString()), d(price), d("0"), Instant.now(), accountPositionQty = d(qty.toString())))
             positions.save(Position(uid, sid, sym, d(qty.toString()), d(price), brokerAccountKey = accountKey))
         }
-        buy(a, "005930", 10, "10000") // 현금 −100,000, 평가 0
+        buy(a, "005930", 10, "10000")
         buy(b, "000660", 10, "10000")
         buy(a, "005930", 30, "100000", "different-account")
         buy(a, "005930", 40, "100000", null)
         val prices = mapOf("005930" to d("9000"), "000660" to d("10000")) // a 평가손 −10,000
-        // 손익 = 실현 현금흐름(매수 비용) + 평가손익 → 계좌 −210,000, 전략 a −110,000
+        // 손익 = 실현(매도 없음, 수수료 0) + 평가손익 → 계좌 −10,000(a 만), 전략 a −10,000. 다른 계좌·계좌 미상 체결은 제외
         assertTrue(risk.checkDailyLoss(uid, a, prices, TEST_KIS_ACCOUNT_KEY).approved)
-        limits.save(RiskLimit(uid, null, dailyLossLimit = d("200000")))
+        limits.save(RiskLimit(uid, null, dailyLossLimit = d("10000"))) // 같으면 차단(≤)
         assertEquals(RiskManager.Decision(false, 0, "일일 손실 한도 초과"), risk.checkDailyLoss(uid, a, prices, TEST_KIS_ACCOUNT_KEY))
         val strat = limits.save(RiskLimit(uid, a, dailyLossLimit = null))
         assertTrue(risk.checkDailyLoss(uid, a, prices, TEST_KIS_ACCOUNT_KEY).approved) // 전략 행이 있고 한도 null 이면 계좌 게이트도 생략(원본 회귀 보존)
-        strat.dailyLossLimit = d("100000")
+        strat.dailyLossLimit = d("10000")
         limits.save(strat)
         assertEquals("일일 손실 한도 초과", risk.checkDailyLoss(uid, a, prices, TEST_KIS_ACCOUNT_KEY).reason) // 계좌 게이트가 먼저
         limits.findAll().filter { it.userId == uid && it.strategyId == null }.forEach { limits.delete(it) }
         assertEquals(RiskManager.Decision(false, 0, "전략별 일일 손실 한도 초과"), risk.checkDailyLoss(uid, a, prices, TEST_KIS_ACCOUNT_KEY))
+    }
+
+    private fun fill(uid: Int, sid: Int, sym: String, side: String, qty: Int, price: String, fee: String, at: Instant) {
+        val o = orders.save(Order(uid, sid, sym, side, d(qty.toString()), d(price), status = OrderStatus.filled, idempotencyKey = UUID.randomUUID().toString(), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        executions.save(Execution(o.id!!, sid, d(qty.toString()), d(price), d(fee), at, accountPositionQty = d(qty.toString())))
+    }
+
+    /** 원본은 매도대금을 그대로 이익으로 셌다 — 손실 매도가 손실 한도를 못 건드렸다(migration-notes #16②). */
+    @Test
+    fun dailyLossCountsTodaysSellAgainstItsCost() {
+        val uid = user()
+        val a = strategy(uid)
+        fill(uid, a, "005930", "buy", 10, "10000", "0", Instant.now().minusSeconds(3 * 86400)) // 며칠 전 매수
+        fill(uid, a, "005930", "sell", 10, "9000", "100", Instant.now()) // 오늘 전량 손실 매도
+        positions.save(Position(uid, a, "005930", d("0"), d("0"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        limits.save(RiskLimit(uid, null, dailyLossLimit = d("10000")))
+        // 실현 = (9,000 − 10,000) × 10 − 100 = −10,100 ≤ −10,000
+        assertEquals(RiskManager.Decision(false, 0, "일일 손실 한도 초과"), risk.checkDailyLoss(uid, a, mapOf("005930" to d("9000")), TEST_KIS_ACCOUNT_KEY))
+    }
+
+    /** 매수대금은 손실이 아니다 — 원본은 현금흐름으로 빼서 매수만으로 손실 한도에 걸렸다. */
+    @Test
+    fun dailyLossDoesNotCountTodaysBuyCashAsLoss() {
+        val uid = user()
+        val a = strategy(uid)
+        fill(uid, a, "005930", "buy", 10, "10000", "15", Instant.now())
+        positions.save(Position(uid, a, "005930", d("10"), d("10000"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        limits.save(RiskLimit(uid, null, dailyLossLimit = d("50000")))
+        assertTrue(risk.checkDailyLoss(uid, a, mapOf("005930" to d("10000")), TEST_KIS_ACCOUNT_KEY).approved) // 손익 = 수수료 −15
     }
 
     @Test

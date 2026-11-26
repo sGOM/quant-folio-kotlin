@@ -81,18 +81,43 @@ class RiskManager(
         return Decision(true, 0)
     }
 
-    /** 당일(KST) 손익 = 당일 체결의 실현 현금흐름(매도 − 매수 − 수수료) + 보유 평가손익(현재가 없는 종목은 제외). */
+    /**
+     * 당일(KST) 손익 = 당일 매도의 실현손익((체결가 − 매도 시점 평단) × 포지션 반영 수량) − 당일 수수료 + 보유 평가손익(현재가 없는 종목 제외).
+     * 매도 시점 평단은 전량 매도 때 positions 에서 0 으로 지워지므로, 이 계좌의 체결 이력을 `Fills.record` 와 같은 규칙
+     * (매수 가중평균, 매도는 평단 유지·0 이 되면 평단 0)으로 재생해 얻는다. 수량은 포지션에 실제 반영한 `account_position_qty`
+     * (null = 계좌별 포지션 이전 체결 → 0, MDD 현금 재생과 같은 기준). 원본은 실현을 당일 현금흐름(매도 − 매수 − 수수료)으로 봐서
+     * 손실 매도가 이익으로, 매수가 손실로 잡혔다(migration-notes #16②).
+     */
     private fun dailyPnl(userId: Int, prices: Map<String, BigDecimal>, strategyId: Int?, accountKey: String): BigDecimal {
         val start = MarketClock.kstStart(MarketClock.todayKst(clock))
         val p = MapSqlParameterSource("u", userId).addValue("t", Timestamp.from(start)).addValue("s", strategyId).addValue("a", accountKey)
         val strat = if (strategyId != null) " and e.strategy_id = :s" else ""
+        class Lot(var qty: BigDecimal = BigDecimal.ZERO, var avg: BigDecimal = BigDecimal.ZERO)
+        val lots = mutableMapOf<Pair<Int?, String>, Lot>()
         var realized = BigDecimal.ZERO
+        // ponytail: 매 호출 계좌 전체 이력 재생 — 단일 소유자라 체결 수가 작다. 느려지면 매도 시점 평단을 executions 에 기록하는 컬럼으로.
         jdbc.query(
-            "select e.filled_qty, e.filled_price, e.fee, o.side from executions e join orders o on e.order_id = o.id where o.user_id = :u and o.broker_account_key = :a and e.executed_at >= :t$strat",
+            "select e.strategy_id, o.symbol, o.side, coalesce(e.account_position_qty, 0), e.filled_price, e.fee, e.executed_at >= :t " +
+                "from executions e join orders o on e.order_id = o.id where o.user_id = :u and o.broker_account_key = :a$strat order by e.id",
             p,
         ) { rs ->
-            val gross = rs.getBigDecimal(1) * rs.getBigDecimal(2)
-            realized = if (rs.getString(4) == "sell") realized + gross - rs.getBigDecimal(3) else realized - gross - rs.getBigDecimal(3)
+            val lot = lots.getOrPut((rs.getObject(1) as Int?) to rs.getString(2)) { Lot() }
+            val qty = rs.getBigDecimal(4)
+            val price = rs.getBigDecimal(5)
+            val today = rs.getBoolean(7)
+            if (rs.getString(3) == "buy") {
+                if (qty.signum() > 0) {
+                    val newQty = lot.qty + qty
+                    lot.avg = (lot.qty * lot.avg + qty * price).divide(newQty, MathContext.DECIMAL128)
+                    lot.qty = newQty
+                }
+            } else {
+                val sold = qty.min(lot.qty)
+                if (today) realized += (price - lot.avg) * sold
+                lot.qty -= sold
+                if (lot.qty.signum() == 0) lot.avg = BigDecimal.ZERO
+            }
+            if (today) realized -= rs.getBigDecimal(6)
         }
         var unrealized = BigDecimal.ZERO
         jdbc.query("select symbol, qty, avg_price from positions where user_id = :u and broker_account_key = :a${if (strategyId != null) " and strategy_id = :s" else ""}", p) { rs ->

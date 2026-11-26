@@ -467,6 +467,22 @@ class RunnersTest(
         assertEquals(listOf(outside), ordersOf(sid).filter { it.side == "sell" }.map { it.symbol })
     }
 
+    /** 시총 풀은 매번 바뀐다 — 풀에서 밀려난 과거 편입 종목도 목표비중 0 으로 청산해야 영구 잔류하지 않는다(migration-notes #16①). */
+    @Test
+    fun `regular rebalance sells holdings that left the candidate pool`() {
+        val codes = (1..3).map { sym() }
+        codes.forEachIndexed { k, c -> seed(c, 30) { i -> 1000.0 + (k + 1) * 10.0 * i } }
+        val dropped = sym()
+        val (uid, sid) = strategy(rebalCfg(codes))
+        (codes + dropped).forEach { broker.quotes[it] = BigDecimal("1000") }
+        positions.save(Position(uid, sid, dropped, BigDecimal("300"), BigDecimal("900"), brokerAccountKey = TEST_KIS_ACCOUNT_KEY))
+        rebal(sid).tickOnce()
+        val sell = ordersOf(sid).single { it.side == "sell" }
+        assertEquals(dropped, sell.symbol)
+        assertEquals(0, BigDecimal("300").compareTo(sell.qty))
+        assertTrue(sell.reason!!.contains("리밸런싱 선정 제외"), sell.reason)
+    }
+
     @Test
     fun `KOSPI_MCAP decision date is today so previous trading day must be loaded`() {
         val members = (1..2).map { sym() }
