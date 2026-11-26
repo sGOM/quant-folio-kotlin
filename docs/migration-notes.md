@@ -17,7 +17,7 @@
 기존 주문·포지션 계좌 키와 잔고 추정 차단은 보존한다. 과거 계좌의 장부를 새 시크릿 계좌에 자동 연결하지 않는다.
 엔진 정합(주기·체결통보 트리거)은 비소유자 주문을 조회·통계·알림 없이 건너뛰고, 주문 실행은 전략이 그 사용자 것이 아니면 예약 없이 보류한다(원본은 둘 다 사용자 구분이 없다).
 계좌는 이제 시크릿 교체로 바뀌므로 V2 트리거는 V6 이전에도 발화하지 않았다. V6 는 트리거만 지우고 이미 선 `kis_balance_reconcile_blocked` 는 남겨 계속 잔고 추정을 막는다(새로 서지는 않는다). 이전 장부와 새 계좌 잔고의 혼합은 기존 계좌 키 조건이 막는다 —
-사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다(V8 이 그 주문을 지우면서 이 차단을 플래그로 옮겼다 — 아래 "의도적 차이").
+사용자의 주문 중 계좌 키가 NULL 이거나 다른 것이 하나라도 있으면 KIS 모의 잔고 추정(배정·종결 근거)을 하지 않는다. 원본 DB 의 과거 주문은 계좌 키가 NULL 이라 컷오버 뒤 그 사용자의 잔고 추정은 플래그와 무관하게 꺼진다(V8 이 그 주문을 지웠다 — 아래 "의도적 차이").
 
 예외: 2026-11-07~08 사용자 지시로 주문 안전성 #13·#14를 Kotlin에서 먼저 수정했다. 아래 표는 원본 결함의 이력이며, 이 두 행은 현재 Kotlin 동작이 아니다.
 선택 증권사 기준의 실전 게이트, 접수 정보 선저장(호출자 롤백과 분리), 사용자·종목별 접수불명 재주문 차단,
@@ -47,24 +47,24 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 
 | # | 위치(Kotlin) | 원본 | 내용 | 영향 |
 |---|---|---|---|---|
-| 1 | `DartFinancialStore.read` | `store/dart_store.py::_select` | 확정 판정이 `date.today()`(컨테이너 UTC) 기준. 다른 곳은 KST(`now_kst`). | KST 00~09시에 하루 늦게 확정 — 안전측(재조회 1회 더) |
-| 2 | `DataSourceErrors.secondsUntilMidnight` | `errors.py` | 프로세스 로컬 시각 기준 자정(UTC 컨테이너면 KST 09시). DART 한도는 KST 자정 리셋. | 쿨다운이 길어지거나 짧아짐 — 원본 주석이 수용한 오차 |
-| 3 | `KrxMdc.pykrx` | pykrx `KrxWebIo.read` | 730일 초과 조회에서 두 번째 조각부터 항상 `result["output"]` 에 이어붙여, `OutBlock_1` 응답(MDCSTAT01602 기간등락률)은 KeyError 로 실패 | 2년 초과 기간등락률 조회 불가(Unavailable) |
-| 4 | `KrxStockApi` int32 컬럼 | pykrx `astype(np.int32)` | 시가·종가·거래량 등 int32 컬럼이 2^31 을 넘으면 numpy OverflowError 로 그 시장 조회 전체가 실패 | 거래량 21억 주 초과 종목이 있는 날 해당 시장 데이터 누락(Unavailable) |
+| 1 | `DartFinancialStore.read` | `store/dart_store.py::_select` | 확정 판정이 `date.today()`(컨테이너 UTC) 기준. 다른 곳은 KST(`now_kst`). | KST 00~09시에 하루 늦게 확정 — 안전측(재조회 1회 더) **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 2 | `DataSourceErrors.secondsUntilMidnight` | `errors.py` | 프로세스 로컬 시각 기준 자정(UTC 컨테이너면 KST 09시). DART 한도는 KST 자정 리셋. | 쿨다운이 길어지거나 짧아짐 — 원본 주석이 수용한 오차 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 3 | `KrxMdc.pykrx` | pykrx `KrxWebIo.read` | 730일 초과 조회에서 두 번째 조각부터 항상 `result["output"]` 에 이어붙여, `OutBlock_1` 응답(MDCSTAT01602 기간등락률)은 KeyError 로 실패 | 2년 초과 기간등락률 조회 불가(Unavailable) **2026-11-26 소멸**: KRX MDC 경로(`KrxMdc`)를 PR #1 에서 제거 |
+| 4 | `KrxStockApi` int32 컬럼 | pykrx `astype(np.int32)` | 시가·종가·거래량 등 int32 컬럼이 2^31 을 넘으면 numpy OverflowError 로 그 시장 조회 전체가 실패 | 거래량 21억 주 초과 종목이 있는 날 해당 시장 데이터 누락(Unavailable) **2026-11-26 소멸**: `KrxStockApi` 를 PR #1 에서 제거(공식 Open API 적재는 Long) |
 | 5 | `TrackingController` | `routes/tracking.py` + `tracking.reconstruct_realized_curve` | 가격 패널 인덱스(tz-aware UTC)와 체결일(tz-naive KST 날짜)을 한 집합에 섞어 정렬 → 체결 종목에 시세가 하나라도 있으면 `TypeError` 로 500(원본 컨테이너에서 재현 확인). **크래시는 보존 대상이 아니라고 판정** — 의도대로 날짜끼리 비교해 정상 응답 | 원본에선 사실상 항상 실패하던 화면이 동작. 원본 결과와 비교할 기준값이 없다 |
-| 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 |
-| 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) |
-| 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 |
-| 9 | `AuthController.login` | `routes/auth.py::login` | 가입은 EmailStr 로 정규화(공백 제거·도메인 소문자)해 저장하지만 로그인은 입력 그대로 조회. | `A@Example.COM` 으로 가입하면 저장은 `A@example.com` — 같은 문자열로 로그인하면 401 |
-| 10 | `PortfolioBacktest.run`(`lastValid`) | `backtest/portfolio.py:865` | **미래참조.** 상장폐지 판정의 "마지막 유효 관측일"을 패널 전체(미래 포함)에서 잡는다. 원본 주석상 의도된 설계(거래정지 오판 방지). | ffill 한도를 넘는 결측이 d 이후 재개되면 d 에 청산하지 않고 동결 — 재개 여부를 미리 안다 |
-| 11 | `DartFinancials.metricsBySymbol` | `opendart.py` | **미래참조.** 공시 지연(`announcement_lagged_year`)만 반영하고 정정공시 접수일은 안 본다 — DART 는 최신 정정본을 준다. | 2024-07 정정된 2023 사업보고서를 2024-04 백테스트가 사용 |
-| 12 | `KrxIndexService.sectorMap` | `krx_index.py:483` | **미래참조.** asOf 이전 PIT 스냅샷이 없으면 현재 업종 분류로 폴백(경고 로그만). | 스냅샷 도입 이전 구간의 업종 중립화가 현재 분류 사용. 백테스트 섹터 한도(`BacktestRunner.withSectorMap`, 원본 `portfolio._with_sector_map`)는 오늘(UTC) 기준으로 1회 조회해 구간 전체에 그 분류를 쓴다 |
-| 13 | `BaseRunner.place` 실전 게이트 | `base_runner.py:232` | 게이트 적용을 선택된 증권사가 아니라 전역 `KIS_ENV` 로 판단. | `KIS_ENV=vts` + 토스 계좌 → 실돈 주문이 게이트(승인·정합 등급·금액 상한) 없이 나감 |
-| 14 | `OrderExecutor.execute` | `executor.py:117-154` | ① 멱등은 신호 키 단위 — 접수불명 주문이 남아 있어도 다른 키(다음 날 리밸런싱)는 같은 매수를 다시 낸다. ② 주문번호를 체결 조회 전에 저장하지 않고, 조회의 비-`BrokerError` 예외는 그대로 전파 → pending 에 주문번호 없이 남는다. ③ 토스 성공 응답에 orderId 없으면 `BrokerError`→rejected 확정. ④ KIS 성공 응답에 `ODNO` 없으면 submitted + null 번호 → 어느 정합 쿼리에도 안 걸린다. | 이중 매수 / 접수된 주문의 장부 누락 |
-| 15 | `Reconciler`·`Fills.record` | `reconcile.py:80-199`·`record_fill` | ① 잔고 교차확인의 기록 수량 합이 매수·매도를 구분 없이 더한다. ② 증분 체결에 누적 평균가를 적용(증분 단가 아님). ③ 체결 조회가 당일 KST 만. ④ 포지션 read-modify-write 가 주문 단위 락뿐이라 같은 종목 다른 주문끼리 경쟁. | 회수 불가 체결 / 평단 왜곡 / 전날 체결 미회수 / 수량 유실 |
-| 16 | `RebalanceRunner.holdings`·`RiskManager` 일손익·`LiveGate` 일일 상한 | `rebalance_runner.py:1027`·`risk.py:203`·`live_gate.py:145` | ① 청산 대상이 현재 후보 유니버스 안 보유분만. ② 실현손익이 매도대금 − 수수료(원가 미차감). ③ 일일 상한이 체결 합계만 보고 미체결 주문 명목을 안 더한다. | 유니버스 이탈 종목 미청산(MDD 킬스위치 포함) / 손실 매도가 이익으로 집계돼 손실 한도 미발동 / 상한 초과 체결 |
-| 17 | `Signals.minPeriods`(sma/ema_crossover) | `signals.py:712` | `ema_crossover` 의 slow 기본값을 신호 계산(26)과 달리 20 으로 본다. | slow 미지정 ema 전략의 최소 봉 수(시드 길이·데이터 충분성)가 6봉 짧게 잡힌다 |
-| 18 | `AlertPublisher.publishEvent` | `engine/alerts.py`·`fills.publish_event` | DB 적재 실패만 삼키고, Redis 발행 실패는 감싸지 않아 `publish` 호출자(주문 정합 등)로 예외가 전파된다. 보존(2026-11-17 리뷰에서 확인). | 알림 발행 실패가 호출한 작업을 중단시킬 수 있다 |
+| 6 | `StrategyRunner`(오늘 봉·멱등 키 `barTs`) | `engine/runner.py` | 오늘 날짜가 `date.today()`(컨테이너 UTC). | KST 00~09시(장 밖)엔 전날 — 장중(09~15:30 KST)은 UTC 날짜와 같아 매매 영향 없음. 멱등 키가 UTC 날짜라 바꾸면 컷오버 당일 같은 신호가 재주문될 수 있어 함부로 고치지 말 것 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 7 | `WorkerJobs`(일봉 적재·체결 정합 점검 기간 끝) | worker 작업 | `date.today()`(UTC) 기준 기간. | KST 00~09시 실행분은 하루 덜 본다 — 스냅샷 선적재만 KST 전날(원본도 그렇다) **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 8 | `KrxIndexService.todayUtc`(기준일 미지정 시) | KRX 지수·업종 조회 | `date.today()`(UTC). | `asOf` 없이 부른 호출만 KST 00~09시에 전날 기준 **2026-11-26 Kotlin 수정**: KST 날짜(`MarketClock.todayKst`·KST 자정) |
+| 9 | `AuthController.login` | `routes/auth.py::login` | 가입은 EmailStr 로 정규화(공백 제거·도메인 소문자)해 저장하지만 로그인은 입력 그대로 조회. | `A@Example.COM` 으로 가입하면 저장은 `A@example.com` — 같은 문자열로 로그인하면 401 **2026-11-26 소멸**: 로그인은 비밀번호 하나로 소유자만 검증하고 가입은 거부 — 이메일 조회 경로가 없다 |
+| 10 | `PortfolioBacktest.run`(`lastValid`) | `backtest/portfolio.py:865` | **미래참조.** 상장폐지 판정의 "마지막 유효 관측일"을 패널 전체(미래 포함)에서 잡는다. 원본 주석상 의도된 설계(거래정지 오판 방지). | ffill 한도를 넘는 결측이 d 이후 재개되면 d 에 청산하지 않고 동결 — 재개 여부를 미리 안다 **2026-11-26 Kotlin 수정**(사용자 지시): 그날 결측이면 재개 여부와 무관하게 상장폐지 현금화. 거래정지가 delisting_gap_days 를 넘으면 회수율로 현금화되는 비용을 받아들였다(재개 뒤 재편입 가능). 정답지 all_inverse_vol·score_vol_gate·risk_caps·limit_kill 은 2024-05-20(000110) 전까지만 대조. 실측(2026-11-26): 운영 일봉(KRX Open API)은 거래정지일도 행(거래량 0·종가 유지)이 있어 2023 이후 20일 넘는 중간 결측 0건 — 운영 백테스트 영향 없음. 2층 정답지는 픽스처의 데이터 공백(대형주 22개 2021-03~08 결측)에서 갈라져 원본에 없던 첫 delist 전까지만 대조 |
+| 11 | `DartFinancials.metricsBySymbol` | `opendart.py` | **미래참조.** 공시 지연(`announcement_lagged_year`)만 반영하고 정정공시 접수일은 안 본다 — DART 는 최신 정정본을 준다. | 2024-07 정정된 2023 사업보고서를 2024-04 백테스트가 사용 **2026-11-26 Kotlin 수정**(사용자 지시): 판본 접수일 ≤ asOf 만 사용, 연간은 공시지연 연도가 아직이면 직전 연도, 각 연도·TTM 분기도 공개분만(원 판본은 결측). 실측: 저장된 사업보고서 판본의 21.5% 가 4/1 이후 접수(중앙값 102일 뒤 — 정정), 2017·2018 사업연도는 3/31 주말로 마감이 4/1~2 로 밀려 80~89% — 원본 4월 규칙 자체도 그 해 미래참조였다 |
+| 12 | `KrxIndexService.sectorMap` | `krx_index.py:483` | **미래참조.** asOf 이전 PIT 스냅샷이 없으면 현재 업종 분류로 폴백(경고 로그만). 1단계부터 폴백 없이 `MarketDataNotLoaded`(`LocalSectorMap`). | (1단계 이전) 스냅샷 도입 이전 구간의 업종 중립화가 현재 분류 사용. 남은 미래참조: 백테스트 섹터 한도(`BacktestRunner.withSectorMap`, 원본 `portfolio._with_sector_map`)는 오늘(UTC) 기준으로 1회 조회해 구간 전체에 그 분류를 쓴다 **2026-11-26 Kotlin 수정**(사용자 결정): 섹터 캡은 결정일 이하 최신 업종 스냅샷만 쓴다. 과거 업종 이력은 출처가 없어 스냅샷 없는 결정일은 캡 없이 진행하고 결과 `assumptions` 에 적용 시작일을 적는다(409 로 멈추지 않는다) |
+| 13 | `BaseRunner.place` 실전 게이트 | `base_runner.py:232` | 게이트 적용을 선택된 증권사가 아니라 전역 `KIS_ENV` 로 판단. | `KIS_ENV=vts` + 토스 계좌 → 실돈 주문이 게이트(승인·정합 등급·금액 상한) 없이 나감 **2026-11-07 Kotlin 수정**(위 본문 "예외" 문단) |
+| 14 | `OrderExecutor.execute` | `executor.py:117-154` | ① 멱등은 신호 키 단위 — 접수불명 주문이 남아 있어도 다른 키(다음 날 리밸런싱)는 같은 매수를 다시 낸다. ② 주문번호를 체결 조회 전에 저장하지 않고, 조회의 비-`BrokerError` 예외는 그대로 전파 → pending 에 주문번호 없이 남는다. ③ 토스 성공 응답에 orderId 없으면 `BrokerError`→rejected 확정. ④ KIS 성공 응답에 `ODNO` 없으면 submitted + null 번호 → 어느 정합 쿼리에도 안 걸린다. | 이중 매수 / 접수된 주문의 장부 누락 **2026-11-07~08 Kotlin 수정**(위 본문 "예외" 문단) |
+| 15 | `Reconciler`·`Fills.record` | `reconcile.py:80-199`·`record_fill` | ① 잔고 교차확인의 기록 수량 합이 매수·매도를 구분 없이 더한다. ② 증분 체결에 누적 평균가를 적용(증분 단가 아님). ③ 체결 조회가 당일 KST 만. ④ 포지션 read-modify-write 가 주문 단위 락뿐이라 같은 종목 다른 주문끼리 경쟁. | 회수 불가 체결 / 평단 왜곡 / 전날 체결 미회수 / 수량 유실 **2026-11-08 Kotlin 에서 ①~④ 수정**(위 본문) |
+| 16 | `RebalanceRunner.holdings`·`RiskManager` 일손익·`LiveGate` 일일 상한 | `rebalance_runner.py:1027`·`risk.py:203`·`live_gate.py:145` | ① 청산 대상이 현재 후보 유니버스 안 보유분만. ② 실현손익이 매도대금 − 수수료(원가 미차감). ③ 일일 상한이 체결 합계만 보고 미체결 주문 명목을 안 더한다. | 유니버스 이탈 종목 미청산(MDD 킬스위치 포함) / 손실 매도가 이익으로 집계돼 손실 한도 미발동 / 상한 초과 체결 **2026-11-26 Kotlin 에서 셋 다 수정**(원본 은퇴 뒤 사용자 지시): ① 정기 리밸런싱도 이 전략·계좌 보유 전체를 본다(리스크오프는 이전부터) ② 실현손익 = (체결가 − 매도 시점 평단) × 포지션 반영 수량 − 수수료, 평단은 체결 이력 재생 — 매수대금은 더 이상 손실이 아니다 ③ 일일 사용액에 당일 미완료 주문의 미체결 잔량 × 주문가를 더한다 |
+| 17 | `Signals.minPeriods`(sma/ema_crossover) | `signals.py:712` | `ema_crossover` 의 slow 기본값을 신호 계산(26)과 달리 20 으로 본다. | slow 미지정 ema 전략의 최소 봉 수(시드 길이·데이터 충분성)가 6봉 짧게 잡힌다 **2026-11-26 Kotlin 수정**: 타입별 기본값(`DEFAULTS`)을 읽어 ema 는 26. 정답지 `ema` 사례만 기대값을 26 으로 둔다 |
+| 18 | `AlertPublisher.publishEvent` | `engine/alerts.py`·`fills.publish_event` | DB 적재 실패만 삼키고, Redis 발행 실패는 감싸지 않아 `publish` 호출자(주문 정합 등)로 예외가 전파된다. 보존(2026-11-17 리뷰에서 확인). | 알림 발행 실패가 호출한 작업을 중단시킬 수 있다 **2026-11-26 Kotlin 수정**: `publishEvent` 가 발행 실패를 로그로 삼킨다(주문 접수 직후·체결 기록에서도 부른다). 알림함(DB) 적재는 그대로 |
 
 ## KIS 실측에서 확인한 접속 문제 (2026-11-16)
 
@@ -103,7 +103,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
   **원인 미확정**: 모의 WS 서버 측 수용 한계·불안정으로 추정하며, IP 별 접속 제한 가능성은 15분 간격 단발 실패와 일정 간격 시도의 혼재 결과와 잘 맞지 않는다. 그동안 엔진은 5→120초 백오프 재연결, 시세는 REST 폴백, 체결은 주문 직후 조회·주기 정합으로 기록했다. 실전 WS 에서도 같은지는 미측정.
 - 연결 종료 수정 뒤 엔진으로 전략을 정지하자 엔진 컨테이너에 31000 포트 소켓이 0개였다.
 - 003480 41주(2026-11-16 실측 잔여)는 10:24:49 시장가 매도 주문을 접수했고 기록 시점에는 미체결이었다(거래 드문 종목) — 재주문하지 않았다.
-- KRX: 아침 로그인이 `CD010`(비밀번호 변경 필요)로 실패했다. 소유자가 비밀번호를 바꾸고 `secrets/krx_pw.txt` 를 갱신한 뒤 업종 지표 조회가 정상이었다(실패 경고 없음).
+- KRX: 아침 로그인이 `CD010`(비밀번호 변경 필요)로 실패했다. 소유자가 비밀번호를 바꾸고 `secrets/krx_pw.txt` 를 갱신한 뒤 업종 지표 조회가 정상이었다(실패 경고 없음). (2단계에서 MDC 와 `krx_pw` 시크릿은 삭제됨.)
   KRX Open API(AUTH_KEY)는 지수 구성종목·업종 분류·PER/PBR·투자자별 순매수를 제공하지 않아 MDC 로그인 방식을 대체할 수 없다(조사 결론, 전환 안 함).
 - 원본 스택(`quantfolio-*` 컨테이너)은 2026-11-17 소유자 결정으로 정지했다(볼륨 보존).
 
@@ -115,6 +115,49 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 정규장 중 지정가(00)에 `EXCG_ID_DVSN_CD=NXT` 또는 `SOR` 를 주면 접수되지만 주문 내역에는 `excg_id_dvsn_cd="KRX"` 로 기록됐다(거래소 지정이 무시됨). 접수된 2건은 바로 취소했다.
 - 장 마감 뒤 16:03(KST) 지정가(00) + `NXT`, 하한가 137,800원 1주 매수는 `rt_cd=1 msg_cd=40580000 "모의투자 장종료 입니다."` 로 거절됐다.
 - 결론: 모의투자로는 정규장 밖 주문(시간외·NXT 프리/애프터마켓)을 낼 수 없어 이 경로는 모의에서 검증할 수 없다. 실전에서의 동작은 미측정.
+
+## 공식 경로 시장데이터 1단계 — 의도적 변경 (2026-11-22~)
+
+설계 `docs/superpowers/specs/2026-11-22-official-market-data-phase1-design.md`. 전략 경로(백테스트·리밸런싱·유니버스·패닉·달력·심볼·배치)만 바꿨고 UI 경로(스크리너·차트 등)의 MDC·네이버는 2단계까지 그대로다. (2단계에서 제거됨 — 아래 2단계 절.) 아래는 원본과 **일부러 다르게** 한 것이다.
+
+- 소스 교체: 종목 일봉·시총·지수는 KRX MDC·네이버 대신 KRX Open API 를 `market/krxopen/` 이 적재한 로컬 테이블에서 읽는다. 수정주가는 외부 수정주가 대신 원주가 + 전일대비(`prevDiff`)로 로컬에서 계산한다(`AdjustedBars`). DART 재무는 로컬 전용(`remote=false`, 종목→corp_code 는 `dart_corp_codes`), 배당은 공공데이터포털 금융위원회_주식배당정보(`getDiviInfo_V2`)다.
+  실측 결과는 아래 "공식 경로 실측 (2026-11)". 남은 미실측: 일일 공개 시각(워커는 평일 07:00~20:00 30분마다 적재, 엔진은 `quantfolio.engine.dataReadyBy`=10:30 KST 전까지 T-1 미적재를 경보 없이 대기).
+- 미적재는 실패다: 로컬에 없으면 원격 폴백·조용한 저하 대신 `MarketDataNotLoaded`(백테스트 409, 원본은 비어 있으면 MDC·네이버로 내려가거나 빈 결과로 계속). 조회 실패(`DataSourceError`)와 구분된다.
+- 백테스트에 배당 포함: 락일(기준일 이하 마지막 거래일의 직전 거래일)에 직전일 종가 보유분만 적립, 세율 0.154, 금액은 분할 단위를 환산한다(`.claude/rules/market-data.md`). 벤치마크는 배당 제외(TR 지수 미확인). 배당 출처는 공시일이 없어 `announcedOn=null`, Valuation 은 기준일+90일에 알려진 것으로 본다.
+- Valuation: 원본은 KRX 가 준 PER/PBR/DVD_YLD 를 썼고, 지금은 DART 재무·시총·배당으로 로컬 계산한다. 무배당 `div=0.0` 은 원본 DVD_YLD 0 과 같은 의미(조건은 `market-data.md`).
+- 업종 체계: KRX 업종명 대신 KIS 종목마스터 중분류(`sector_map_snapshots` 를 KIS 마스터가 채움). 섹터 캡 결과가 원본과 다를 수 있다. 값 형식이 `KOSPI:0013` 과 옛 KRX 업종명이 날짜별로 섞여 있다.
+- 유니버스 `KOSPI_MCAP`: 직전 거래일 이하 최신 시총 상위 N 보통주(종목별 최신 `stock_kind`). 구성종목 조회(MDC) 대신이며 `pick` 기본값을 따른다. 보통주 여부를 아는 종목이 하나도 없으면 `MarketDataNotLoaded("stock_kind")`.
+- 거래정지일 봉: KRX 는 시·고·저가 0, 종가 기준가로 준다. 거래량 0·시고저 ≤ 0 이면 o=h=l=종가로 저장한다(`AdjustedBars.flatIfHalted`, 봉은 버리지 않음). 원본 네이버 봉과 다를 수 있다.
+- 라이브 엔진 fail-closed(규칙 정본 `.claude/rules/trading-safety.md`): 원본은 데이터가 비면 원격으로 받거나 `config.universe` 로 폴백해 매매를 계속했다. 지금은 주문 없이 멈추고 critical 을 보낸다. 원본과 다른 점이 더 있다: 엔진 점수에도 커버리지 관문, `StrategyRunner` 시드는 기동 1회가 아니라 성공할 때까지 틱마다, 리스크오프 청산 대상은 후보풀 보유가 아니라 전체 보유.
+- 응답 `factor_warnings` 키 제거: 원본은 커버리지 낮음을 경고로 남기고 진행했다. 지금은 팩터 커버리지 < 50% 면 실패한다(value/quality 는 점수에 쓰는 컬럼 기준, 빈 유니버스는 별도 실패).
+- 1단계 거부: `pead` 가중치(공시 달력이 원격 전용; flow 는 2단계에서 삭제)는 백테스트 422(`BacktestInputError`), 엔진은 `MarketDataNotLoaded("unsupported_in_phase1")` → 정지+critical. 문자열 팩터 가중치는 422(원본도 `ClassCastException` 으로 실패했다).
+- `PanicService` UI: 시장별로 격리해 한 시장이 비면 그 시장만 `unavailable`(전체 503 아님). 백테스트의 패닉 시계열은 로컬 전용이며 priceChange 에서 기간 중 상폐 종목은 MDC 처럼 close 0·-100%·거래량 0 으로 보강한다. UI 의 `newLowRatio` 는 여전히 null.
+- 거래일·휴장: 원본은 MDC 지수 일봉 날짜, 지금은 KRX Open API 적재 원장(규칙은 `market-data.md`). **열린 문제:** 휴장 다음 거래일 아침엔 뒷날 기록이 없어 '모름' → 엔진 정지·critical(Task 1 실측 뒤 결정). 적재 범위 밖 과거일은 KIS 국내휴장일조회(vts 미지원 → 평일 규칙 폴백+로그).
+- 원본 동작 보존(고치지 않고 기록): 정기 리밸런싱의 `holdings(pool)` 필터 — 풀(상위 N)에서 빠진 보유 종목은 고아 포지션이 되어 정기 리밸런싱으로 팔리지 않는다(리스크오프만 전체 청산).
+- 알려진 한계(미측정): `residual_momentum` 이 필요한 로컬 일봉 깊이(엔진 `(36+3)×22` 거래일 ≈ 3.4년), `DividendFeed` 전체 원주가 이력 로드 비용, 기존 `price_ticks` 보다 이른 날 백필 시 원주가·수정주가 혼입 가능.
+
+## 공식 경로 실측 (2026-11)
+
+KRX Open API(`data-dbg.krx.co.kr/svc/apis`, 헤더 `AUTH_KEY`)를 2026-11-23 서비스 7개 승인 직후 한 번씩 호출했다(총 15회). 응답은 커밋하지 않는다(재배포 제한).
+
+- **필드명:** 구현 상수와 모두 일치. 일별매매(`sto/stk_bydd_trd`·`ksq_bydd_trd`)는 `BAS_DD, ISU_CD, ISU_NM, MKT_NM, SECT_TP_NM, TDD_CLSPRC, CMPPREVDD_PRC, FLUC_RT, TDD_OPNPRC, TDD_HGPRC, TDD_LWPRC, ACC_TRDVOL, ACC_TRDVAL, MKTCAP, LIST_SHRS`이다. 여기서 `ISU_CD` 는 6자리 단축코드다. 종목기본정보의 `ISU_CD` 는 ISIN 이고 단축코드는 `ISU_SRT_CD` 다. 지수(`idx/*_dd_trd`)는 `IDX_CLSS, IDX_NM, CLSPRC_IDX, CMPPREVDD_IDX, FLUC_RT, OPNPRC_IDX, HGPRC_IDX, LWPRC_IDX, ACC_TRDVOL, ACC_TRDVAL, MKTCAP` 이다. 숫자는 쉼표 없는 문자열이다.
+- **지수명:** `코스피`·`코스피 200`·`코스닥` 원문이 있다. 매핑과 일치하며, `코스피 (외국주포함)` 같은 이름과 섞이지 않는다.
+- **보통주 판정:** `KIND_STKCERT_TP_NM` 값은 `보통주`·`구형우선주`·`신형우선주`·`종류주권` 네 가지다. 2026-11-20 기준 건수는 다음과 같다.
+
+  | 시장 | 보통주 | 구형우선주 | 신형우선주 | 종류주권 |
+  |---|---|---|---|---|
+  | KOSPI | 828 | 76 | 19 | 12 |
+  | KOSDAQ | 1834 | 0 | 1 | 1 |
+
+- **전일대비 전제:** 005930 은 액면분할 거래정지일인 2018-05-03 에 종가 2,650,000, 전일대비 0, 시·고·저가 0 이다. 재개일 2018-05-04 는 종가 51,900, 전일대비 −1,100(−2.08%)이다. 즉 전일대비는 조정된 기준가 대비다. 수정주가 체인 식은 `53,000/2,650,000 = 1/50` 로 분할을 잡는다. 설계 전제가 성립한다.
+- **현금배당락:** 기준가가 조정되지 않는다. 2025-12-29 배당락일에 고배당 8종목(024110·033780·005940·088980·316140·055550·105560·086790)을 보면, 모두 `종가 − 전일대비 == 전일 종가` 다. 따라서 `DividendFeed` 현금 적립과 이중 계산이 아니다.
+- **상폐 종목:** 과거 날짜 응답에 포함된다. 2012-01-02 KOSPI 코드 가운데 234개가 2026-11-20 응답에는 없다.
+- **거래정지:** 시·고·저가 0, 거래량 0, 종가는 기준가로 온다(2026-11-20 KOSPI 23종목). `AdjustedBars.flatIfHalted` 의 근거다.
+- **휴장일·미공개일:** 둘 다 HTTP 200 에 `OutBlock_1` 이 빈 배열이라 응답만으로는 구분할 수 없다. 휴장일 예는 2026-09-25 추석이다. 미공개일 예로, 2026-11-23 당일분을 같은 날 20:13 KST 에 조회했을 때도 0행이었다. 그래서 0행은 7일 확정 규칙과 잠정 휴장 판정이 필요하다.
+- **공개 시각:** 당일 20:13 KST 에는 미공개였으므로 T+1 공개다. 정확한 시각은 2026-11-24 오전 관측 중이다.
+- **TR 지수:** 일반 KOSPI200 총수익지수는 없다. `코스피 200 25/50 NTR 지수` 만 있는데, 비중 상한과 순배당을 반영한 별도 지수다. 그래서 벤치마크는 배당 제외로 유지한다.
+- **한도 초과 응답:** 일부러 초과시키지 않았다. 미확인이다.
+- **배당 출처 결정:** 공공데이터포털 금융위원회_주식배당정보(`getDiviInfo_V2`)를 쓴다. DART `alotMatter` 는 사업연도별 연간 주당배당 합계만 주고 배당기준일이 없어 배당락일을 정할 수 없다. 공공데이터포털은 `dvdnBasDt`(기준일)와 종목·종류별 주당배당금을 준다. 다만 공시일이 없고, 금액은 기준일 당시 주식 단위다(예: 005930 2018-03-31 은 분할 전 1주당 금액).
 
 ## 의도적 차이 (동작 동등, 표현만 다름)
 
@@ -137,8 +180,31 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 - 배포: 원본 `docker-compose.override.yml`(uvicorn `--reload`)은 옮기지 않았다 — JVM 에 해당 없음. 소스 볼륨 마운트(`./backend:/app`)도 제거(이미지에 jar 포함).
 - 배포: worker 가 원본은 redis 만 기다렸지만 Kotlin 은 `web` healthy(=Flyway 완료) 뒤에 기동한다. engine 도 같다.
 - frontend `Dockerfile`: 원본 `npm install`(lockfile 미사용)은 현재 레지스트리에서 `edgesOut` null 오류로 재현 가능하게 실패 → `package-lock.json` + `npm ci`. 앱 코드는 무수정.
-- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성(이후 `credential_enc_key`·`secret_key`·`s3_backup_*` 를 지워 현재 9개). `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
+- e2e-smoke: 원본은 시크릿 파일 11개만 만들어 `s3_backup_*` 누락으로 compose 가 기동하지 못했을 것 — 당시 13개 모두 생성. `alembic upgrade head` 단계는 web 기동 시 Flyway 로 대체.
 - Caddy 의 `/docs`·`/openapi.json`·`/redoc` 라우트는 남겼지만 Kotlin web 은 해당 문서를 제공하지 않는다(404).
-- 요청 DTO 의 `@Size`(전략 이름 255·설명 2000·비밀번호 8~128)는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
+- 요청 DTO 의 `@Size` 는 UTF-16 단위, 원본 pydantic 은 코드포인트 단위 — 이모지 등 보조 평면 문자로 한도 근처를 채운 입력만 판정이 갈린다. 전략 설정(config) 검증기는 코드포인트로 맞췄다.
 - KIS WS 종료: 원본은 `async with websockets.connect()` 종료 시 closing handshake 를 close_timeout(기본 10초)까지 기다린 뒤 TCP 를 닫는다. Kotlin `KisSocket.close()` 는 close 프레임 전송과 서버 close 대기에 각 2초 상한(측정값 아님)을 두고, 그 뒤 `abort` 와 HttpClient `shutdownNow` 로 소켓을 닫는다. 인터럽트되면 대기 없이 즉시 닫는다. JDK HttpClient 는 핸드셰이크 응답 없이 끊기면 한 번 재시도해 시도당 TCP 연결을 2개 만든다(원본 websockets 는 재시도 없음 — 바꾸지 않음).
 - KIS 계좌번호·HTS ID: 원본은 환경변수(`KIS_ACCOUNT_NO`·`KIS_HTS_ID`)로 받았다. Kotlin 은 compose secret `kis_account_no`(`secrets/account_num`)·`kis_hts_id`(`secrets/hts_id.txt`)를 우선 읽고 환경변수는 로컬 실행용 폴백이다(2026-11-17 소유자 결정: 시크릿은 `secrets/` 한 곳에서만 관리).
+- 유니버스 소스(2단계): 원본의 `KOSPI200`·`KOSPI100`·`KRX300`(지수 구성종목) 소스를 폐지했다. 스키마는 `fixed`·`KOSPI_MCAP` 만 받고 `pool_size`(1~300, 기본 null=pick)를 추가했다. 기존 전략은 Flyway V11 이 소스값 기준으로 `KOSPI_MCAP` + `pool_size`(200/100/300)로 옮기고 `pick`·나머지는 그대로 둔다. 후보는 직전 거래일 시총 상위 `pool_size` 에서 모멘텀 상위 `pick` 으로 좁힌다(지수 구성종목과 다른 집합). 엔진의 `pit_fallback`(구성종목 없을 때 고정 universe 폴백) 경로와 `min_market_cap`(KOSPI_MCAP 에서는 원래도 무시) 입력 UI 는 없앴다.
+- `min_market_cap` 소실(2단계): V11 로 지수 소스(`KOSPI200`·`KOSPI100`·`KRX300`)에서 `KOSPI_MCAP` 으로 옮긴 전략은 원래 지수 경로가 적용하던 `min_market_cap`(시총 하한) 필터를 잃는다. 값은 설정에 남지만 `KOSPI_MCAP` 은 적용하지 않고 경고 로그만 남긴다(백테스트). 배포 후 해당 전략 수를 확인한다(계획 "배포 후 확인").
+- V12 안전장치(2단계): flow 가중치 > 0 인 전략이 있으면 V12 는 키를 지우지 않고 `RAISE EXCEPTION` 으로 마이그레이션을 실패시킨다(조용히 지우면 가중치 합이 1 에서 어긋난다). 원본에는 없는 동작이다.
+- 체결 정합 표본 부족 사유(2단계): 리포트 `sample.n_symbols_not_loaded` 에 종가 미적재(`MarketDataNotLoaded`)로 빠진 종목 수를 따로 세고, 실전 게이트의 표본 부족 사유에 0 보다 크면 "시장데이터 미적재로 제외된 종목 N개" 를 덧붙인다(차단은 그대로). 0 이면 원본 문구 그대로.
+- universe_fingerprint(2단계): 스키마 덤프가 모든 `universe_rule` 에 `"pool_size": null` 을 넣으므로 지문 계산 전에 null `pool_size` 만 뺀다 — 키가 없던 이전 시행과 지문이 같다(DSR 시행 이력 유지). 값이 있으면 그대로 포함.
+- flow 팩터 삭제(2단계): 원본의 투자자별 순매수 팩터(`factor_weights.flow`, `selection.flow_window`·`flow_denom`)를 지웠다. 공식 소스가 없고 쓰는 전략이 0개다. 스키마는 이제 팩터 키 7개(`momentum, value, lowvol, quality, growth, residual_momentum, pead`)만 받고, 합 검증 메시지에서도 flow 를 뺐다. V12 가 저장된 전략 설정에서 세 키를 제거한다. 원본 정답지의 flow 케이스(`strategy_config`·`factors` 일부)는 테스트 허용 목록으로 뺐다.
+
+## 업종지수 적재 (공식 경로 2단계, Task 4)
+
+- 일일 적재가 KOSPI·KOSDAQ 지수 응답의 모든 행을 `index_ohlcv` 에 저장한다(거래량·거래대금 포함). 키는 기존 3개가 `1001`·`1028`·`2001`, 나머지는 `KOSPI:<이름>`·`KOSDAQ:<이름>`(`OfficialIngest.indexKey`). KRX 계열은 저장하지 않는다. `index_code` 는 V13 에서 varchar(64).
+- 소급은 `quantfolio.backfill.indexes-only=true`(+ from/to) — 거래일로 확인된 날만 하루 2호출, 원장·주식·수정주가는 건드리지 않는다. 적재는 `index_ohlcv_coverage` 를 쓰지 않는다(기존 3개와 동일).
+
+## 화면의 로컬 스냅샷 전환 (공식 경로 2단계, Task 5)
+
+- 종목 지표·턴어라운드 스크리너·섹터 화면의 `SnapshotSource` 가 로컬(`LocalSnapshots`)뿐이다. 원격 `KrxSnapshots`·`KrxStockApi`(pykrx `stock.*` 이식)를 지웠다. 미적재는 원본의 MDC 조회 대신 `MarketDataNotLoaded` 이고, `/api/metrics/*` 는 이를 계산 오류(503)로 감싸지 않고 409 로 돌려준다(`MetricsController.cached`).
+- 섹터 화면 지수 목록: 원본은 MDC 업종지수 목록(그 시장 전 티커에서 기준지수 1001·2001 만 제외, 1028 등 대표지수 포함)·MDC 이름. 지금은 기준일(asOf)에 행이 있는 `index_ohlcv` 의 `KOSPI:`·`KOSDAQ:` 접두어 키(Task 4 적재)와 그날 저장된 원문 이름이다. 폐지·이름 변경된 옛 키는 기준일에 행이 없어 저절로 빠진다. 접두어 없는 `1001`·`1028`·`2001` 은 업종 행이 아니다(원본은 KOSPI200 행이 있었다). 행 순서는 키(=이름) 오름차순(원본은 지수코드 순).
+- 섹터 결측 정책: 업종지수 키(`KOSPI:`·`KOSDAQ:`)의 첫 행 이전은 결측이 아니다(`LocalSnapshots.indexOhlcv` 는 `[max(start, 첫 행), end]` 만 본다). 기준지수 `1001`·`1028`·`2001` 은 전략 경로가 쓰므로 첫 행 이전도 미적재다. 첫 행 이후 빠진 거래일, 또는 요청 시장에 기준일 행이 있는 업종지수 키가 하나도 없음(백필 전·기준일 미적재)은 미적재이고 섹터 화면 전체가 409 다. 원본은 지수별 실패를 로그만 남기고 그 지수를 뺐다.
+- `LiveFactorInputs.marketCaps`(`UniverseScores` 빈의 사이즈 중립화에만 쓰인다 — 스크리너·추천은 이 메서드를 부르지 않는다. 엔진은 자체 로컬 입력으로 `UniverseScores` 를 따로 만든다): 원본은 MDC 시총을 asOf 부터 최대 7일 뒤로 물러가며 찾았다. 지금은 asOf 당일 로컬 시총(엔진과 같다) — 휴장일이면 빈 맵(중립화 생략), 미적재면 `MarketDataNotLoaded` 로 전파(원본은 실패 시 중립화 생략).
+
+## 추천 대상 변경과 KRX MDC 로그인 제거 (공식 경로 2단계, Task 6)
+
+- 추천: 원본은 KRX MDC 의 KOSPI200 구성종목(미인증·무자료면 빈 추천)이었다. 지금은 기준일 **당일** KOSPI 보통주 시총 상위 200(`McapUniverse.membersOn`, 정렬·주권 종류 규칙은 `KOSPI_MCAP` 과 같다 — 화면용이라 직전 거래일이 아니라 당일)이다. 경로 `/api/recommend/kospi200` → `/api/recommend/mcap200`, 응답 `index` 는 `"KOSPI200"` → `"MCAP200"`, 캐시 키 `recommend:kospi200:<날짜>` → `recommend:mcap200:<날짜>`, 화면 문구는 "시총 상위 200". 당일 시총 미적재는 빈 추천이 아니라 409(`MarketDataNotLoaded`)다. 팩터 계산은 그대로이고, 정답지 대조에서는 지수 라벨만 허용 목록이다.
+- KRX MDC 코드 전부(`market/krx/`: 로그인 세션·MDC 호출·구성종목/전종목/시총 조회)와 `IndexMembers`·`IndexConstituentStore`·`UniverseBuilder` 를 지웠다. 로그인 설정 `quantfolio.krx.id/pw` 와 compose 시크릿 `krx_id`·`krx_pw` 도 없앴다(남은 `secrets/krx_*.txt` 파일은 읽히지 않는다). `index_constituents` 테이블은 데이터 보존을 위해 남겼다. `CodeRulesTest` 가 main 소스의 `data.krx.co.kr`·`stock.naver.com` 호스트 문자열을 금지한다.

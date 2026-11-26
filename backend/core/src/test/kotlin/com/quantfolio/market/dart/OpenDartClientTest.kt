@@ -70,8 +70,9 @@ class OpenDartClientTest {
     fun quotaRaisesWithRetryAfterUntilMidnight() {
         status("020")
         val e = assertThrows<SourceQuotaError> { client().get("list.json", emptyMap()) }
-        assertEquals(3600.0, e.retryAfterSeconds)
-        assertEquals(3600.0, cooldowns.remaining("dart"))
+        // 23:00Z = KST 08:00 → DART 한도가 리셋되는 KST 자정까지 16시간(migration-notes #2)
+        assertEquals(16 * 3600.0, e.retryAfterSeconds)
+        assertEquals(16 * 3600.0, cooldowns.remaining("dart"))
         assertThrows<SourceQuotaError> { client().get("list.json", emptyMap()) } // 쿨다운 중이라 요청 안 함
         assertEquals(1, http.calls.size)
     }

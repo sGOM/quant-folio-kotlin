@@ -2,7 +2,6 @@ package com.quantfolio.market.source
 
 import java.time.Clock
 import java.time.Duration
-import java.time.LocalDateTime
 
 /**
  * 외부 데이터 소스 실패를 **원인별로** 표현한다. 호출자의 관심은 "KRX 냐 DART 냐"가 아니라
@@ -84,9 +83,9 @@ object DataSourceErrors {
         return picked.copyWithDetail("${picked.detail} — 총 ${errors.size}건 실패 $counts")
     }
 
-    /** 다음 자정까지 남은 초(DART 일일 한도 리셋 근사). 원본처럼 프로세스 로컬 시각 기준. */
-    fun secondsUntilMidnight(clock: Clock = Clock.systemDefaultZone()): Double {
-        val now = LocalDateTime.now(clock)
-        return Duration.between(now, now.toLocalDate().plusDays(1).atStartOfDay()).toMillis() / 1000.0
+    /** 다음 KST 자정까지 남은 초(DART 일일 한도 리셋). 원본은 프로세스 로컬 시각이라 UTC 컨테이너에선 KST 09시였다(migration-notes #2). */
+    fun secondsUntilMidnight(clock: Clock = Clock.systemUTC()): Double {
+        val now = clock.instant().atZone(com.quantfolio.common.MarketClock.KST)
+        return Duration.between(now, now.toLocalDate().plusDays(1).atStartOfDay(com.quantfolio.common.MarketClock.KST)).toMillis() / 1000.0
     }
 }

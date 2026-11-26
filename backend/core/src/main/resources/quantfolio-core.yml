@@ -41,11 +41,15 @@ quantfolio:
     app-key: ${toss_app_key:${TOSS_APP_KEY:}}
     app-secret: ${toss_app_secret:${TOSS_APP_SECRET:}}
     account-no: ${TOSS_ACCOUNT_NO:}
-  krx:
-    id: ${krx_id:${KRX_ID:}}
-    pw: ${krx_pw:${KRX_PW:}}
+  krx-open:
+    api-key: ${krx_openapi_key:${KRX_OPENAPI_KEY:}}
+  data-go-kr:
+    api-key: ${datagokr_api_key:${DATAGOKR_API_KEY:}}
   opendart:
     api-key: ${opendart_api_key:${OPENDART_API_KEY:}}
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
   debug-errors: ${DEBUG_ERRORS:false}
   cache-dir: ${CACHE_DIR:.cache}
+  market:
+    # KRX 평일 휴장일(yyyy-MM-dd, 쉼표). 매년 KRX 휴장일 공지(12월)로 다음 해를 추가한다 — 빠지면 연휴 다음 날 리밸런싱이 멈추고 critical.
+    krx-holidays: ${KRX_HOLIDAYS:2026-12-25,2026-12-31}

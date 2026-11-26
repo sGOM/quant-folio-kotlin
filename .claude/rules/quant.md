@@ -34,15 +34,20 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
-**예외(원본 보존):** 상장폐지 판정 `lastValid`·DART 정정공시·업종 PIT 폴백은 미래를 본다 — `docs/migration-notes.md` #10~12.
-교란 테스트는 cut 이후 값을 **배율로만** 바꿔 결측 패턴이 같으므로 `lastValid` 를 잡지 못한다.
+섹터 캡 업종은 결정일 이하 최신 스냅샷(`PortfolioBacktest.run(sectors=)`)만 — 스냅샷 없는 결정일은 캡 없이 진행하고 결과 `assumptions` 에 적는다(#12 수정, 원본은 오늘 분류를 구간 전체에).
+DART 재무는 저장 판본의 접수일(`dart_financials.rcept_dt`, 정정되면 정정 접수일)이 asOf 이하일 때만 쓴다 — 연간 공시지연 연도가 아직이면 직전 연도(`DartFinancials.metricsBySymbol`·`Valuation.financials` 같은 기준, #11 수정). 원 판본 숫자는 OpenDART 가 주지 않아 정정 전 구간은 결측이다.
+상장폐지는 그날 가격이 ffill 한도(`delisting_gap_days`)를 넘겨 결측이면 현금화한다 — 재개 여부를 묻지 않는다(#10 수정, 원본 `lastValid` 는 패널 전체를 봤다). 정답지 4개 시나리오는 그 분기일(2024-05-20) 전까지만 대조한다.
+수정주가는 최신 인자 기준이라 **가격 수준**은 미래 분할을 반영한다(원본 네이버와 같음) — 두 날의 비율만 쓰면 무관하다(`PriceUnits`).
+교란 테스트는 대부분 cut 이후 값을 **배율로만** 바꾼다 — 결측 패턴에 기대는 판정은 `missingRunResumingAfterCutDoesNotChangePast` 처럼 결측 자체를 교란하는 테스트를 따로 둔다.
 백테스트 엔진을 고치면 `PortfolioLookaheadTest`(cut 이후 교란 → cut 까지 결과 동일)가 반드시 초록이어야 한다.
 
 ## 계산부와 조회부 분리
 
 `factor/`·`metrics/` 는 순수 계산(`FactorScores`·`MetricsPure`)을 정답지로, 조회 조립(`*Service`·`UniverseScores`)을
-`SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터가 **전량** 실패하면 예외 — 중립 처리 금지.
+`SnapshotSource`·`PriceHistory`·`FactorInputs` fake 로 테스트한다. 가중치가 걸린 팩터 입력 커버리지가 리밸런싱마다 50% 미만이면 `MarketDataNotLoaded` — 백테스트·엔진 공용 `FactorCoverage`.
+커버리지는 그 점수에 실제로 쓰는 컬럼(`FactorScores.*_INPUTS`)으로 센다. 중립 처리 금지.
 
 ## 함정
 
-- 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다 — 2026-11-17 실측에서 시험 전략이 이 때문에 주문을 내지 않았다.
+- 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다.
+- `PortfolioBacktest` 는 조회 없는 순수 계산이라 업종 매핑 같은 조회 입력은 `BacktestRunner` 가 결정일별 provider(`sectors`)로 넘긴다(고정 `_sector_map` 은 정답지용, 원본은 백테스트 함수 안에서 조회한다). 실거래(`RebalanceRunner`)와 백테스트가 같은 리스크 설정을 적용하는지 함께 확인한다.

@@ -2,6 +2,7 @@ package com.quantfolio.market.dart
 
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.TestApp
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.HttpBytes
 import com.quantfolio.market.source.SourceQuotaError
@@ -29,17 +30,20 @@ import kotlin.test.assertTrue
 
 @SpringBootTest(classes = [TestApp::class])
 @Import(ContainersConfig::class)
-class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
+class DartFinancialsTest(
+    @Autowired private val store: DartFinancialStore,
+    @Autowired private val jdbc: org.springframework.jdbc.core.JdbcTemplate,
+) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp()
     private val cooldowns = Cooldowns(clock)
     private val ledger = InMemoryFetchLedger()
     private val client = OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), cooldowns, clock)
     private val fin = DartFinancials(client, store, ledger, cooldowns, clock)
-    private val corp = "C" + UUID.randomUUID().toString().take(7)
+    private val corp = "C" + UUID.randomUUID().toString().take(6)
 
     /** (사업연도, 보고서) → 당기순이익. 계정 응답에 접수번호를 넣어 확정일 계산이 되게 한다. */
-    private fun serveAccounts(netIncome: Map<Pair<Int, String>, Long>, fsDiv: String = "CFS") {
+    private fun serveAccounts(netIncome: Map<Pair<Int, String>, Long>, fsDiv: String = "CFS", receipts: Map<Pair<Int, String>, String> = emptyMap()) {
         http.on({ it.url.endsWith("fnlttSinglAcntAll.json") && it.query["corp_code"] == corp }) { call ->
             val k = call.query["bsns_year"]!!.toInt() to call.query["reprt_code"]!!
             val ni = netIncome[k]
@@ -47,7 +51,7 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
                 """{"status":"013","message":"no data"}"""
             } else {
                 """{"status":"000","list":[
-                    {"sj_div":"IS","account_id":"ifrs-full_ProfitLoss","account_nm":"당기순이익","thstrm_amount":"$ni","rcept_no":"${k.first + 1}0301000001"},
+                    {"sj_div":"IS","account_id":"ifrs-full_ProfitLoss","account_nm":"당기순이익","thstrm_amount":"$ni","rcept_no":"${receipts[k] ?: "${k.first + 1}0301"}000001"},
                     {"sj_div":"IS","account_id":"dart_OperatingIncomeLoss","account_nm":"영업이익","thstrm_amount":"${ni * 2}"},
                     {"sj_div":"BS","account_id":"ifrs-full_Equity","account_nm":"자본총계","thstrm_amount":"1000"}]}"""
             }
@@ -63,6 +67,39 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
     }
 
     private fun accountCalls() = http.calls.count { it.url.endsWith("fnlttSinglAcntAll.json") }
+
+    @Test
+    fun remoteCorpMapIsPersisted() {
+        val stock = corp.takeLast(6).filter { it.isLetterOrDigit() }.padStart(6, '0')
+        serveCorpMap(stock to corp)
+        assertEquals(corp, fin.corpCodeMap()!![stock])
+        assertEquals(corp, store.readCorpCodes()[stock])
+    }
+
+    @Test
+    fun localCorpMapReadsTableWithoutRemote() {
+        val stock = "L" + corp.takeLast(5)
+        store.writeCorpCodes(mapOf(stock to corp))
+        // http 에 핸들러가 없어 원격을 부르면 실패한다. 키가 있어도 로컬 경로는 테이블만 본다.
+        assertEquals(corp, fin.corpCodeMapLocal()[stock])
+        assertEquals(0, http.calls.size)
+    }
+
+    @Test
+    fun localCorpMapEmptyTableIsNotLoaded() {
+        jdbc.update("DELETE FROM dart_corp_codes")
+        val e = assertThrows<MarketDataNotLoaded> { fin.corpCodeMapLocal() }
+        assertEquals("dart_corp_map", e.kind)
+        assertEquals(0, http.calls.size)
+    }
+
+    @Test
+    fun dartLocalOnlyThrowsWhenLedgerHasNoFinalEntry() {
+        assertThrows<MarketDataNotLoaded> { fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false) }
+        assertEquals(0, accountCalls())
+        ledger.put("dart_accounts", com.quantfolio.market.store.CacheKeys.of(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS"), 0, true)
+        assertNull(fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false))
+    }
 
     @Test
     fun cachedAccountsRemoteThenStoreThenMemory() {
@@ -86,6 +123,15 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
     }
 
     private data class LedgerEntryView(val rows: Int, val final: Boolean)
+
+    @Test
+    fun accountsWithoutMemoAreNotRetained() {
+        serveAccounts(mapOf((2020 to DartMetrics.REPORT_ANNUAL) to 100L))
+        fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", memo = false)
+        // 메모리에 남았다면 저장소가 비어도 그 값을 돌려준다 - 백필이 전 종목을 훑으며 힙을 채운 원인(2026-11-25 OOM)
+        jdbc.update("DELETE FROM dart_financials WHERE corp_code = ?", corp)
+        assertThrows<MarketDataNotLoaded> { fin.cachedAccounts(corp, 2020, DartMetrics.REPORT_ANNUAL, "CFS", remote = false, memo = false) }
+    }
 
     @Test
     fun annualMetricsFallsBackToSeparate() {
@@ -127,6 +173,57 @@ class DartFinancialsTest(@Autowired private val store: DartFinancialStore) {
         assertEquals(0.5, m["net_growth"])
         assertEquals(0.0, m["turnaround"])
         assertEquals(1, m["loss_years_3"])
+    }
+
+    /** 원본은 공시지연(4월)만 보고 DART 가 주는 최신 정정본을 그 전부터 썼다(migration-notes #11). asOf 뒤 접수 판본은 그때 몰랐다. */
+    @Test
+    fun metricsBySymbolFallsBackWhenLaggedYearWasPublishedAfterAsOf() {
+        serveCorpMap("900011" to corp)
+        val a = DartMetrics.REPORT_ANNUAL
+        serveAccounts(
+            mapOf((2023 to a) to 999L, (2022 to a) to 120L, (2021 to a) to 100L, (2020 to a) to -5L),
+            receipts = mapOf((2023 to a) to "20240716"), // 2023 사업보고서의 저장 판본은 7월 정정본
+        )
+        val m = fin.metricsBySymbol(listOf("900011"), LocalDate.of(2024, 5, 1))["900011"]!!
+        assertEquals(120.0, m["net_income"]) // 2023 대신 그때 알려진 최신 2022
+        assertEquals(0.2, m["net_growth"]!! as Double, 1e-12)
+        assertEquals(1, m["loss_years_3"])
+    }
+
+    @Test
+    fun growthIsNullWhenPreviousYearIsOnlyALaterCorrection() {
+        serveCorpMap("900012" to corp)
+        val a = DartMetrics.REPORT_ANNUAL
+        serveAccounts(
+            mapOf((2023 to a) to 150L, (2022 to a) to 100L, (2021 to a) to 80L),
+            receipts = mapOf((2023 to a) to "20240320", (2022 to a) to "20240801"), // 2022 는 나중 정정본만 있다 — 원 판본 숫자는 모른다
+        )
+        val m = fin.metricsBySymbol(listOf("900012"), LocalDate.of(2024, 5, 1))["900012"]!!
+        assertEquals(150.0, m["net_income"])
+        assertNull(m["net_growth"])
+    }
+
+    @Test
+    fun ttmIgnoresQuarterPublishedAfterAsOf() {
+        serveCorpMap("900013" to corp)
+        serveAccounts(
+            mapOf((2024 to DartMetrics.REPORT_Q1) to 70L, (2023 to DartMetrics.REPORT_Q1) to 10L, (2023 to DartMetrics.REPORT_ANNUAL) to 100L),
+            receipts = mapOf((2024 to DartMetrics.REPORT_Q1) to "20240610", (2023 to DartMetrics.REPORT_Q1) to "20230515", (2023 to DartMetrics.REPORT_ANNUAL) to "20240320"),
+        )
+        // 2024-06-01 → 최근 보고서는 2024 1분기지만 6/10 접수라 아직 모른다 → 직전 연간
+        val m = fin.metricsBySymbol(listOf("900013"), LocalDate.of(2024, 6, 1), useTtm = true)["900013"]!!
+        assertEquals(100.0, m["net_income"])
+    }
+
+    /** 무자료(013) 확정도 KST 날짜 — 2023 사업연도 무자료는 2024-12-31(KST) 부터 확정(migration-notes #1). */
+    @Test
+    fun noDataBecomesFinalOnKstDate() {
+        serveAccounts(emptyMap())
+        val kstDawn = Clock.fixed(Instant.parse("2024-12-30T16:00:00Z"), ZoneOffset.UTC) // KST 12-31 01:00
+        val led = InMemoryFetchLedger()
+        DartFinancials(OpenDartClient(http, QuantfolioProperties(opendart = QuantfolioProperties.OpenDart(apiKey = "K")), Cooldowns(kstDawn), kstDawn), store, led, Cooldowns(kstDawn), kstDawn)
+            .cachedAccounts(corp, 2023, DartMetrics.REPORT_ANNUAL, "CFS")
+        assertEquals(true, led.get("dart_accounts", com.quantfolio.market.store.CacheKeys.of(corp, 2023, DartMetrics.REPORT_ANNUAL, "CFS"))?.final)
     }
 
     @Test

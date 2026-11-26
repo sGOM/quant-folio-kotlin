@@ -337,17 +337,19 @@ export interface RebalanceSelection {
 /**
  * 후보풀(universe) 소스 규칙.
  * - source="fixed"(기본): 아래 universe 목록을 고정 후보풀로 사용.
- * - source=지수명: 각 리밸런싱 시점의 실제 지수 구성종목(PIT)을 후보풀로 사용 → 생존편향 제거.
+ * - source="KOSPI_MCAP": 각 리밸런싱 직전 거래일 시가총액 상위 pool_size(보통주)를 후보풀로 사용 → 생존편향 제거.
  *   type 을 지정하면 그 후보풀에서 상대강도 상위 pick 종목만 추려 선정에 넘긴다.
  */
 export interface UniverseRule {
-  source: "fixed" | "KOSPI200" | "KOSPI100" | "KRX300";
+  source: "fixed" | "KOSPI_MCAP";
   /** 동적 축소 방식. "momentum"=상대강도. 미설정이면 축소 없이 전체 구성종목 사용. */
   type?: "momentum";
   /** 상대강도 측정 봉 수. */
   lookback?: number;
   /** 상대강도 상위 몇 종목을 후보로 남길지. */
   pick?: number;
+  /** 시총 상위 후보 풀 크기(1~300). 미설정이면 pick. 풀에서 상대강도 상위 pick 만 남긴다. */
+  pool_size?: number | null;
   /** 유동성 필터: 시가총액(억 원) 하한. 미만 종목을 후보풀에서 제외. 미설정이면 필터 없음. */
   min_market_cap?: number | null;
 }
@@ -549,6 +551,10 @@ export interface BacktestResult {
   holdings?: Record<string, number>;
   /** 매수/매도 체결 로그. 리밸런싱 백테스트. */
   trades?: BacktestTrade[];
+  /** 결과 해석에 필요한 가정(배당 반영 방식, 섹터 한도 적용 시작일 등). 리밸런싱 백테스트. */
+  assumptions?: string[];
+  /** 배당 반영 경고(배당락일 시세 없음 등). 리밸런싱 백테스트. */
+  dividend_warnings?: string[];
 }
 
 export interface Backtest {
@@ -794,7 +800,7 @@ export interface TurnaroundScreenOut {
   items: TurnaroundCandidate[];
 }
 
-/** KOSPI200 추천 구성종목 1건(백엔드 /api/recommend/kospi200). */
+/** 시총 상위 200 추천 구성종목 1건(백엔드 /api/recommend/mcap200). */
 export interface RecommendMember {
   code: string;
   name: string;
@@ -820,7 +826,7 @@ export interface RecommendMember {
   mdd_252: number | null;
   trend_aligned: boolean | null;
   above_sma200: boolean | null;
-  // ── 팩터별 세부점수(KOSPI200 크로스섹션 z-score, 가중치 무관) ──
+  // ── 팩터별 세부점수(시총 상위 200 크로스섹션 z-score, 가중치 무관) ──
   score_momentum: number | null;
   score_value: number | null;
   score_lowvol: number | null;
@@ -828,11 +834,11 @@ export interface RecommendMember {
   score_growth: number | null;
 }
 
-/** KOSPI200 추천 응답 래퍼. */
+/** 시총 상위 200 추천 응답 래퍼. */
 export interface RecommendOut {
   /** 기준일(YYYY-MM-DD). */
   as_of: string;
-  /** 지수명("KOSPI200"). */
+  /** 구성종목 라벨("MCAP200" = 기준일 KOSPI 보통주 시총 상위 200). */
   index: string;
   /** 구성종목 수. */
   count: number;
@@ -1424,11 +1430,11 @@ export const api = {
     return request<TurnaroundScreenOut>(`/api/screener/turnaround${qs ? `?${qs}` : ""}`);
   },
 
-  // --- 추천(KOSPI200 팩터 가중) ---
+  // --- 추천(시총 상위 200 팩터 가중) ---
   /**
-   * 현 시점 KOSPI200 구성종목의 팩터별 세부점수·메타데이터를 조회한다.
+   * 현 시점 KOSPI 시가총액 상위 200 보통주의 팩터별 세부점수·메타데이터를 조회한다.
    * 종합점수 가중합·Top-N 선정은 클라이언트가 사용자 비중으로 수행한다.
    */
-  getKospi200Recommend: () =>
-    request<RecommendOut>("/api/recommend/kospi200"),
+  getMcap200Recommend: () =>
+    request<RecommendOut>("/api/recommend/mcap200"),
 };

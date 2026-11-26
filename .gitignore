@@ -20,3 +20,6 @@ out/
 playwright-report/
 test-results/
 *.stackdump
+
+# 비공개 전략 리서치 산출물(실데이터 수치·가중치) — 공개 저장소라 커밋 금지
+research/

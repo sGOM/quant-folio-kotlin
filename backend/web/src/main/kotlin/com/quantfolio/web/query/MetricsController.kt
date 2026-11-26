@@ -2,6 +2,7 @@ package com.quantfolio.web.query
 
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.user.User
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.PanicOut
 import com.quantfolio.metrics.PanicService
@@ -47,6 +48,8 @@ class MetricsController(
         ) {
             try {
                 compute()
+            } catch (e: MarketDataNotLoaded) {
+                throw e // 미적재는 계산 오류(503)가 아니라 ApiErrorHandler 의 409
             } catch (e: Exception) {
                 log.error("{} 계산 실패: {}", label, e.message, e)
                 throw ApiException(HttpStatus.SERVICE_UNAVAILABLE, "$label 계산 중 오류가 발생했습니다.")

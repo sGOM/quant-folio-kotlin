@@ -88,8 +88,8 @@ function RecommendContent() {
   const [topN, setTopN] = useState(20);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["recommend", "kospi200"],
-    queryFn: () => api.getKospi200Recommend(),
+    queryKey: ["recommend", "mcap200"],
+    queryFn: () => api.getMcap200Recommend(),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -139,10 +139,10 @@ function RecommendContent() {
         <div className="mb-5">
           <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <Sparkles className="h-5 w-5 text-primary" />
-            KOSPI200 추천
+            시총 상위 200 추천
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            현 시점 KOSPI200 구성종목을 팩터 비중대로 종합점수화해 상위 종목을 추천합니다.
+            현 시점 KOSPI 시가총액 상위 200 보통주를 팩터 비중대로 종합점수화해 상위 종목을 추천합니다.
             비중을 조절하면 즉시 재계산됩니다.
           </p>
         </div>
@@ -196,7 +196,7 @@ function RecommendContent() {
         <div className="mb-4 flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            종합점수는 KOSPI200 종목군 내 상대 우위를 표준화(z-score)한 뒤 비중대로 가중합한
+            종합점수는 시총 상위 200 종목군 내 상대 우위를 표준화(z-score)한 뒤 비중대로 가중합한
             값입니다(0 이상이면 평균 이상). 절대 수익률이 아니며, 투자 판단의 참고 지표입니다.
           </span>
         </div>

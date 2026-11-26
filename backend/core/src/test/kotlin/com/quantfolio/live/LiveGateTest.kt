@@ -33,6 +33,15 @@ class LiveGateTest {
         assertEquals(listOf("체결 정합 표본 부족(n=12 < 30) — 판단 불가로 실전 차단"), r.reasons)
     }
 
+    /** 미적재로 종가를 못 읽어 빠진 종목이 있으면 표본 부족 사유에 그 수를 밝힌다(차단은 그대로). */
+    @Test
+    fun insufficientSampleNamesNotLoadedSymbols() {
+        val rep = mapOf("sample" to mapOf("n_orders" to 3, "min_sample" to 30, "n_symbols_not_loaded" to 2), "grades" to emptyMap<String, Any?>())
+        val r = LiveGate.decide(paper = false, kisEnv = "prod", prodApproved = true, fillReport = rep)
+        assertFalse(r.passed)
+        assertEquals(listOf("체결 정합 표본 부족(n=3 < 30, 시장데이터 미적재로 제외된 종목 2개) — 판단 불가로 실전 차단"), r.reasons)
+    }
+
     @Test
     fun redGradeBlocks() {
         val r = LiveGate.decide(paper = false, kisEnv = "prod", prodApproved = true, fillReport = report(30, "AMBER", "RED"))

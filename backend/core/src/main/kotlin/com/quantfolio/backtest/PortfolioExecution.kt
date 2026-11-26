@@ -147,12 +147,13 @@ internal fun applyRebalance(
 }
 
 /**
- * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없고 그 종목의 마지막 유효 관측 이후면(terminal gap)
- * 상장폐지로 보고 회수율만 현금화한다 — 중간 결측(interior gap)은 평가액을 동결.
+ * 전일 대비 가격 변화로 보유 평가액 갱신. 오늘 시세가 없으면(ffill 한도 delisting_gap_days 를 넘긴 결측) 상장폐지로 보고
+ * 회수율만 현금화한다 — 결측이 나중에 재개될지는 d 에 알 수 없으므로 묻지 않는다. 원본은 패널 전체의 마지막 유효일로
+ * 재개(interior gap → 동결)와 종료(terminal gap → 현금화)를 갈라 미래를 봤다(migration-notes #10).
  */
 internal fun markToMarket(
     book: Book, prevPrices: Map<String, Double>, prices: Map<String, Double>, d: LocalDate,
-    lastValid: Map<String, LocalDate>, delistRecovery: Double, journal: Journal,
+    delistRecovery: Double, journal: Journal,
 ) {
     for (sym in book.value.keys.toList()) {
         val p0 = prevPrices[sym]
@@ -160,12 +161,9 @@ internal fun markToMarket(
         if (p1 != null && !p1.isNaN() && p0 != null && !p0.isNaN() && p0 > 0) {
             book.value[sym] = book.value.getValue(sym) * (p1 / p0)
         } else if (p1 == null || p1.isNaN()) {
-            val lv = lastValid[sym]
-            if (lv != null && d.isAfter(lv)) {
-                book.cash += book.value.remove(sym)!! * delistRecovery
-                book.cost.remove(sym)
-                journal.marker(d, "delist", "symbol" to sym)
-            }
+            book.cash += book.value.remove(sym)!! * delistRecovery
+            book.cost.remove(sym)
+            journal.marker(d, "delist", "symbol" to sym)
         }
     }
 }
@@ -191,4 +189,28 @@ internal class Journal {
     fun marker(d: LocalDate, type: String, vararg extra: Pair<String, Any?>) {
         markers += linkedMapOf<String, Any?>("t" to iso(d), "type" to type).apply { putAll(extra) }
     }
+}
+
+/**
+ * 배당락일 [d] 의 현금배당 적립. 대상은 **전일까지 들고 있던** 보유(마크투마켓 직후·당일 체결 전 — 배당락일에 사서는 못 받고
+ * 배당락일에 팔아도 받는다). 수량 = 평가액 / 당일 종가이므로 받는 금액 = 평가액 × dps / 종가 × (1 - 배당세). 현금으로 쌓이고 다음 리밸런싱에서 투자될 수 있다.
+ * [events] 의 dps 는 백테스트 가격(수정주가) 단위여야 한다. 적립한 세후 금액(자본 대비 비율)을 돌려준다. 종가가 없어 못 받은 건은 [skipped] 에 사유를 쌓는다.
+ */
+internal fun accrueDividends(
+    book: Book, events: List<Pair<String, Double>>, prices: Map<String, Double>, taxRate: Double, d: LocalDate, skipped: MutableList<String>,
+): Double {
+    var income = 0.0
+    for ((sym, dps) in events) {
+        val held = book.value[sym] ?: continue
+        val price = prices[sym]
+        if (!dps.isFinite() || dps <= 0) continue
+        if (price == null || price.isNaN() || price <= 0) {
+            skipped += "배당 $sym 배당락일 $d: 종가가 없어(거래정지·결측) 보유분 배당을 건너뜀"
+            continue
+        }
+        val net = held * dps / price * (1.0 - taxRate)
+        book.cash += net
+        income += net
+    }
+    return income
 }

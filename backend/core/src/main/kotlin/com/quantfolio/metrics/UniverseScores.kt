@@ -1,16 +1,19 @@
 package com.quantfolio.metrics
 
+import com.quantfolio.factor.FactorCoverage
 import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.factor.ResidualMomentum
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
+import com.quantfolio.market.official.LocalSectorMap
+import com.quantfolio.market.official.MarketDataNotLoaded
+import com.quantfolio.market.official.SnapshotSource
 import com.quantfolio.market.ohlcv.PriceHistory
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.quant.Series
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 
@@ -24,11 +27,17 @@ interface FactorInputs {
 }
 
 @Component
-class LiveFactorInputs(private val dart: DartFinancials, private val krx: KrxIndexService) : FactorInputs {
+class LiveFactorInputs(
+    private val dart: DartFinancials,
+    @Qualifier("local") private val snapshots: SnapshotSource,
+    private val sectorMaps: LocalSectorMap,
+) : FactorInputs {
     override fun qualityMetrics(codes: List<String>, asOf: LocalDate, useTtm: Boolean) = dart.metricsBySymbol(codes, asOf, useTtm)
     override fun peadSue(codes: List<String>, asOf: LocalDate, lookbackQ: Int) = dart.peadSueBySymbol(codes, asOf, lookbackQ)
-    override fun marketCaps(asOf: LocalDate) = krx.marketCaps(asOf)
-    override fun sectorMap(asOf: LocalDate) = krx.sectorMap(asOf)
+    /** 로컬 시총(엔진 `LocalMarketData` 와 같다). 휴장일이면 빈 맵, 미적재면 [MarketDataNotLoaded]. */
+    override fun marketCaps(asOf: LocalDate): Map<String, Long> =
+        snapshots.marketCap(asOf, listOf("KOSPI", "KOSDAQ")).mapNotNull { r -> r.marketCap?.let { r.symbol to it } }.toMap()
+    override fun sectorMap(asOf: LocalDate) = sectorMaps.sectorMap(asOf)
     override fun dartEnabled() = dart.enabled()
 }
 
@@ -37,20 +46,21 @@ data class UniverseScoreParams(
     val factorWeights: Map<String, Double>? = null,
     val neutralize: String = "none",
     val financialPeriod: String = "annual",
-    val flowWindow: Int = 90,
-    val flowDenom: String = "mcap",
     val residRegWindow: Int = 36,
     val residWindow: Int = 11,
     val residSkip: Int = 1,
     val peadLookbackQ: Int = 8,
+    /** true 면 가중치가 걸린 value·quality·growth 의 입력 커버리지가 [FactorCoverage.MIN] 미만일 때 [MarketDataNotLoaded](실매매 경로). */
+    val requireCoverage: Boolean = false,
 )
 
 /**
  * 리밸런싱 selection.method="score" 전용 종합점수(원본 `metrics/factors.compute_universe_scores`).
  * asOf 는 호출자가 정한 직전 확정 영업일이어야 한다 — 여기서 '오늘'로 보정하지 않는다(미래참조 방지).
  * 가중치가 걸린 팩터가 전량 조회 실패면 예외로 리밸런싱을 건너뛴다(조용히 중립 처리하면 §47 사고 재현).
+ * `requireCoverage`(엔진)면 더 엄격하게, 입력 커버리지 50% 미만에서 [com.quantfolio.factor.FactorCoverage] 가 `MarketDataNotLoaded` 를 던진다.
+ * 빈이 아니다 — 엔진 `LocalMarketData` 가 로컬 소스로 직접 만든다.
  */
-@Component
 class UniverseScores(
     private val snapshots: SnapshotSource,
     private val tech: TechIndicatorLoader,
@@ -76,6 +86,9 @@ class UniverseScores(
         fun put(name: String, f: (String) -> Double?) {
             cols[name] = DoubleArray(codes.size) { f(codes[it]) ?: Double.NaN }
         }
+        if (p.requireCoverage && weighted("value")) {
+            FactorCoverage.require("value", asOf, codes.count { c -> fund[c]?.let { it.per != null || it.pbr != null || it.div != null } == true }, codes.size)
+        }
         put("PER") { fund[it]?.per }
         put("PBR") { fund[it]?.pbr }
         put("DIV") { fund[it]?.div }
@@ -89,11 +102,19 @@ class UniverseScores(
         put("vol_ann") { t.getValue(it).volAnn }
         put("mdd_252") { t.getValue(it).mdd252 }
 
-        val quality = try {
-            inputs.qualityMetrics(codes, asOf, p.financialPeriod == "ttm")
-        } catch (e: DataSourceError) {
-            log.error("OpenDART 퀄리티 팩터 조회 실패 — 중립 처리: {}", e.message)
-            emptyMap()
+        val quality = if (!weighted("quality") && !weighted("growth")) {
+            emptyMap() // 가중치가 0 이면 점수에 쓰이지 않는다 — 재무를 조회하지 않는다
+        } else {
+            try {
+                inputs.qualityMetrics(codes, asOf, p.financialPeriod == "ttm")
+            } catch (e: DataSourceError) {
+                log.error("OpenDART 퀄리티 팩터 조회 실패 — 중립 처리: {}", e.message)
+                emptyMap()
+            }
+        }
+        if (p.requireCoverage) {
+            if (weighted("quality")) FactorCoverage.require("quality", asOf, codes.count { c -> FactorScores.QUALITY_INPUTS.any { quality[c]?.get(it) != null } }, codes.size)
+            if (weighted("growth")) FactorCoverage.require("growth", asOf, codes.count { c -> FactorScores.GROWTH_INPUTS.any { quality[c]?.get(it) != null } }, codes.size)
         }
         if (quality.isNotEmpty()) {
             for (k in FactorScores.QUALITY_COLS) {
@@ -119,11 +140,6 @@ class UniverseScores(
             }
             if (smap.isNotEmpty()) sector = codes.map { smap[it] }
         }
-        if (weighted("flow")) {
-            val flow = guarded("수급(flow)") { flowNorm(codes, asOf, p.flowWindow, p.flowDenom) }
-            if (flow.isEmpty()) throw IllegalStateException("수급(flow) 팩터 데이터 전량 조회 실패(외국인+기관 순매수 빈 응답) — 왜곡된 목표 산출 방지 위해 리밸런싱 건너뜀(다음 주기 재시도)")
-            put("flow_norm") { flow[it] }
-        }
         if (weighted("residual_momentum")) {
             val rm = guarded("잔차 모멘텀") { residualMomentum(codes, asOf, p.residRegWindow, p.residWindow, p.residSkip) }
             if (rm.isEmpty()) throw IllegalStateException("잔차 모멘텀 팩터 데이터 전량 조회 실패(종가/KOSPI200 지수 빈 응답) — 왜곡된 목표 산출 방지 위해 리밸런싱 건너뜀(다음 주기 재시도)")
@@ -140,31 +156,11 @@ class UniverseScores(
 
     private fun guarded(label: String, block: () -> Map<String, Double>): Map<String, Double> = try {
         block()
+    } catch (e: MarketDataNotLoaded) {
+        throw e // 미적재는 중립 처리하지 않고 호출자가 멈춘다
     } catch (e: Exception) {
         log.warn("{} 팩터 조회 실패 — 중립 처리: {}", label, e.message)
         emptyMap()
-    }
-
-    /** 외국인+기관 누적 순매수 ÷ 시총(mcap) 또는 구간 거래대금(value). 순매수가 비면 분모 조회도 하지 않는다. */
-    fun flowNorm(codes: List<String>, asOf: LocalDate, window: Int = 90, denom: String = "mcap"): Map<String, Double> {
-        if (codes.isEmpty()) return emptyMap()
-        val start = MetricsCommon.approxStart(asOf, window)
-        val net = snapshots.netPurchases(start, asOf, mkts).associate { it.symbol to it.netBuyValue }
-        if (net.isEmpty()) return emptyMap()
-        val den: Map<String, Double?> = if (denom == "value") {
-            snapshots.priceChange(start, asOf, mkts).associate { it.symbol to it.tradingValue?.toDouble() }
-        } else {
-            snapshots.marketCap(asOf, mkts).associate { it.symbol to it.marketCap?.toDouble() }
-        }
-        val out = linkedMapOf<String, Double>()
-        for (c in codes.map { it.trim().padStart(6, '0') }) {
-            val nv = net[c] ?: continue
-            if (nv.isNaN()) continue
-            val dv = den[c] ?: continue
-            if (dv.isNaN() || dv <= 0) continue
-            out[c] = nv / dv
-        }
-        return out
     }
 
     /** 종가·KOSPI200(1028) 지수로 잔차 모멘텀. 지수 조회 실패는 전파, 종목별 실패는 그 종목만 제외. */
@@ -177,7 +173,13 @@ class UniverseScores(
         val market = Series(idx.map { it.date }, DoubleArray(idx.size) { idx[it].close ?: Double.NaN })
         val closes = linkedMapOf<String, Series>()
         for (c in norm) {
-            val bars = runCatching { prices.load(c, start, asOf) }.getOrNull()
+            val bars = try {
+                prices.load(c, start, asOf)
+            } catch (e: MarketDataNotLoaded) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
             if (bars.isNullOrEmpty()) continue
             closes[c] = bars.closeSeries()
         }

@@ -82,6 +82,7 @@ export function RebalanceFields({
           type: uniRule.type ?? "momentum",
           lookback: uniRule.lookback ?? 250,
           pick: uniRule.pick ?? 40,
+          pool_size: uniRule.pool_size ?? 200,
         },
       });
     }
@@ -167,20 +168,26 @@ export function RebalanceFields({
           className={INPUT}
         >
           <option value="fixed">고정 목록(아래에서 직접 선택)</option>
-          <option value="KOSPI200">KOSPI200 구성종목(시점별·PIT)</option>
-          <option value="KOSPI100">KOSPI100 구성종목(시점별·PIT)</option>
-          <option value="KRX300">KRX300 구성종목(시점별·PIT)</option>
+          <option value="KOSPI_MCAP">KOSPI 시총 상위(시점별)</option>
         </select>
         {pitSource && (
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            각 리밸런싱 시점의 <b>실제 지수 구성종목</b>을 후보풀로 사용합니다(편출·상폐 반영 →
-            생존편향 제거). 아래 종목 목록은 지수 조회 실패 시의 <b>폴백</b>으로만 쓰입니다.
+            각 리밸런싱 직전 거래일 <b>시가총액 상위 N(보통주)</b>을 후보풀로 사용합니다(편출·상폐 반영 →
+            생존편향 제거). 아래 종목 목록은 쓰이지 않습니다.
           </p>
         )}
       </Field>
 
       {pitSource && (
         <div className="rounded-md border p-3 space-y-3">
+          <NumField
+            label="후보 풀 크기"
+            min={1}
+            max={300}
+            value={uniRule.pool_size ?? uniRule.pick ?? 20}
+            onChange={(v) => patchUniverseRule({ pool_size: v > 0 ? v : null })}
+          />
+          <p className="-mt-2 text-[11px] text-muted-foreground">비우면 pick 과 같음</p>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -211,24 +218,13 @@ export function RebalanceFields({
               />
             </div>
           )}
-          <NumField
-            label="최소 시가총액(억 원, 0=제한 없음)"
-            min={0}
-            step={1000}
-            value={uniRule.min_market_cap ?? 0}
-            onChange={(v) => patchUniverseRule({ min_market_cap: v > 0 ? v : null })}
-          />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            소형주 슬리피지 과대평가를 막는 유동성 필터. 각 리밸런싱 시점 시총 기준으로
-            이 값 미만 종목을 후보풀에서 제외합니다(예: 5000 = 5000억 원).
-          </p>
         </div>
       )}
 
       <Field
         label={
           pitSource
-            ? `폴백 종목 (선택 · ${config.universe.length}개)`
+            ? `종목 목록 (KOSPI_MCAP 에선 미사용 · ${config.universe.length}개)`
             : `운용 종목 (universe · ${config.universe.length}개)`
         }
       >
@@ -251,7 +247,7 @@ export function RebalanceFields({
           ))}
           {config.universe.length === 0 && (
             <span className="text-xs text-muted-foreground">
-              {pitSource ? "지수 구성종목을 자동 사용합니다(폴백 없음)." : "종목을 추가하세요."}
+              {pitSource ? "시가총액 상위 종목을 자동 사용합니다." : "종목을 추가하세요."}
             </span>
           )}
         </div>

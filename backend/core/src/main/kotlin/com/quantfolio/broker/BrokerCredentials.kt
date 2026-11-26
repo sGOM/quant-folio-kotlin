@@ -49,6 +49,11 @@ class BrokerCredentials(
         else TossClient(c.appKey, c.appSecret, c.accountNo, support)
     }
 
+    /** 소유자 KIS 자격증명이 설정돼 있으면 그 클라이언트(휴장일 조회 등 계좌 무관 호출용), 없으면 null. */
+    fun ownerKis(): KisClient? = with(props.kis) {
+        if (appKey.isBlank() || appSecret.isBlank()) null else KisClient(appKey, appSecret, accountNo.ifBlank { null }, support)
+    }
+
     /** 통합 시세(국내+해외)용 토스 클라이언트. */
     fun quoteClient(user: User): BrokerClient? =
         resolve(user.id, "toss")?.let { TossClient(it.appKey, it.appSecret, it.accountNo, support) }

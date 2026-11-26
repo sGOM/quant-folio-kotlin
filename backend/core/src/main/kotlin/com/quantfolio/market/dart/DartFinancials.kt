@@ -1,6 +1,7 @@
 package com.quantfolio.market.dart
 
 import com.quantfolio.common.MarketClock
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.DataSourceErrors
@@ -35,6 +36,7 @@ class DartFinancials(
     private val calendarCache = ConcurrentHashMap<Pair<String, Int>, List<Triple<LocalDate, Int, String>>>()
 
     @Volatile private var corpMap: Map<String, String>? = null
+    @Volatile private var localCorpMap: Map<String, String>? = null
 
     /** OpenDART 키 설정 여부(없으면 재무 팩터는 중립). */
     fun enabled(): Boolean = client.enabled()
@@ -42,68 +44,99 @@ class DartFinancials(
     /**
      * 메모리 → 원장(확정 0행이면 null) → 저장소 확정본 → 원격. 원격 결과는 저장하고 원장에 기록한다.
      * 무자료(013)는 확정일이 지났을 때만 '확정 무자료'로 굳힌다(정정공시로 나중에 생길 수 있다).
+     *
+     * @param remote false 면 원격을 부르지 않는다(백테스트·엔진 로컬 전용). 원장·저장소 확정본이 없으면 [MarketDataNotLoaded].
+     * @param memo false 면 결과를 메모리에 남기지 않는다. 메모리 캐시는 상한이 없어 전 종목을 훑는 백필이 쓰면
+     *   힙을 다 채운다(2026-11-25 dartBackfill 40분 만에 OOM, 힙 2GB).
      */
-    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String): List<Map<String, Any?>>? {
+    fun cachedAccounts(corp: String, year: Int, reprt: String, fsDiv: String, remote: Boolean = true, memo: Boolean = true): List<Map<String, Any?>>? {
         val key = listOf(corp, year, reprt, fsDiv)
         accountsCache[key]?.let { return it }
         val cacheKey = CacheKeys.of(corp, year, reprt, fsDiv)
         val entry = ledger.get(LEDGER_SOURCE, cacheKey)
         if (entry != null && entry.final && entry.rowCount == 0) return null
         val stored = store.read(corp, year, reprt, fsDiv)
-        if (stored != null && stored.second) return stored.first.also { accountsCache[key] = it }
+        if (stored != null && stored.second) return stored.first.also { if (memo) accountsCache[key] = it }
+        if (!remote) throw MarketDataNotLoaded("dart_accounts", cacheKey)
 
         val acc = client.accounts(corp, year, reprt, fsDiv)
         if (!acc.isNullOrEmpty()) {
             store.write(corp, year, reprt, fsDiv, acc)
-            accountsCache[key] = acc
+            if (memo) accountsCache[key] = acc
             ledger.put(LEDGER_SOURCE, cacheKey, acc.size, store.read(corp, year, reprt, fsDiv)?.second ?: false)
             return acc
         }
         if (!client.enabled()) return null
-        // 원본 date.today() — 컨테이너 UTC(보존)
-        val final = !MarketClock.todayUtcLegacy(clock).isBefore(DartFinancialStore.confirmedDate(null, year))
+        // KST 날짜 — 원본 date.today() 는 컨테이너 UTC 라 KST 00~09시에 하루 늦게 확정했다(migration-notes #1)
+        val final = !MarketClock.todayKst(clock).isBefore(DartFinancialStore.confirmedDate(null, year))
         ledger.put(LEDGER_SOURCE, cacheKey, 0, final)
         return null
     }
 
-    fun corpCodeMap(): Map<String, String>? = corpMap ?: client.corpCodeMap()?.also { corpMap = it }
+    /** 원격 없이 이미 확정돼 있는지(원장 확정 또는 저장소 확정본). 백필이 이미 받은 조합을 건너뛰는 데 쓴다. */
+    fun accountsFinal(corp: String, year: Int, reprt: String, fsDiv: String): Boolean =
+        ledger.get(LEDGER_SOURCE, CacheKeys.of(corp, year, reprt, fsDiv))?.final == true || store.read(corp, year, reprt, fsDiv)?.second == true
 
-    /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. */
-    fun annualMetrics(corp: String, year: Int): Map<String, Double?> {
+    /** 원격 허용 경로. 받을 때마다 로컬 테이블에 upsert 해 로컬 전용 경로([corpCodeMapLocal])가 읽게 한다. */
+    fun corpCodeMap(): Map<String, String>? = corpMap ?: client.corpCodeMap()?.also {
+        store.writeCorpCodes(it)
+        corpMap = it
+        localCorpMap = null
+    }
+
+    /** 로컬 전용: 테이블만 읽는다(키 유무와 무관). 비어 있으면 [MarketDataNotLoaded]. */
+    fun corpCodeMapLocal(): Map<String, String> =
+        localCorpMap ?: store.readCorpCodes().ifEmpty { throw MarketDataNotLoaded("dart_corp_map", "corp_code") }.also { localCorpMap = it }
+
+    /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. [asOf] 가 있으면 그날까지 공개된 판본만([publishedBy]), 아니면 빈 지표. */
+    fun annualMetrics(corp: String, year: Int, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (asOf != null && !publishedBy(corp, year, DartMetrics.REPORT_ANNUAL, asOf, remote)) return DartMetrics.deriveMetrics(emptyList())
         annualCache[corp to year]?.let { return it }
-        val accounts = firstAvailable(corp, year, DartMetrics.REPORT_ANNUAL)
+        val accounts = firstAvailable(corp, year, DartMetrics.REPORT_ANNUAL, remote)
         return DartMetrics.deriveMetrics(accounts.orEmpty()).also { if (accounts != null) annualCache[corp to year] = it }
     }
 
-    fun periodMetrics(corp: String, year: Int, reprt: String): Map<String, Double?> {
+    fun periodMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (asOf != null && !publishedBy(corp, year, reprt, asOf, remote)) return DartMetrics.deriveMetrics(emptyList())
         val key = Triple(corp, year, reprt)
         periodCache[key]?.let { return it }
-        val accounts = firstAvailable(corp, year, reprt)
+        val accounts = firstAvailable(corp, year, reprt, remote)
         return DartMetrics.deriveMetrics(accounts.orEmpty()).also { if (accounts != null) periodCache[key] = it }
     }
 
     /** 최근 4분기 합산(TTM). 당해 분기가 아직 없으면 직전 연간, 합성이 불가하면 당해 분기 그대로. */
-    fun ttmMetrics(corp: String, year: Int, reprt: String): Map<String, Double?> {
-        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL)
-        val cur = periodMetrics(corp, year, reprt)
-        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL)
-        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL))
+    fun ttmMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL, remote, asOf)
+        val cur = periodMetrics(corp, year, reprt, remote, asOf)
+        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote, asOf)
+        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt, remote, asOf), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote, asOf))
         return if (combined.values.all { it == null }) cur else combined
     }
 
-    /** 종목별 재무 지표 + 성장률·흑자전환·F-score·3년 적자 횟수. 전량 실패면 대표 예외, 일부 실패는 로그 후 부분 결과. */
-    fun metricsBySymbol(codes: List<String>, asOf: LocalDate, useTtm: Boolean = false): Map<String, Map<String, Any?>> {
-        if (!client.enabled() || codes.isEmpty()) return emptyMap()
-        val map = corpCodeMap() ?: return emptyMap()
+    /**
+     * 종목별 재무 지표 + 성장률·흑자전환·F-score·3년 적자 횟수. 전량 실패면 대표 예외, 일부 실패는 로그 후 부분 결과.
+     * [remote] false 면 로컬(원장·저장소)만 읽는다: 키 설정과 무관, corp 매핑은 [corpCodeMapLocal]. 미적재 연도는 빈 지표로 두어
+     * 그 종목의 해당 값이 결측이 된다(호출자가 커버리지로 판정). corp 매핑 자체가 비면 [MarketDataNotLoaded].
+     */
+    fun metricsBySymbol(codes: List<String>, asOf: LocalDate, useTtm: Boolean = false, remote: Boolean = true): Map<String, Map<String, Any?>> {
+        if (codes.isEmpty() || (remote && !client.enabled())) return emptyMap()
+        val map = if (remote) corpCodeMap() ?: return emptyMap() else corpCodeMapLocal()
+        fun lenient(f: () -> Map<String, Double?>): Map<String, Double?> =
+            try { f() } catch (e: MarketDataNotLoaded) { if (remote) throw e else DartMetrics.deriveMetrics(emptyList()) }
         val (year, reprt) = if (useTtm) DartMetrics.latestReportPeriod(asOf) else DartMetrics.announcementLaggedYear(asOf) to DartMetrics.REPORT_ANNUAL
+        // 판본이 asOf 뒤 접수(정정·마감 지연)면 그때 몰랐다 — 연간은 직전 연도를 최신으로(Valuation.financials 와 같은 기준), 각 연도도 공개분만.
+        // 원본은 공시지연 규칙만 보고 DART 가 주는 최신 정정본을 썼다(migration-notes #11).
+        fun knownAt(corp: String, y: Int): Boolean =
+            try { publishedBy(corp, y, DartMetrics.REPORT_ANNUAL, asOf, remote) } catch (e: MarketDataNotLoaded) { if (remote) throw e else true }
         val partial = { ok: Int, errors: List<DataSourceError> ->
             log.error("OpenDART 부분 실패 — 성공 {} / 실패 {} / 전체 {}(대표: {})", ok, errors.size, codes.size, errors.first().message)
         }
         return perSymbol(codes, map, partial) { corp ->
             val (m, prev, prev2) = if (useTtm) {
-                Triple(ttmMetrics(corp, year, reprt), ttmMetrics(corp, year - 1, reprt), ttmMetrics(corp, year - 2, reprt))
+                Triple(lenient { ttmMetrics(corp, year, reprt, remote, asOf) }, lenient { ttmMetrics(corp, year - 1, reprt, remote, asOf) }, lenient { ttmMetrics(corp, year - 2, reprt, remote, asOf) })
             } else {
-                Triple(annualMetrics(corp, year), annualMetrics(corp, year - 1), annualMetrics(corp, year - 2))
+                val y = if (knownAt(corp, year)) year else year - 1
+                Triple(lenient { annualMetrics(corp, y, remote, asOf) }, lenient { annualMetrics(corp, y - 1, remote, asOf) }, lenient { annualMetrics(corp, y - 2, remote, asOf) })
             }
             val result: MutableMap<String, Any?> = LinkedHashMap(m)
             result["op_growth"] = DartMetrics.yoyGrowth(m["op_income"], prev["op_income"])
@@ -202,8 +235,17 @@ class DartFinancials(
         return cur - prev
     }
 
-    private fun firstAvailable(corp: String, year: Int, reprt: String): List<Map<String, Any?>>? =
-        listOf(FS_CONSOLIDATED, FS_SEPARATE).firstNotNullOfOrNull { fs -> cachedAccounts(corp, year, reprt, fs)?.takeIf { it.isNotEmpty() } }
+    /**
+     * 이 (연도, 보고서)의 저장 판본이 [asOf] 에 공개돼 있었는지 — [firstAvailable] 이 고르는 재무제표(연결 우선)의 접수일(정정되면 정정 접수일)로 본다.
+     * 자료가 없거나 접수일을 해석 못 했으면 true(호출자의 공시지연 규칙에 맡긴다). 미적재면 [cachedAccounts] 처럼 [MarketDataNotLoaded].
+     */
+    private fun publishedBy(corp: String, year: Int, reprt: String, asOf: LocalDate, remote: Boolean): Boolean {
+        val fs = listOf(FS_CONSOLIDATED, FS_SEPARATE).firstOrNull { cachedAccounts(corp, year, reprt, it, remote)?.isNotEmpty() == true } ?: return true
+        return store.receiptDate(corp, year, reprt, fs)?.let { !it.isAfter(asOf) } ?: true
+    }
+
+    private fun firstAvailable(corp: String, year: Int, reprt: String, remote: Boolean = true): List<Map<String, Any?>>? =
+        listOf(FS_CONSOLIDATED, FS_SEPARATE).firstNotNullOfOrNull { fs -> cachedAccounts(corp, year, reprt, fs, remote)?.takeIf { it.isNotEmpty() } }
 
     companion object {
         const val FS_CONSOLIDATED = "CFS"

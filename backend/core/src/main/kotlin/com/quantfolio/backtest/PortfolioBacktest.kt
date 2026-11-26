@@ -4,6 +4,7 @@ import com.quantfolio.factor.FactorFrame
 import com.quantfolio.factor.FactorScores
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.PanicDay
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.quant.Cfg
 import com.quantfolio.quant.Num
 import com.quantfolio.quant.Panel
@@ -18,6 +19,9 @@ import kotlin.math.pow
 /** 리밸런싱일 d 의 후보풀 공급(시점별 지수 구성종목 → 생존편향 제거). */
 typealias PoolProvider = (LocalDate) -> List<String>?
 
+/** 결정일 d 의 종목→업종(d 이하 최신 스냅샷). 그 시점 스냅샷이 없으면 null — 그 결정일은 섹터 캡 없이(migration-notes #12). */
+typealias SectorProvider = (LocalDate) -> Map<String, String?>?
+
 /** method="score" 의 펀더멘털 공급: (as_of, codes) → 종목 → {PER, PBR, DIV, roe, …, market_cap, sector}. */
 typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<String, Any?>>?
 
@@ -28,7 +32,7 @@ typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<St
  *   next_close(기본) 는 d 의 결정을 다음 거래일 종가에, same_close 는 d 종가에.
  * - 비용: 매수 fees+슬리피지, 매도 fees+tax+슬리피지. 드리프트 밴드 이내 보유 종목은 매매 안 함.
  * - 결정 우선순위: MDD 킬스위치 → 패닉 오버레이 → (쿨다운 대기) → 레짐 청산 → 정기 리밸런싱/재진입.
- * - 상장폐지: ffill 은 delisting_gap_days 까지만, 그 뒤 **terminal gap** 이면 회수율만 현금화(interior gap 은 동결).
+ * - 상장폐지: ffill 은 delisting_gap_days 까지만, 그 뒤에도 결측인 보유 종목은 회수율만 현금화(재개 여부는 보지 않는다 — 미래참조).
  * - 체결 정밀도: 정수주(기본), ADV 참여율 캡(강제청산 면제), 호가단위·상하한가(opt-in).
  *
  * 수치는 원본과 같은 연산 순서(dict 삽입 순서, 정렬된 종목 순회, 매도→매수)로 계산해 정답지와 1e-8 이내로 맞춘다.
@@ -121,7 +125,7 @@ object PortfolioBacktest {
         val config: Map<String, Any?>,
         val fundamentals: FundamentalsProvider?,
         val pool: PoolProvider?,
-        val sectorMap: Map<String, String?>?,
+        val sectorAt: (LocalDate) -> Map<String, String?>?,
         val snapshots: MutableList<ScoreSnapshot>?,
     )
 
@@ -140,7 +144,8 @@ object PortfolioBacktest {
         if (method == "score") {
             val cols = factorFrameOf(hist, universe)
             var sector: List<String?>? = null
-            val fdf = ctx.fundamentals?.let { runCatching { it(d, universe) }.getOrNull() }
+            // 미적재·커버리지 부족(MarketDataNotLoaded)은 점수를 조용히 중립으로 만들지 않고 올린다. 그 밖의 실패만 컬럼 결측으로 저하.
+            val fdf = ctx.fundamentals?.let { f -> try { f(d, universe) } catch (e: MarketDataNotLoaded) { throw e } catch (e: Exception) { null } }
             if (!fdf.isNullOrEmpty()) {
                 for (col in FactorScores.FUNDAMENTAL_COLS) {
                     if (fdf.values.none { col in it }) continue
@@ -157,11 +162,25 @@ object PortfolioBacktest {
             val vols = cols["vol_ann"]?.let { v -> universe.indices.filter { !v[it].isNaN() }.associate { universe[it] to v[it] } }
             val gateHistory = if (Cfg.truthy(selection["vol_gate"])) universe.filter { hist.hasSymbol(it) }.associateWith { hist.column(it).dropNa() } else emptyMap()
             val w = Rebalance.targetWeights(gateHistory, config, scores, vols)
-            return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
+            return scale(RiskCaps.apply(w, hist, risk, ctx.sectorAt(d)), exposure)
         }
         val priceHistory = universe.filter { hist.hasSymbol(it) }.associateWith { hist.column(it).dropNa() }
         val w = Rebalance.targetWeights(priceHistory, config)
-        return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
+        return scale(RiskCaps.apply(w, hist, risk, ctx.sectorAt(d)), exposure)
+    }
+
+    /** `_dividends`(종목 → [{ex_date, dps}]) → 배당락일별 (종목, dps), 종목 오름차순. 없거나 비면 빈 맵. */
+    private fun dividendEvents(config: Map<String, Any?>): Map<LocalDate, List<Pair<String, Double>>> {
+        val raw = config["_dividends"] as? Map<*, *> ?: return emptyMap()
+        val byDay = HashMap<LocalDate, MutableList<Pair<String, Double>>>()
+        for (sym in raw.keys.map { it.toString() }.sorted()) {
+            for (e in raw[sym] as List<*>) {
+                e as Map<*, *>
+                val ex = e["ex_date"].let { it as? LocalDate ?: LocalDate.parse(it.toString()) }
+                byDay.getOrPut(ex) { mutableListOf() } += sym to Cfg.num(e["dps"])
+            }
+        }
+        return byDay
     }
 
     fun run(
@@ -175,10 +194,10 @@ object PortfolioBacktest {
         benchmark: Series? = null,
         panic: List<PanicDay>? = null,
         volume: Panel? = null,
+        sectors: SectorProvider? = null,
     ): Map<String, Any?> {
         val symbols = closePanel.symbols
         val raw = symbols.associateWith { closePanel.column(it) }
-        val lastValid = raw.mapNotNull { (s, c) -> c.values.indexOfLast { !it.isNaN() }.takeIf { it >= 0 }?.let { s to c.index[it] } }.toMap()
         // 원본 `int(config.get("delisting_gap_days", 10) or 0)` — 키가 없으면 10, 있는데 None·0·"" 이면 0(ffill 무제한)
         val gap = Cfg.int(if (config.containsKey("delisting_gap_days")) Cfg.or(config, "delisting_gap_days", 0) else 10)
         val delistRecovery = Cfg.num(Cfg.get(config, "delisting_recovery", 0.9)).coerceIn(0.0, 1.0)
@@ -213,9 +232,10 @@ object PortfolioBacktest {
         val risk = Cfg.map(config, "risk_layer")
         val mddKill = risk["mdd_kill_pct"]?.takeIf { Cfg.truthy(it) }?.let { Cfg.num(it) }
         val mddRearm = Cfg.int(Cfg.or(risk, "mdd_rearm_days", 20))
+        // 고정 매핑 `_sector_map`(원본 방식, 정답지 시나리오)보다 결정일별 [sectors] 가 우선이다.
         @Suppress("UNCHECKED_CAST")
-        val sectorMap = config["_sector_map"] as? Map<String, String?>
-        val ctx = Ctx(panel, config, fundamentals, pool, sectorMap, snapshots)
+        val fixedSectors = config["_sector_map"] as? Map<String, String?>
+        val ctx = Ctx(panel, config, fundamentals, pool, sectors ?: { fixedSectors }, snapshots)
 
         val rf = Cfg.map(config, "regime_filter")
         var regimeOn: BooleanArray? = null
@@ -233,6 +253,10 @@ object PortfolioBacktest {
         val overlay = if (panicEnabled) PanicOverlay.build(dates, panic, pov) else null
         if (panicEnabled && overlay == null) log.warn("패닉 오버레이가 켜져 있으나 유효한 패닉 시계열을 확보하지 못해 오버레이를 적용하지 않는다.")
 
+        val dividendsByDay = dividendEvents(config)
+        val dividendTax = Cfg.num(Cfg.get(config, "dividend_tax", 0.154))
+        var dividendIncome = 0.0
+        val dividendSkipped = mutableListOf<String>()
         val book = Book(1.0)
         var prevPrices: Map<String, Double>? = null
         var prevRiskOff = false
@@ -269,7 +293,8 @@ object PortfolioBacktest {
             val prices = panel.row(d)!!
             val limitRef = prevPrices
             // 1) 마크투마켓 + 상장폐지(terminal gap) 확정
-            prevPrices?.let { markToMarket(book, it, prices, d, lastValid, delistRecovery, journal) }
+            prevPrices?.let { markToMarket(book, it, prices, d, delistRecovery, journal) }
+            dividendsByDay[d]?.let { dividendIncome += accrueDividends(book, it, prices, dividendTax, d, dividendSkipped) }
             prevPrices = prices
             // 2) 전일 결정의 지연 체결
             pending?.let {
@@ -321,16 +346,20 @@ object PortfolioBacktest {
             prevRiskOff = riskOff
         }
 
-        return summarize(
+        val result = summarize(
             journal, book, simDates, dates, dateIdx, benchmark, rfAnnual, snapshots, panel, numKills, overlay?.numEvents ?: 0,
         )
+        // 배당 이벤트가 있을 때만 키를 더한다(없으면 이전 결과와 동일). 금액은 원화(자본 × 비율).
+        if (dividendsByDay.isNotEmpty()) result["dividend_income"] = Num.safe(dividendIncome * ex.capital)
+        if (dividendSkipped.isNotEmpty()) result["dividend_warnings"] = dividendSkipped.toList()
+        return result
     }
 
     /** 일별 기록 → 결과(성과지표·곡선·마커·보유·거래). 키 순서가 응답 계약. */
     private fun summarize(
         journal: Journal, book: Book, simDates: List<LocalDate>, dates: List<LocalDate>, dateIdx: Map<LocalDate, Int>,
         benchmark: Series?, rfAnnual: Double, snapshots: List<ScoreSnapshot>?, panel: Panel, numKills: Int, numPanicEvents: Int,
-    ): Map<String, Any?> {
+    ): LinkedHashMap<String, Any?> {
         val series = DoubleArray(journal.equities.size + 1) { if (it == 0) 1.0 else journal.equities[it - 1] }
         val rets = DoubleArray(series.size - 1) { series[it + 1] / series[it] - 1.0 }
         val totalReturn = Num.safe(series.last() - 1.0)

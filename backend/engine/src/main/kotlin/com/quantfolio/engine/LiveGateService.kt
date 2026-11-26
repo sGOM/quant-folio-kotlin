@@ -15,7 +15,7 @@ import java.time.Clock
 
 /**
  * 실전 게이트 입력 조립(원본 `live_gate.evaluate_live_gate` 의 DB 부분) → 판정은 [LiveGate.decide].
- * 체결 정합 리포트는 최근 90일(KST), 금액 상한은 전략별→공통 리스크 한도와 KST 당일 체결 명목 합.
+ * 체결 정합 리포트는 최근 90일(KST), 금액 상한은 전략별→공통 리스크 한도와 KST 당일 체결 명목 + 당일 미체결 잔량 명목 합.
  */
 @Component
 class LiveGateService(
@@ -35,8 +35,14 @@ class LiveGateService(
         val today = MarketClock.todayKst(clock)
         val report = reports.report(userId, today.minusDays(90), today, strategyId)
         val order = orderNotional?.let {
+            // 당일 체결 명목 + 당일 미완료 주문의 미체결 잔량 × 주문가(신호가). 원본은 체결만 더해 미체결분만큼 상한을 넘겨 체결될 수 있었다
+            // (migration-notes #16③). 지난 날 주문은 당일 상한 밖(KRX 주문은 당일 소멸), 종결(closed_at)·가격 없는 주문은 잔량에서 빠진다.
             val used = jdbc.queryForObject(
-                "select coalesce(sum(e.filled_qty * e.filled_price), 0) from executions e join orders o on e.order_id = o.id where o.user_id = :u and e.executed_at >= :t",
+                """select coalesce((select sum(e.filled_qty * e.filled_price) from executions e join orders o on e.order_id = o.id
+                                     where o.user_id = :u and e.executed_at >= :t), 0)
+                        + coalesce((select sum(greatest(o.qty - coalesce((select sum(e.filled_qty) from executions e where e.order_id = o.id), 0), 0) * o.price)
+                                      from orders o where o.user_id = :u and o.created_at >= :t and o.closed_at is null
+                                       and o.status in ('pending', 'submitted', 'partial')), 0)""",
                 MapSqlParameterSource("u", userId).addValue("t", Timestamp.from(MarketClock.kstStart(today))), BigDecimal::class.java,
             )!!
             LiveGate.OrderCheck(it, risk.limit(userId, strategyId)?.maxPositionSize, used, props.kis.dailyOrderNotionalCap?.toDouble())

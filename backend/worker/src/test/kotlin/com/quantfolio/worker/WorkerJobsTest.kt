@@ -1,6 +1,7 @@
 package com.quantfolio.worker
 
 import com.quantfolio.backtest.FillQualityReport
+import com.quantfolio.alert.AlertPublisher
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.Alert
 import com.quantfolio.domain.alert.AlertRepository
@@ -13,9 +14,10 @@ import com.quantfolio.domain.trading.OrderRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.kis.KisStockMaster
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.official.DividendIngest
+import com.quantfolio.market.official.DividendIngestReport
+import com.quantfolio.market.official.IngestReport
+import com.quantfolio.market.official.OfficialIngest
 import com.quantfolio.market.source.SourceAuthError
 import com.quantfolio.news.NewsIngestor
 import com.quantfolio.test.ContainersConfig
@@ -28,6 +30,7 @@ import org.mockito.ArgumentMatchers.anyList
 import org.mockito.ArgumentMatchers.eq
 import org.mockito.BDDMockito.given
 import org.mockito.BDDMockito.willThrow
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
@@ -51,19 +54,19 @@ import kotlin.test.assertTrue
 class WorkerJobsTest(
     @Autowired private val jobs: WorkerJobs,
     @Autowired private val backup: DbBackup,
+    @Autowired private val freshness: com.quantfolio.alert.BackupFreshness,
     @Autowired private val alerts: AlertRepository,
     @Autowired private val users: UserRepository,
     @Autowired private val strategies: StrategyRepository,
     @Autowired private val orders: OrderRepository,
     @Autowired private val redis: StringRedisTemplate,
 ) {
-    @MockitoBean lateinit var universe: UniverseBuilder
-    @MockitoBean lateinit var loader: OhlcvLoader
-    @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean lateinit var official: OfficialIngest
+    @MockitoBean lateinit var dividendIngest: DividendIngest
     @MockitoBean lateinit var kisMaster: KisStockMaster
-    @MockitoBean lateinit var krx: KrxIndexService
     @MockitoBean lateinit var fills: FillQualityReport
     @MockitoBean lateinit var news: NewsIngestor
+    @MockitoSpyBean lateinit var alertPublisher: AlertPublisher
 
     private fun <T> anyK(c: Class<T>): T = any(c) ?: when (c) { LocalDate::class.java -> LocalDate.MIN as T; else -> throw IllegalStateException() }
 
@@ -77,21 +80,28 @@ class WorkerJobsTest(
     }
 
     @Test
-    fun ohlcvIngestAlertsAboveTenPercentFailure() {
-        given(universe.build("KOSPI200")).willReturn(listOf("000010", "000020", "000030"))
-        willThrow(IllegalStateException("db down")).given(loader).ensureCoverage(eqK("000020"), anyK(LocalDate::class.java), anyK(LocalDate::class.java))
-        val r = jobs.ingestDailyOhlcv()
-        assertEquals(listOf("000020"), r["failed"])
-        assertEquals("야간 일봉 적재 실패율 1/3(33%)가 임계치를 초과했습니다: 000020", latest("ohlcv_ingest_failure_rate")!!.message)
+    fun officialDailyAlertsOnFailures() {
+        given(official.daily(anyK(LocalDate::class.java))).willReturn(IngestReport(1, 5, false, listOf("2026-01-05: 503")))
+        val r = jobs.ingestOfficialDaily()
+        assertEquals(1, r["done"])
+        assertEquals("KRX Open API 일일 적재 실패 1건: 2026-01-05: 503", latest("official_ingest_failure")!!.message)
     }
 
     @Test
-    fun snapshotStepFailureIsCountedAndAlerted() {
-        given(snapshots.marketCap(anyK(LocalDate::class.java), anyList())).willThrow(SourceAuthError("krx", "차단"))
-        val r = jobs.ingestDailySnapshots()
-        assertEquals(6, r["ok"])
-        assertEquals(1, r["failed"])
-        assertEquals("야간 스냅샷 선적재 실패율 1/7(14%)가 임계치를 초과했습니다: 시가총액", latest("snapshot_ingest_failure_rate")!!.message)
+    fun officialDailyIsQuietWithoutFailures() {
+        given(official.daily(anyK(LocalDate::class.java))).willReturn(IngestReport(1, 5, false, emptyList()))
+        jobs.ingestOfficialDaily()
+        assertEquals(null, latest("official_ingest_failure"))
+    }
+
+    @Test
+    fun dividendIngestReportsAndAlertsThenRethrowsOnFailure() {
+        given(dividendIngest.run()).willReturn(DividendIngestReport(8, 71_663, 100, 60_000, 2))
+        assertEquals(60_000, jobs.ingestDividends()["stored"])
+        assertEquals(null, latest("dividend_ingest_failure"))
+        given(dividendIngest.run()).willThrow(SourceAuthError("datagokr", "키 거부"))
+        assertThrows<SourceAuthError> { jobs.ingestDividends() }
+        assertTrue(latest("dividend_ingest_failure")!!.message.startsWith("배당 이력 적재 실패"))
     }
 
     @Test
@@ -99,8 +109,6 @@ class WorkerJobsTest(
         given(kisMaster.snapshot(null)).willThrow(IllegalStateException("zip 실패"))
         assertThrows<IllegalStateException> { jobs.snapshotKisStockMaster() }
         assertEquals("KIS 종목마스터 적재 실패: zip 실패", latest("kis_master_outage")!!.message)
-        given(krx.snapshotSectorMap(null, false)).willReturn(2400)
-        assertEquals(2400, jobs.snapshotSectorMap()["snapshot_symbols"])
     }
 
     @Test
@@ -161,7 +169,7 @@ class WorkerJobsTest(
         assertEquals("-- dump", GZIPInputStream(Files.newInputStream(path)).use { String(it.readAllBytes()) })
         assertEquals(listOf("quant_20000101_000000.sql.gz"), r["removed"])
         assertTrue(redis.opsForValue().get(RedisKeys.BACKUP_LAST_SUCCESS)!!.contains("+09:00"))
-        assertEquals(true, backup.checkFreshness()["ok"])
+        assertEquals(true, freshness.check()["ok"])
 
         backup.dumper = Dumper { _, _ -> throw IllegalStateException("pg_dump 종료코드 1: denied") }
         val failed = backup.backup()
@@ -170,7 +178,7 @@ class WorkerJobsTest(
         assertTrue(Files.list(dir).use { s -> s.noneMatch { it.toString().endsWith(".tmp") } })
 
         redis.delete(RedisKeys.BACKUP_LAST_SUCCESS)
-        assertEquals(false, backup.checkFreshness()["ok"])
+        assertEquals(false, freshness.check()["ok"])
         assertEquals("DB 백업이 최신이 아닙니다: 백업 성공 기록이 없습니다(worker/beat 미기동 가능성)", latest("db_backup_stale")!!.message)
     }
 
@@ -179,4 +187,31 @@ class WorkerJobsTest(
         val c = backup.conn()
         assertTrue(c.host.isNotEmpty() && c.port.toInt() > 0 && c.dbname.isNotEmpty())
     }
+
+    @Test
+    fun dartBackfillPassesBudgetAndAlertsOnFailures() {
+        given(official.dartBackfill(eq(2015), eq(100), pause())).willReturn(IngestReport(3, 100, true, listOf("000001 2024 11011: 한도")))
+        val r = jobs.dartBackfill(2015, 100)
+        assertEquals(3, r["done"])
+        assertEquals(true, r["stoppedByBudget"])
+        assertEquals("OpenDART 재무 백필 실패 1건: 000001 2024 11011: 한도", latest("dart_backfill_failure")!!.message)
+    }
+
+    @Test
+    fun dartBackfillIsSkippedWhileAnotherRunHoldsTheLock() {
+        redis.opsForValue().set(RedisKeys.DART_BACKFILL_LOCK, "other")
+        try {
+            val r = jobs.dartBackfill(2015, 100)
+            assertEquals(true, r["busy"])
+            org.mockito.Mockito.verify(official, org.mockito.Mockito.never()).dartBackfill(anyInt(), anyInt(), pause())
+        } finally {
+            redis.delete(RedisKeys.DART_BACKFILL_LOCK)
+        }
+        given(official.dartBackfill(eq(2015), eq(100), pause())).willReturn(IngestReport(0, 0, false, emptyList()))
+        assertEquals(0, jobs.dartBackfill(2015, 100)["done"])
+        assertFalse(redis.hasKey(RedisKeys.DART_BACKFILL_LOCK)) // 끝나면 해제
+    }
+
+    /** Mockito eq 는 Kotlin non-null 인자에 null 을 돌려준다 — 매처를 등록하고 실제 값을 넘긴다. */
+    private fun pause() = eq(OfficialIngest.DART_PAUSE) ?: OfficialIngest.DART_PAUSE
 }

@@ -2,6 +2,7 @@ package com.quantfolio.market.kis
 
 import com.quantfolio.domain.TestApp
 import com.quantfolio.domain.market.KisStockMasterSnapshotRepository
+import com.quantfolio.domain.market.SectorMapSnapshotRepository
 import com.quantfolio.market.source.Cooldowns
 import com.quantfolio.market.source.HttpBytes
 import com.quantfolio.market.source.SourceSchemaError
@@ -28,11 +29,12 @@ import kotlin.test.assertNull
 @Import(ContainersConfig::class)
 class KisStockMasterTest(
     @Autowired private val repo: KisStockMasterSnapshotRepository,
+    @Autowired private val sectors: SectorMapSnapshotRepository,
     @Autowired private val tx: org.springframework.transaction.support.TransactionTemplate,
 ) {
     private val clock = Clock.fixed(Instant.parse("2026-10-19T01:00:00Z"), ZoneOffset.UTC)
     private val http = FakeExternalHttp()
-    private val master = KisStockMaster(http, Cooldowns(clock), repo, clock, tx)
+    private val master = KisStockMaster(http, Cooldowns(clock), repo, sectors, clock, tx)
     private val cp949 = Charset.forName("MS949")
 
     /** 원본 고정폭 규격으로 한 줄을 만든다. values 에 없는 필드는 공백. */
@@ -92,6 +94,27 @@ class KisStockMasterTest(
         val day = LocalDate.of(2001, 2, 2)
         assertEquals(1, master.snapshot(day))
         assertEquals(listOf("800001"), repo.findAll().filter { it.tradeDate == day }.map { it.symbol })
+    }
+
+    @Test
+    fun snapshotFillsSectorMapFromMiddleIndustryCode() {
+        val day = LocalDate.of(2001, 5, 1)
+        serve("KOSPI", zip(line("KOSPI", "850001", "KR0", "a", mapOf("지수업종중분류" to "0013")), line("KOSPI", "850002", "KR0", "b", mapOf("지수업종중분류" to "0000")), line("KOSPI", "850003", "KR0", "c")))
+        serve("KOSDAQ", zip(line("KOSDAQ", "860001", "KR1", "d", mapOf("지수 업종 중분류 코드" to "1015")), entry = "kosdaq_code.mst"))
+        master.snapshot(day)
+        master.snapshot(day) // 재적재는 교체
+        val rows = sectors.findBySnapshotDate(day).associate { it.symbol to it.sector }
+        assertEquals(mapOf("850001" to "KOSPI:0013", "860001" to "KOSDAQ:1015"), rows) // 빈 값·0000 은 업종 없음
+        assertEquals(2, sectors.countBySnapshotDate(day))
+    }
+
+    @Test
+    fun partialMarketSnapshotDoesNotWriteSectorMap() {
+        val day = LocalDate.of(2001, 5, 2)
+        serve("KOSPI", zip(line("KOSPI", "850011", "KR0", "a", mapOf("지수업종중분류" to "0013"))))
+        http.on({ it.url.endsWith("kosdaq_code.mst.zip") }) { HttpBytes(503, ByteArray(0)) }
+        master.snapshot(day)
+        assertEquals(0, sectors.countBySnapshotDate(day)) // 한 시장만으론 PIT 업종 맵이 반쪽이 된다
     }
 
     @Test

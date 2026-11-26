@@ -26,8 +26,8 @@ fun pyIsoformat(t: ZonedDateTime): String {
 
 /**
  * 엔진·배치 이상 알림(원본 `engine/alerts.publish_alert`): DB 적재(알림함) + 사용자 이벤트 채널(WS 토스트). 외부 푸시 채널은 없다(`docs/migration-notes.md`).
- * 무인 운영의 "조용한 실패"를 사람에게 넘기는 유일한 통로다. DB 적재 실패만 삼키고(로그) 발행으로 넘어가며,
- * Redis 발행 실패는 감싸지 않아 호출자로 전파된다(원본과 동일, `docs/migration-notes.md` 결함 #18).
+ * 무인 운영의 "조용한 실패"를 사람에게 넘기는 유일한 통로다. DB 적재 실패도 Redis 발행 실패도 삼키고(로그) 호출자로 전파하지 않는다 —
+ * 원본은 Redis 발행 실패를 전파해 주문 접수·정합을 중단시킬 수 있었다(`docs/migration-notes.md` 결함 #18, 2026-11-26 수정).
  * dedupWindowHours 를 주면 같은 (사용자, 전략, code) 의 미확인 알림이 창 안에 있을 때 DB 적재를 생략한다(WS 는 항상).
  */
 @Component
@@ -80,10 +80,17 @@ class AlertPublisher(
         publishEvent(payload)
     }
 
-    /** 사용자 채널(`engine:events:{uid}`) + 하위호환 공용 채널로 발행(원본 `fills.publish_event`, json.dumps 문자열 그대로). */
+    /**
+     * 사용자 채널(`engine:events:{uid}`) + 하위호환 공용 채널로 발행(원본 `fills.publish_event`, json.dumps 문자열 그대로).
+     * WS 토스트는 부가 통로라 실패는 로그만 — 주문 접수 직후(`OrderExecutor`)·체결 기록(`Fills`)에서도 부르므로 전파하면 그 작업이 끊긴다.
+     */
     fun publishEvent(payload: Map<String, Any?>) {
         val data = pyJsonDumps(payload)
-        (payload["user_id"] as? Number)?.let { redis.convertAndSend(RedisKeys.engineEvents(it.toInt()), data) }
-        redis.convertAndSend(RedisKeys.ENGINE_EVENTS, data)
+        try {
+            (payload["user_id"] as? Number)?.let { redis.convertAndSend(RedisKeys.engineEvents(it.toInt()), data) }
+            redis.convertAndSend(RedisKeys.ENGINE_EVENTS, data)
+        } catch (e: Exception) {
+            log.warn("이벤트 발행 실패(type={}): {}", payload["type"], e.message)
+        }
     }
 }

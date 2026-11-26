@@ -95,6 +95,19 @@ object DartMetrics {
         )
     }
 
+    /**
+     * 지배주주 (당기순이익, 자본). 연결(CFS)은 지배기업 소유주 귀속 계정만 쓴다 — 없으면 null(총계로 대체하지 않는다).
+     * 별도(OFS)는 비지배지분이 없으므로 총계가 곧 지배주주 몫이다.
+     */
+    fun controllingNetIncomeEquity(accounts: List<Map<String, Any?>>, separate: Boolean): Pair<Double?, Double?> {
+        if (separate) return deriveMetrics(accounts).let { it["net_income"] to it["equity"] }
+        val exclude = listOf("비지배")
+        val netIncome = pick(accounts, "IS", accountId = "ifrs-full_ProfitLossAttributableToOwnersOfParent", nameContains = "지배기업", nameExclude = exclude)
+            ?: pick(accounts, "CIS", accountId = "ifrs-full_ProfitLossAttributableToOwnersOfParent", nameContains = "지배기업", nameExclude = exclude)
+        val equity = pick(accounts, "BS", accountId = "ifrs-full_EquityAttributableToOwnersOfParent", nameContains = "지배기업", nameExclude = exclude)
+        return netIncome to equity
+    }
+
     /** Piotroski F-Score(0~8, 증자 항목 제외). 계산 가능한 항목이 5개 미만이면 null. */
     fun piotroskiFScore(cur: Map<String, Double?>, prev: Map<String, Double?>): Int? {
         var score = 0

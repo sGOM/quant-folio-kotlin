@@ -4,6 +4,8 @@ import com.quantfolio.backtest.PriceData
 import com.quantfolio.backtest.Signals
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
+import com.quantfolio.domain.alert.AlertSeverity
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.store.Bar
 import com.quantfolio.quant.Series
 import com.quantfolio.quant.pyFixed
@@ -27,22 +29,52 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
 
     private var bars: List<Bar> = emptyList()
     private var ohlc = false
+    private var seeded = false
+    private var gapAlerted = false
     private lateinit var symbol: String
 
     override fun onLoad() {
         symbol = cfg["symbol"].toString()
         ohlc = Signals.requiresOhlc(cfg)
-        seed()
     }
 
     override fun logStart() = log.info("전략 {} 실행 시작 ({})", strategyId, symbol)
 
-    /** 지표용 과거 일봉 시드 — price_ticks 가 모자라면 외부에서 적재. */
+    /**
+     * 지표용 과거 일봉 시드(로컬만). 거래일 누락이면 [MarketDataNotLoaded] - 틱마다 재시도해 늦게 들어온 데이터를 집는다.
+     * 커버리지 창은 필요 봉 수의 3배 달력일(리밸런싱 시드와 같은 기준) - 로드 창(8배)보다 좁혀 불필요하게 깊은 이력을 요구하지 않는다.
+     */
     private fun seed() {
         val needBars = Signals.minPeriods(cfg)
         val end = ctx.clock.instant()
         val start = end.minus(Duration.ofDays(needBars * 4L * 2))
+        ctx.market.coverage.require(symbol, end.minus(Duration.ofDays(needBars * 3L)).atZone(ZoneOffset.UTC).toLocalDate(), ctx.common.lastBusinessDay())
         bars = barsWithBackfill(symbol, start, end, needBars + 1, "시드")
+        seeded = true
+    }
+
+    /** 시드 시도. 못 했으면 false - 이력 없이도 리스크 손절·익절은 현재가·평단만으로 계속 동작한다. */
+    private fun trySeed(): Boolean {
+        if (seeded) return true
+        try {
+            seed()
+            gapAlerted = false
+        } catch (e: MarketDataNotLoaded) {
+            if (awaitingPreviousDay(e)) {
+                log.info("전략 {} 직전 거래일 데이터 적재 대기 중(dataReadyBy 전) - 신호 매매 없이 넘김, 경보 없음: {}", strategyId, e.message)
+            } else {
+                alertGap(e)
+            }
+        }
+        return seeded
+    }
+
+    /** 시장데이터 미적재 critical - 에피소드당 한 번, 시드가 성공하면 초기화. */
+    private fun alertGap(e: MarketDataNotLoaded) {
+        log.error("전략 {} 시장데이터 미적재 - 신호 매매 중단(리스크 손절·익절은 유지): {}", strategyId, e.message)
+        if (gapAlerted) return
+        gapAlerted = true
+        ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "일봉 이력이 적재되지 않아 이 전략의 신호 매매를 중단합니다(보유 종목의 손절·익절은 계속 동작): ${e.message}. 데이터 적재 후 다음 틱에서 재시도합니다.", "market_data_not_loaded")
     }
 
     private fun currentPrice(): BigDecimal? {
@@ -66,9 +98,9 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
         return q.price
     }
 
-    /** 시드 + 오늘 봉(현재가 반영). 오늘은 원본 `date.today()` — 컨테이너 UTC 날짜(보존). */
+    /** 시드 + 오늘(KST) 봉(현재가 반영). 원본 `date.today()` 는 UTC 였지만 장중엔 날짜가 같아 매매 영향은 없었다(migration-notes #6). */
     private fun dataWithToday(px: Double): PriceData {
-        val today = MarketClock.todayUtcLegacy(ctx.clock)
+        val today = MarketClock.todayKst(ctx.clock)
         val rows = bars.associateBy { it.date }.toSortedMap()
         val prev = rows[today]
         rows[today] = if (ohlc && prev != null) {
@@ -83,15 +115,16 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
 
     override fun tickOnce() {
         if (!ctx.calendar.isMarketOpen(MarketClock.nowKst(ctx.clock))) return
+        val ready = trySeed()
         val price = currentPrice() ?: return
-        val data = dataWithToday(price.toDouble())
-        val sig = Signals.latestSignal(data, cfg)
-        val barTs = MarketClock.todayUtcLegacy(ctx.clock).toString()
+        val data = if (ready) dataWithToday(price.toDouble()) else null
+        val sig = data?.let { Signals.latestSignal(it, cfg) }
+        val barTs = MarketClock.todayKst(ctx.clock).toString()
         val (acquired, _) = withPositionLock(symbol) { decide(price, data, sig, barTs) }
         if (!acquired) log.info("포지션 락 경합 — 이번 tick 건너뜀 ({})", symbol)
     }
 
-    private fun decide(price: BigDecimal, data: PriceData, sig: String?, barTs: String) {
+    private fun decide(price: BigDecimal, data: PriceData?, sig: String?, barTs: String) {
         val held = holdingQty(symbol)
         if (held.signum() > 0 && ctx.risk.checkStopLoss(userId!!, strategyId, symbol, price, accountKey)) {
             clearTrail()
@@ -115,7 +148,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
             }
             val decision = ctx.risk.evaluateBuy(userId!!, strategyId, symbol, price, BigDecimal(cfg["cash"]?.toString() ?: "10000000"), accountKey)
             if (decision.approved) {
-                val reason = signalReason(data, "buy") +
+                val reason = signalReason(data!!, "buy") +
                     " · 진입 ${grouped(decision.qty)}주 @ ${won(price.toDouble())}(약 ${won(decision.qty * price.toDouble())}원)"
                 place(symbol, "buy", decision.qty, price, barTs, reason, heldQty = held)
             } else {
@@ -123,7 +156,7 @@ class StrategyRunner(strategyId: Int, ctx: RunnerContext) : BaseRunner(strategyI
             }
         } else if (sig == "sell" && held.signum() > 0) {
             clearTrail()
-            doSell(price, barTs, signalReason(data, "sell"), held)
+            doSell(price, barTs, signalReason(data!!, "sell"), held)
         }
     }
 

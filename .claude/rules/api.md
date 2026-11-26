@@ -15,15 +15,16 @@ paths:
 
 ## 응답 계약 (프론트가 무수정으로 붙기 위한 규칙)
 
-| 항목 | 규칙 | 구현 위치 |
-|---|---|---|
-| 필드명 | snake_case (DTO 는 camelCase 로 쓰면 자동 변환) | `JsonConfig` |
-| 결측 | 항상 `null` 직렬화. 0 sentinel 금지 | Jackson 기본 |
-| NaN/±Inf | `null` | `JsonConfig` |
-| 오류 | `{"detail": "한국어 메시지"}` — `throw ApiException(status, detail)` | `ApiErrorHandler` |
-| 검증 오류 | 422 `{"detail":[{"type","loc":["body"\|"query", 필드],"msg"}]}` | `ApiErrorHandler` |
-| 404·405 | `{"detail":"Not Found"}` 등 reason phrase | `ApiErrorHandler` |
-| 미처리 예외 | 500 `{"detail":"Internal Server Error"}`, 상세는 로그에만(`DEBUG_ERRORS` 는 prod 에서 무시) | `ApiErrorHandler` |
+| 항목 | 규칙 |
+|---|---|
+| 필드명 | snake_case (DTO 는 camelCase 로 쓰면 자동 변환) |
+| 결측 | 항상 `null` 직렬화. 0 sentinel 금지 |
+| NaN/±Inf | `null` |
+| 오류 | `{"detail": "한국어 메시지"}` — `throw ApiException(status, detail)` |
+| 검증 오류 | 422 `{"detail":[{"type","loc":["body"\|"query", 필드],"msg"}]}` |
+| 시장데이터 미적재 | 409 `{"detail","kind","key","missing"}` — `MarketDataNotLoaded`. 외부 조회 실패(`DataSourceError`, 503/502/500)와 다른 사건 |
+| 404·405 | `{"detail":"Not Found"}` 등 reason phrase |
+| 미처리 예외 | 500 `{"detail":"Internal Server Error"}`, 상세는 로그에만(`DEBUG_ERRORS` 는 prod 에서 무시) |
 
 결측을 정렬할 땐 맨 뒤로, 필터링할 땐 탈락시킨다 — 결측은 기준 충족을 증명할 수 없다.
 
@@ -47,8 +48,9 @@ paths:
 - **클라이언트 IP 는 `ClientIp.of()` 하나로만.** `X-Forwarded-For` 의 **마지막** 항목만 신뢰한다.
   앞 항목을 쓰면 헤더를 끼워 넣어 로그인 스로틀을 우회할 수 있다(원본 §58 실제 결함).
 - 사용자 응답(`UserOut`)에 자격증명 원문·암호문을 넣지 않는다. 보유 여부만 boolean 으로.
-- 메시지 문자열은 원본과 동일하게 유지한다(프론트·사용자가 보는 문구). 예외: 로그인·가입 문구는 단일 소유자 전환으로 바뀌었다.
+- 메시지 문자열은 원본과 동일하게 유지한다(프론트·사용자가 보는 문구). 예외: 로그인 문구는 단일 소유자 전환으로 바뀌었다.
 - **숫자가 낀 필드명은 snake_case 자동 변환이 틀린다**(`mom1m`→`mom1m`, 원본은 `mom_1m`). `@JsonProperty("mom_1m")` 로 명시한다.
 - 세션을 쓰는 web 테스트는 그 사용자를 소유자로 지정해야 한다(`@MockitoSpyBean props` + `willReturn(id).given(props).tradingOwnerUserId`).
   스파이 조합이 다른 테스트 클래스마다 Spring 컨텍스트가 늘어 Postgres 접속 수가 바닥난다(`too many clients`) — 기존 조합에 맞춘다.
 - MockMvc `jsonPath` 가 **배열을 돌려주는 식**(`$.items[*].x`, `$.a.list`)은 null 로 평가돼 실패한다. 원소 단위(`[0]`)로 단언하거나 본문을 파싱해 비교한다.
+- 시장데이터 계산을 감싸는 `catch (e: Exception)` 는 그 앞에서 `MarketDataNotLoaded` 를 다시 던진다 — 안 그러면 미적재 409 가 "계산 중 오류" 503 으로 뭉개진다(2단계 `MetricsController.cached` 실제 결함). `CodeRulesTest` 가 검사하고, 웹 테스트로 409 를 단언한다.

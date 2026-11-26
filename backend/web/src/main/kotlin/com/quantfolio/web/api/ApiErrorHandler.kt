@@ -3,6 +3,7 @@ package com.quantfolio.web.api
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.backtest.BacktestFailed
 import com.quantfolio.backtest.BacktestInputError
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.source.DataSourceError
 import com.quantfolio.market.source.SourceRequestError
 import com.quantfolio.market.source.SourceSchemaError
@@ -49,6 +50,17 @@ class ApiErrorHandler(private val props: QuantfolioProperties) {
             mapOf("detail" to detail, "source" to e.source, "cause" to e.causeName, "retryable" to e.retryable),
         )
     }
+
+    /** 로컬 DB 미적재 — 원격으로 대체하지 않았다. 사람이 적재(백필)해야 풀리므로 409 와 빠진 구간을 알린다. */
+    @ExceptionHandler(MarketDataNotLoaded::class)
+    fun notLoaded(e: MarketDataNotLoaded): ResponseEntity<Map<String, Any>> = ResponseEntity.status(HttpStatus.CONFLICT).body(
+        mapOf(
+            "detail" to "시장데이터가 적재되지 않았습니다.",
+            "kind" to e.kind,
+            "key" to e.key,
+            "missing" to e.missing.map { mapOf("start" to it.first.toString(), "end" to it.second.toString()) },
+        ),
+    )
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun invalidBody(e: MethodArgumentNotValidException) = unprocessable(

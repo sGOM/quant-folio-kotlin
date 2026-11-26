@@ -47,10 +47,33 @@ class DartFinancialStore(private val jdbc: NamedParameterJdbcTemplate, private v
         mapOf("corp" to corpCode, "year" to bsnsYear, "reprt" to reprtCode, "fs" to fsDiv),
     ) { rs, _ ->
         val confirmed = rs.getObject(2, LocalDate::class.java)
-        // 원본 동작 보존: date.today() = 컨테이너(UTC) 날짜 기준(docs/migration-notes.md).
-        val final = confirmed != null && !MarketClock.todayUtcLegacy(clock).isBefore(confirmed)
+        // KST 날짜 — 원본 date.today() 는 컨테이너 UTC 라 하루 늦게 확정했다(migration-notes #1).
+        val final = confirmed != null && !MarketClock.todayKst(clock).isBefore(confirmed)
         json.readValue<List<Map<String, Any?>>>(rs.getString(1)) to final
     }.firstOrNull()
+
+    /** 저장된 보고서의 접수일. 행이 없거나 접수번호를 해석하지 못했으면 null. */
+    fun receiptDate(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String): LocalDate? = jdbc.query(
+        "SELECT rcept_dt FROM dart_financials WHERE corp_code = :corp AND bsns_year = :year AND reprt_code = :reprt AND fs_div = :fs",
+        mapOf("corp" to corpCode, "year" to bsnsYear, "reprt" to reprtCode, "fs" to fsDiv),
+    ) { rs, _ -> rs.getObject(1, LocalDate::class.java) }.firstOrNull()
+
+    /** 종목코드(6자리) → corp_code 매핑 upsert. 원격 corpCode.xml 을 받을 때마다 호출된다. */
+    fun writeCorpCodes(map: Map<String, String>) {
+        if (map.isEmpty()) return
+        jdbc.batchUpdate(
+            """
+            INSERT INTO dart_corp_codes (symbol, corp_code, updated_at) VALUES (:symbol, :corp, now())
+            ON CONFLICT (symbol) DO UPDATE SET corp_code = EXCLUDED.corp_code, updated_at = now()
+            """,
+            map.map { (symbol, corp) -> mapOf("symbol" to symbol, "corp" to corp) }.toTypedArray(),
+        )
+    }
+
+    fun readCorpCodes(): Map<String, String> =
+        jdbc.query("SELECT symbol, corp_code FROM dart_corp_codes ORDER BY symbol", emptyMap<String, Any>()) { rs, _ ->
+            rs.getString(1) to rs.getString(2)
+        }.toMap()
 
     fun delete(corpCode: String, bsnsYear: Int, reprtCode: String, fsDiv: String) {
         jdbc.update(

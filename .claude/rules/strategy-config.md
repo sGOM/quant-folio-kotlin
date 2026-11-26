@@ -24,9 +24,10 @@ paths:
 
 - `drift_band_pct` 는 목표비중(동일가중 1/n, 점수가중 2/(n+1)) 미만 — 아니면 매매가 영원히 안 일어난다.
 - `risk_layer.max_position_pct > drift_band_pct`, `factor_weights` 합 = 1(±1e-6).
-- PIT 소스(`universe_rule.source ≠ fixed`)면 universe 가 비어도 된다.
+- PIT 소스(`universe_rule.source ≠ fixed`)면 universe 가 비어도 된다. 소스는 `fixed`·`KOSPI_MCAP` 뿐이고 `pool_size`(1~300, 없으면 pick)가 시총 상위 후보 수다.
 - 커스텀 선택 규칙은 종가 기반만(open/high/low/volume 피연산자 금지), weighting 은 equal/inverse_vol.
 
 ## 함정
 
 - Python 실수 포맷: 메시지 안 `{x:.3f}` 는 `pyFixed`(half-even), 실수 repr 은 `pyFloat`. Java `%.3f` 는 half-up 이라 0.0625 에서 갈린다.
+- 스키마는 `pead` 가중치를 받지만 `pead` > 0 은 백테스트 422·엔진 critical 정지다(공식 경로에 공시 달력이 없다). 원본의 flow 팩터·지수 소스(KOSPI200 등)는 없다 — 공식 경로에 수급·구성종목이 없다(저장된 config 는 V11·V12 가 정리).

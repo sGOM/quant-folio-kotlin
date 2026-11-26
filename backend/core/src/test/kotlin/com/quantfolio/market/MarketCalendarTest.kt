@@ -1,84 +1,119 @@
 package com.quantfolio.market
 
 import com.quantfolio.common.MarketClock
-import com.quantfolio.common.QuantfolioProperties
-import com.quantfolio.market.krx.HttpResult
-import com.quantfolio.market.krx.KrxMdc
-import com.quantfolio.market.krx.KrxSession
-import com.quantfolio.market.krx.KrxStockApi
-import com.quantfolio.market.source.Cooldowns
-import com.quantfolio.test.FakeKrxTransport
+import com.quantfolio.market.official.LocalTradingDays
+import com.quantfolio.test.InMemoryFetchLedger
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MarketCalendarTest {
-    private val clock = Clock.systemUTC()
-    private val transport = FakeKrxTransport()
-    private val cooldowns = Cooldowns(clock)
-    private val api = KrxStockApi(KrxMdc(transport, KrxSession(transport, QuantfolioProperties(), cooldowns, clock), cooldowns) {})
-    private val calendar = MarketCalendar(api)
+    // 2026-10-19 10:00 KST = 오늘
+    private class MutableClock(var now: Instant) : Clock() {
+        override fun getZone() = ZoneOffset.UTC
+        override fun withZone(zone: java.time.ZoneId?) = this
+        override fun instant() = now
+    }
 
-    private fun index(vararg dates: String) = """{"output":[${dates.joinToString(",") {
-        """{"TRD_DD":"$it","OPNPRC_IDX":"1","HGPRC_IDX":"1","LWPRC_IDX":"1","CLSPRC_IDX":"1","ACC_TRDVOL":"1","ACC_TRDVAL":"1","MKTCAP":"1"}"""
-    }}]}"""
+    private val clock = MutableClock(Instant.parse("2026-10-19T01:00:00Z"))
+    private val kisCalls = mutableListOf<LocalDate>()
+    private var kis: (LocalDate) -> Map<LocalDate, Boolean> = { emptyMap() }
+    private val ledger = InMemoryFetchLedger()
+    private val calendar by lazy {
+        MarketCalendar(LocalTradingDays(ledger), { from -> kisCalls += from; kis(from) }, clock)
+    }
 
-    /** 코스피 지수 응답: endDd 가 주어진 날이면 prevLast 를, strtDd 가 다음날이면 after 를 돌려준다. */
-    private fun kospi(day: String, prevLast: String, after: List<String>) {
-        transport.on({ it.form["endDd"] == day }) { HttpResult(200, index(prevLast)) }
-        val next = LocalDate.parse(day, java.time.format.DateTimeFormatter.BASIC_ISO_DATE).plusDays(1)
-        transport.on({ it.form["strtDd"] == next.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) }) {
-            HttpResult(200, index(*after.toTypedArray()))
-        }
+    @BeforeEach
+    fun loadLedger() {
+        // 10-09(금)은 휴장 확정, 10-16(금)까지 적재
+        ledger.trading(listOf(5, 6, 7, 8, 12, 13, 14, 15, 16).map { LocalDate.of(2026, 10, it) })
+        ledger.holiday(listOf(LocalDate.of(2026, 10, 9)))
     }
 
     @Test
     fun weekendIsClosedWithoutRequest() {
         assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 17)))
-        assertTrue(transport.calls.isEmpty())
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 25)))
+        assertTrue(kisCalls.isEmpty())
     }
 
     @Test
-    fun publishedDayIsBusinessDay() {
-        kospi("20261016", "2026/10/16", emptyList())
+    fun `past business day from the ingest ledger`() {
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 16)))
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 9))) // 휴장 확정
+        assertTrue(kisCalls.isEmpty())
     }
 
     @Test
-    fun holidayWithLaterDataIsClosed() {
-        kospi("20261009", "2026/10/08", listOf("2026/10/12"))
-        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 9)))
+    fun `today holiday from KIS`() {
+        kis = { mapOf(LocalDate.of(2026, 10, 19) to false, LocalDate.of(2026, 10, 20) to true) }
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 20))) // 미래도 KIS
+        assertEquals(1, kisCalls.size) // 하루 캐시
     }
 
     @Test
-    fun unpublishedTodayIsAssumedOpen() {
-        kospi("20261019", "2026/10/16", emptyList())
+    fun `KIS failure for today falls back to weekday rule and logs`() {
+        kis = { error("vts 미지원") }
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
-    }
-
-    @Test
-    fun lookupFailureAssumesOpen() {
-        transport.failWith { true }
         assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 20)))
+        assertEquals(1, kisCalls.size) // 실패 직후 재호출 폭주 없음
     }
 
     @Test
-    fun resultIsCached() {
-        kospi("20261016", "2026/10/16", emptyList())
-        calendar.isBusinessDay(LocalDate.of(2026, 10, 16))
-        val n = transport.calls.size
-        calendar.isBusinessDay(LocalDate.of(2026, 10, 16))
-        assertEquals(n, transport.calls.size)
+    fun `past holiday after last loaded index day comes from KIS`() {
+        ledger.rows.clear()
+        ledger.trading(listOf(12, 13, 14).map { LocalDate.of(2026, 10, it) })
+        kis = { mapOf(LocalDate.of(2026, 10, 15) to false, LocalDate.of(2026, 10, 16) to true, LocalDate.of(2026, 10, 19) to true) }
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 15))) // 적재 범위 밖 과거 휴장일
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 16)))
+        assertEquals(listOf(LocalDate.of(2026, 10, 15)), kisCalls) // 기준일 = 원장 최대일+1, 한 번
+    }
+
+    @Test
+    fun `unloaded past day falls back to weekday rule when KIS is unavailable`() {
+        ledger.rows.clear()
+        ledger.trading(listOf(12, 13, 14).map { LocalDate.of(2026, 10, it) })
+        kis = { error("vts 미지원") }
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 15)))
+    }
+
+    @Test
+    fun `failed KIS lookup is retried after ten minutes`() {
+        kis = { error("down") }
+        assertTrue(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        clock.now = clock.now.plus(Duration.ofMinutes(9))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        assertEquals(1, kisCalls.size)
+        clock.now = clock.now.plus(Duration.ofMinutes(2))
+        kis = { mapOf(LocalDate.of(2026, 10, 19) to false) }
+        assertFalse(calendar.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        assertEquals(2, kisCalls.size)
+    }
+
+    @Test
+    fun `KIS cache is refreshed when the day changes`() {
+        kis = { from -> mapOf(from to true) }
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 19))
+        assertEquals(1, kisCalls.size)
+        clock.now = clock.now.plus(Duration.ofDays(1))
+        calendar.isBusinessDay(LocalDate.of(2026, 10, 20))
+        assertEquals(listOf(LocalDate.of(2026, 10, 19), LocalDate.of(2026, 10, 20)), kisCalls)
     }
 
     @Test
     fun marketHoursInclusive() {
-        kospi("20261016", "2026/10/16", emptyList())
-        fun at(h: Int, m: Int) = ZonedDateTime.of(2026, 10, 16, h, m, 0, 0, MarketClock.KST)
+        kis = { mapOf(LocalDate.of(2026, 10, 19) to true) }
+        fun at(h: Int, m: Int) = ZonedDateTime.of(2026, 10, 19, h, m, 0, 0, MarketClock.KST)
         assertFalse(calendar.isMarketOpen(at(8, 59)))
         assertTrue(calendar.isMarketOpen(at(9, 0)))
         assertTrue(calendar.isMarketOpen(at(15, 30)))
@@ -90,5 +125,12 @@ class MarketCalendarTest {
         val days = MarketCalendar.estimatedTradingDays(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31))
         assertEquals(365 * 5.0 / 7 - 365 * (15.0 / 365), days, 1e-9)
         assertEquals(0.0, MarketCalendar.estimatedTradingDays(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 1, 1)))
+    }
+
+    @Test
+    fun `listed KRX holiday is closed even when KIS lookup fails`() {
+        val listed = MarketCalendar(LocalTradingDays(ledger), { error("vts 미지원") }, clock, KrxHolidays("2026-10-19"))
+        assertFalse(listed.isBusinessDay(LocalDate.of(2026, 10, 19)))
+        assertTrue(listed.isBusinessDay(LocalDate.of(2026, 10, 20))) // 목록 밖·조회 실패는 평일 규칙
     }
 }

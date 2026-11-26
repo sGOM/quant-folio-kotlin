@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -31,7 +31,7 @@ jobs:
       - name: 시크릿 파일 생성
         run: |
           mkdir -p secrets
-          for n in kis_app_key kis_app_secret toss_app_key toss_app_secret krx_id krx_pw opendart_api_key; do
+          for n in kis_app_key kis_app_secret toss_app_key toss_app_secret opendart_api_key krx_openapi_key datagokr_api_key; do
             : > "secrets/$n.txt"
           done
           : > secrets/account_num

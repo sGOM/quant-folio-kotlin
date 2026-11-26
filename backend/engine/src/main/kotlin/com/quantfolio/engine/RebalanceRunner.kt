@@ -7,7 +7,8 @@ import com.quantfolio.backtest.Tracking
 import com.quantfolio.common.MarketClock
 import com.quantfolio.common.RedisKeys
 import com.quantfolio.domain.alert.AlertSeverity
-import com.quantfolio.market.source.DataSourceError
+import com.quantfolio.factor.FactorScores
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.store.closeSeries
 import com.quantfolio.metrics.MetricsCommon
 import com.quantfolio.metrics.UniverseScoreParams
@@ -26,6 +27,7 @@ import java.math.MathContext
 import java.time.Duration
 import java.time.LocalDate
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
 /**
@@ -41,8 +43,9 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
     override val pollIntervalSec = 60L
 
     private val json = JsonMapper.builder().build()
-    private var pitFallbackActive = false
     private var panicAlerted = false
+    private var regimeGapAlerted = false // 경로별 에피소드 플래그 — 각자 자기 경로가 정상 반환하면 초기화
+    private var planGapAlerted = false
     private var sectorMap: Map<String, String>? = null
 
     private val selection get() = Cfg.map(cfg, "selection")
@@ -81,7 +84,13 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         var riskOff = false
         var reentry = false
         if (regimeEnabled && marketOpen) {
-            riskOff = isRiskOff()
+            riskOff = try {
+                isRiskOff().also { regimeGapAlerted = false }
+            } catch (e: MarketDataNotLoaded) {
+                // 국면을 모른다 — 새 매수·리밸런싱을 멈추고 알린다. 청산도 하지 않는다(MDD 킬스위치는 위에서 이미 평가됨).
+                alertDataGap(e, "국면(레짐) 판정에 필요한 지수 데이터가 없어 이번 점검의 매매를 모두 중단합니다(청산·신규 매수 없음, MDD 킬스위치는 계속 동작)", regime = true)
+                return
+            }
             val prev = getRegime()
             setRegime(riskOff)
             if (!riskOff && prev == true && !hasHoldings()) reentry = true
@@ -94,7 +103,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
         val trigger = fireTrigger(now, marketOpen, mddKill != null, reentry) ?: return
         log.info("리밸런싱 전략 {} {} ({})", strategyId, trigger.kind, now)
-        rebalanceOnce(now, riskOff = false, barTag = trigger.tag)
+        if (!rebalanceOnce(now, riskOff = false, barTag = trigger.tag)) return // 시장데이터 미적재 — 주기를 소비하지 않고 다음 점검에서 재시도
         if (tickAbandoned) {
             log.warn("리밸런싱 전략 {} 틱 중단됨 — 이번 주기를 실행됨으로 기록하지 않고 다음 점검에서 재시도", strategyId)
             return
@@ -251,30 +260,33 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     // ── 계획·주문 ──
 
-    /** (후보풀, 목표비중). 위험회피면 목표 없음(전량 청산). */
-    private fun computePlan(asOf: LocalDate, riskOff: Boolean): Pair<List<String>, Map<String, Double>> {
-        val pool = resolveUniverse(asOf)
+    /** 목표비중. 위험회피(청산)는 이 계획을 거치지 않는다 — 시장데이터 없이도 보유를 정리해야 하므로. */
+    private fun computePlan(asOf: LocalDate): Map<String, Double> {
+        val pool = resolveUniverse()
         log.info("전략 {} 후보풀 확보: {}종목", strategyId, pool.size)
-        if (riskOff) return pool to emptyMap()
         val method = selection["method"]
         val weighting = Cfg.get(cfg, "weighting", "equal")
         val riskLayer = Cfg.map(cfg, "risk_layer")
         val hasRuleType = Cfg.truthy(rule["type"])
-        val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it) } ?: emptyMap()
+        val history = historyBarsNeeded(method, weighting, riskLayer)?.let { seedHistory(pool, it, asOf) } ?: emptyMap()
         val universe = if (hasRuleType) Rebalance.dynamicUniverse(Panel.fromSeries(history), pool, rule) else pool
         val planCfg = cfg + ("universe" to universe)
         var scores: Map<String, Double>? = null
         if (method == "score") {
             @Suppress("UNCHECKED_CAST")
             val fw = (selection["factor_weights"] as? Map<String, Any?>)?.mapValues { Cfg.num(it.value) }
-            scores = ctx.scores.compute(universe, asOf, scoreParams(fw))
+            val w = fw?.takeIf { it.isNotEmpty() } ?: FactorScores.DEFAULT_WEIGHTS
+            for (k in listOf("pead")) {
+                if ((w[k] ?: 0.0) > 0) throw MarketDataNotLoaded("unsupported_in_phase1", "$k 팩터(공식 경로에 입력 없음) — 가중치를 0 으로 두세요")
+            }
+            scores = ctx.market.scores.compute(universe, asOf, scoreParams(fw))
         }
         var targets = Rebalance.targetWeights(history, planCfg, scores)
         if (riskLayer.isNotEmpty() && targets.isNotEmpty()) {
             val smap = if (Cfg.truthy(riskLayer["max_sector_pct"])) sectors() else null
             targets = RiskCaps.apply(targets, Panel.fromSeries(history), riskLayer, smap)
         }
-        return pool to targets
+        return targets
     }
 
     /** 가격 히스토리가 필요하면 최소 봉 수(동적 유니버스·모멘텀·역변동성·변동성 타깃·변동성 게이트 중 최대), 필요 없으면 null. */
@@ -293,46 +305,56 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
 
     private fun scoreParams(factorWeights: Map<String, Double>?) = UniverseScoreParams(
         factorWeights, Cfg.get(selection, "neutralize", "none").toString(), Cfg.get(cfg, "financial_period", "annual").toString(),
-        Cfg.int(Cfg.get(selection, "flow_window", 90)), Cfg.get(selection, "flow_denom", "mcap").toString(),
         Cfg.int(Cfg.get(selection, "resid_mom_reg_window", 36)), Cfg.int(Cfg.get(selection, "resid_mom_window", 11)),
-        Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)),
+        Cfg.int(Cfg.get(selection, "resid_mom_skip", 1)), Cfg.int(Cfg.get(selection, "pead_lookback_q", 8)), requireCoverage = true,
     )
 
     private fun sectors(): Map<String, String> {
         sectorMap?.takeIf { it.isNotEmpty() }?.let { return it }
-        val smap = try {
-            ctx.krx.sectorMap()
-        } catch (e: DataSourceError) {
-            log.error("전략 {} 섹터 한도용 업종 매핑 조회 실패 — 섹터 캡 미적용: {}", strategyId, e.message)
-            return emptyMap() // 실패는 캐시하지 않는다
-        }
+        val smap = ctx.market.sectorMap(MarketClock.todayKst(ctx.clock)) // 로컬 스냅샷이 없으면 MarketDataNotLoaded — 캡을 조용히 빼지 않고 리밸런싱을 멈춘다
         if (smap.isNotEmpty()) sectorMap = smap else log.warn("전략 {} 섹터 한도 설정됨이나 업종 매핑 미확보 — 섹터 캡 미적용.", strategyId)
         return smap
     }
 
-    fun rebalanceOnce(now: ZonedDateTime, riskOff: Boolean, barTag: String = "rebal", liqKind: String = "regime") {
+    /**
+     * 계획 계산 중 시장데이터 미적재([MarketDataNotLoaded]: 유니버스·업종·시총·일봉)면 주문 없이 건너뛰고 critical 경보(fail-closed).
+     * MCAP 유니버스는 config.universe 로 대체하지 않는다. 건너뛰었으면 false.
+     * [riskOff](청산)는 계획·시장데이터 없이 이 전략·계좌의 보유 전부를 판다 — 후보풀 밖 보유도 포함.
+     * 정기 리밸런싱도 보유 전부를 본다 — 후보풀에서 밀려난 종목은 목표비중 0 으로 청산(원본은 풀 안 보유만 봐서 영구 잔류, migration-notes #16①).
+     */
+    fun rebalanceOnce(now: ZonedDateTime, riskOff: Boolean, barTag: String = "rebal", liqKind: String = "regime"): Boolean {
         val asOf = ctx.common.lastBusinessDay()
-        val (pool, targets) = computePlan(asOf, riskOff)
+        val targets = if (riskOff) {
+            emptyMap()
+        } else {
+            try {
+                computePlan(asOf).also { planGapAlerted = false } // 해소 — 다음 결손은 새 에피소드
+            } catch (e: MarketDataNotLoaded) {
+                alertDataGap(e, "시장데이터가 적재되지 않아 이번 리밸런싱을 건너뜁니다(주문 없음, 기존 보유는 그대로)", regime = false)
+                return false
+            }
+        }
         if (riskOff) {
             log.info("리밸런싱 전략 {} 레짐 위험회피 — 보유 청산·신규 매수 중단", strategyId)
         } else if (targets.isEmpty()) {
             log.warn("리밸런싱 전략 {} 선정 종목 없음(데이터 부족) — 건너뜀", strategyId)
             ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "리밸런싱 발화 시점에 선정 종목이 하나도 산정되지 않아 이번 리밸런싱을 건너뜁니다(팩터/가격 데이터 조회 장애 가능). 다음 주기 재시도.", "factor_outage")
-            return
+            return true
         }
-        val positions = holdings(pool)
+        val positions = heldPositions().associate { it.first to it.second }
         if (targets.isEmpty() && positions.isEmpty()) {
             log.info("리밸런싱 전략 {} 레짐 위험회피 & 보유 없음 — 매매 없음", strategyId)
-            return
+            return true
         }
         val prices = quotes(targets.keys + positions.keys)
         val drift = if (riskOff) 0.0 else Cfg.num(Cfg.get(cfg, "drift_band_pct", 0.05))
         val orders = Rebalance.orders(targets, positions.mapValues { it.value.toInt() }, prices.mapValues { it.value.toDouble() }, Cfg.num(Cfg.get(cfg, "capital", 10_000_000)), drift)
         if (orders.isEmpty()) {
             log.info("리밸런싱 전략 {} 드리프트 밴드 내 — 매매 없음", strategyId)
-            return
+            return true
         }
         executeOrders(orders, prices, "${now.toLocalDate()}:$barTag", targets, riskOff, liqKind, positions)
+        return true
     }
 
     private fun sellReason(sym: String, targets: Map<String, Double>, riskOff: Boolean, qty: Int, liqKind: String): String {
@@ -356,7 +378,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val reB = maxOf(0.0, Cfg.num(Cfg.or(rf, "reentry_buffer_pct", 0.0)))
         val ticker = mapOf("KOSPI" to "1001", "KOSDAQ" to "2001")[Cfg.get(rf, "index", "KOSPI")] ?: "1001"
         val asOf = ctx.common.lastBusinessDay()
-        val bars = ctx.snapshots.indexOhlcv(MetricsCommon.approxStart(asOf, ma + 10), asOf, ticker)
+        val bars = ctx.market.snapshots.indexOhlcv(MetricsCommon.approxStart(asOf, ma + 10), asOf, ticker)
         if (bars.isNullOrEmpty()) {
             log.warn("리밸런싱 전략 {} 레짐 기준지수 조회 실패 — 오버레이 미적용(투자 유지)", strategyId)
             return false
@@ -377,36 +399,30 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         return off
     }
 
-    /** universe_rule.source 가 지수면 그 시점 구성종목(PIT). 조회 실패·빈 결과면 config.universe 폴백 + 1회 경보(재발은 해소 후). */
-    private fun resolveUniverse(asOf: LocalDate): List<String> {
-        val source = Cfg.get(rule, "source", "fixed").toString()
-        @Suppress("UNCHECKED_CAST")
-        val fixed = (cfg["universe"] as? List<String>).orEmpty()
-        if (source == "fixed") return fixed
-        var members = try {
-            ctx.krx.indexMembers(asOf, source)
-        } catch (e: Exception) {
-            log.warn("전략 {} PIT 유니버스({}) 조회 실패 — config.universe 폴백: {}", strategyId, source, e.message)
-            alertPitFallback(source, "조회 실패(${e.message})")
-            return fixed
+    /**
+     * 유니버스. KOSPI_MCAP 은 로컬 시총 상위 (pool_size ?: pick)(미적재면 [MarketDataNotLoaded] — 폴백 없음, 호출자가 정지·경보).
+     * pick 으로 좁히는 모멘텀 단계는 [computePlan] 의 `Rebalance.dynamicUniverse` 가 한다.
+     */
+    private fun resolveUniverse(): List<String> {
+        if (Cfg.get(rule, "source", "fixed").toString() == "fixed") {
+            @Suppress("UNCHECKED_CAST")
+            return (cfg["universe"] as? List<String>).orEmpty()
         }
-        if (members.isEmpty()) {
-            log.warn("전략 {} PIT 유니버스({}) 비어있음 — config.universe 폴백", strategyId, source)
-            alertPitFallback(source, "구성종목 비어있음")
-            return fixed
-        }
-        pitFallbackActive = false
-        rule["min_market_cap"]?.takeIf { Cfg.truthy(it) }?.let { min ->
-            val caps = ctx.krx.marketCaps(asOf)
-            if (caps.isNotEmpty()) members = members.filter { (caps[it] ?: 0L) >= Cfg.num(min).toLong() * 100_000_000L }
-        }
-        return members
+        // 결정일은 오늘(KST) — members 가 직전 거래일 시총을 읽는다. asOf(전 영업일)를 넘기면 하루 더 묵은 데이터로 매매한다.
+        val size = rule["pool_size"]?.let { Cfg.int(it) } ?: Cfg.int(Cfg.get(rule, "pick", 20))
+        return ctx.mcap.members(MarketClock.todayKst(ctx.clock), size)
     }
 
-    private fun alertPitFallback(source: String, cause: String) {
-        if (pitFallbackActive) return
-        pitFallbackActive = true
-        ctx.alerts.publish(userId, strategyId, AlertSeverity.warning, "PIT 유니버스($source) $cause — config.universe 고정 폴백으로 전환. 생존편향 검증 원칙상 지수 구성 이탈은 즉시 점검이 필요합니다.", "pit_fallback")
+    /** 시장데이터 미적재 critical — 에피소드당 한 번(경보를 읽어도 매 점검 다시 쌓지 않는다). 해당 경로(국면·계획)가 다시 정상 반환하면 초기화. */
+    private fun alertDataGap(e: MarketDataNotLoaded, what: String, regime: Boolean) {
+        if (awaitingPreviousDay(e)) {
+            log.info("리밸런싱 전략 {} 직전 거래일 데이터 적재 대기 중(dataReadyBy 전) — 이번 점검은 매매 없이 넘김, 경보 없음: {}", strategyId, e.message)
+            return
+        }
+        log.error("리밸런싱 전략 {} 시장데이터 미적재 — 주문 없이 중단: {}", strategyId, e.message)
+        if (if (regime) regimeGapAlerted else planGapAlerted) return
+        if (regime) regimeGapAlerted = true else planGapAlerted = true
+        ctx.alerts.publish(userId, strategyId, AlertSeverity.critical, "$what: ${e.message}. 데이터 적재 후 다음 점검에서 재시도합니다.", "market_data_not_loaded")
     }
 
     /** panic_overlay 는 백테스트에만 구현 — 실거래에서 재현할 수 없으니 매매를 중단한다(보유 유지, 킬스위치는 계속). 1회 경보. */
@@ -422,7 +438,7 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         )
     }
 
-    private fun seedHistory(universe: List<String>, minBars: Int): Map<String, Series> {
+    private fun seedHistory(universe: List<String>, minBars: Int, asOf: LocalDate): Map<String, Series> {
         var need = Cfg.int(Cfg.get(selection, "lookback", 120)) + 1
         if (selection["method"] == "custom") need = maxOf(need, Signals.minPeriods(mapOf("type" to "custom", "entry" to selection["entry"], "exit" to selection["exit"])))
         need = maxOf(need, minBars)
@@ -430,19 +446,12 @@ class RebalanceRunner(strategyId: Int, ctx: RunnerContext, override val tickTime
         val start = end.minus(Duration.ofDays(need * 3L))
         val out = linkedMapOf<String, Series>()
         universe.forEachIndexed { i, sym ->
+            ctx.market.coverage.require(sym, start.atZone(ZoneOffset.UTC).toLocalDate(), asOf) // 거래일 누락이면 MarketDataNotLoaded
             val bars = barsWithBackfill(sym, start, end, need, "리밸런싱 시드")
             out[sym] = bars.closeSeries()
             if ((i + 1) % 20 == 0 || i + 1 == universe.size) log.info("전략 {} 히스토리 시딩 진행: {}/{}", strategyId, i + 1, universe.size)
         }
         return out
-    }
-
-    private fun holdings(universe: List<String>): Map<String, BigDecimal> {
-        if (universe.isEmpty()) return emptyMap()
-        return ctx.jdbc.query(
-            "select symbol, qty from positions where user_id = :u and strategy_id = :s and broker_account_key = :a and qty > 0 and symbol in (:syms)",
-            MapSqlParameterSource("u", userId).addValue("s", strategyId).addValue("a", accountKey).addValue("syms", universe),
-        ) { rs, _ -> rs.getString(1) to rs.getBigDecimal(2) }.toMap()
     }
 
     /** 종목별 현재가. 실패·0 이하는 이번 리밸런싱에서 제외(결측을 0 원으로 흘리지 않는다). */

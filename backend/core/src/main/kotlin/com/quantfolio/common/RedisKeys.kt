@@ -72,6 +72,10 @@ object RedisKeys {
     const val RECONCILE_LOCK_TTL_SECONDS = 30L
     fun reconcileLock(orderId: Int): String = "$RECONCILE_LOCK_PREFIX$orderId"
 
+    /** OpenDART 재무 백필 단독 실행(주기 작업·수동 실행 겹침 방지 - 겹치면 일 한도를 같이 쓴다). 원본에 없는 새 키. TTL 은 예산 소진까지의 상한 추정(측정값 아님). */
+    const val DART_BACKFILL_LOCK = "lock:dart_backfill"
+    const val DART_BACKFILL_LOCK_TTL_SECONDS = 6 * 3600L
+
     /** 마지막 DB 백업 성공 시각(ISO) */
     const val BACKUP_LAST_SUCCESS = "backup:last_success_at"
 
@@ -98,7 +102,8 @@ object RedisKeys {
 
     /** web 조회 캐시(원본 라우트와 같은 키). 스크리너 키의 실수는 Python str(float) 표기. */
     fun metricsCache(kind: String, market: String, asOf: java.time.LocalDate): String = "metrics:$kind:$market:$asOf"
-    fun recommendCache(asOf: java.time.LocalDate): String = "recommend:kospi200:$asOf"
+    /** 추천은 시총 상위 200 으로 바뀌어 원본 키(recommend:kospi200)와 다르다 - 캐시라 이어받을 상태가 없다(원본 스택 퇴역). */
+    fun recommendCache(asOf: java.time.LocalDate): String = "recommend:mcap200:$asOf"
     fun screenerTurnaroundCache(market: String, asOf: java.time.LocalDate, topN: Int, smallcapPct: Double, surge: Double, maxDebt: Double): String =
         "screener:turnaround:$market:$asOf:$topN:${com.quantfolio.quant.pyFloat(smallcapPct)}:${com.quantfolio.quant.pyFloat(surge)}:${com.quantfolio.quant.pyFloat(maxDebt)}"
 }

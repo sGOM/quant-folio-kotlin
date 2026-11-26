@@ -1,7 +1,6 @@
 package com.quantfolio.web.backtest
 
 import com.quantfolio.backtest.BacktestRunner
-import com.quantfolio.common.MarketClock
 import com.quantfolio.common.QuantfolioProperties
 import com.quantfolio.domain.backtest.Backtest
 import com.quantfolio.domain.backtest.BacktestRepository
@@ -11,10 +10,8 @@ import com.quantfolio.domain.strategy.StrategyStatus
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.dart.DartFinancials
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.ohlcv.OhlcvLoader
-import com.quantfolio.market.source.SourceUnavailableError
+import com.quantfolio.market.official.SnapshotSource
+import com.quantfolio.market.ohlcv.LocalOhlcvCoverage
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.security.Passwords
@@ -30,6 +27,7 @@ import org.mockito.BDDMockito.willReturn
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
@@ -63,10 +61,10 @@ class BacktestsControllerTest(
     @Autowired private val ticks: PriceTickStore,
     @Autowired private val clock: Clock,
 ) {
-    @MockitoBean lateinit var loader: OhlcvLoader
-    @MockitoBean lateinit var snapshots: SnapshotSource
+    @MockitoBean lateinit var coverage: LocalOhlcvCoverage // 로컬 시세 커버리지 점검은 통과(적재는 seed 가 한다)
+    @Qualifier("local") @MockitoBean lateinit var snapshots: SnapshotSource
     @MockitoBean lateinit var dart: DartFinancials
-    @MockitoBean lateinit var krx: KrxIndexService
+    @MockitoBean lateinit var sectorMaps: com.quantfolio.market.official.LocalSectorMap
     @MockitoSpyBean lateinit var props: QuantfolioProperties
 
     private val json = JsonMapper.builder().build()
@@ -154,7 +152,18 @@ class BacktestsControllerTest(
         }
     }
 
-    /** 원본 `_with_sector_map`: max_sector_pct 가 있을 때만 업종 매핑을 조회해 섹터 캡을 건다. 조회 실패는 캡 없이 진행. */
+    private fun dateThat(test: (LocalDate) -> Boolean): LocalDate {
+        org.mockito.ArgumentMatchers.argThat<LocalDate> { test(it) }
+        return LocalDate.MIN
+    }
+
+    /** Mockito any() 는 null 을 돌려줘 비널 인자에 못 쓴다. */
+    private fun anyDate(): LocalDate {
+        org.mockito.ArgumentMatchers.any(LocalDate::class.java)
+        return LocalDate.MIN
+    }
+
+    /** max_sector_pct 가 있을 때만 업종 스냅샷을 결정일 기준으로 조회한다(오늘 분류를 쓰지 않는다 — migration-notes #12). */
     @Test
     fun sectorCapLooksUpSectorMapOnlyWhenLimitSet() {
         val me = Me()
@@ -162,25 +171,28 @@ class BacktestsControllerTest(
         codes.forEachIndexed { k, c -> seed(c, LocalDate.of(2022, 1, 3), 520, 20 + k) }
         val base = mapOf("type" to "rebalance", "universe" to codes, "selection" to mapOf("method" to "momentum", "lookback" to 40, "top_n" to 2))
         val capped = base + ("risk_layer" to mapOf("max_sector_pct" to 0.3))
-        fun invested(cfg: Map<String, Any?>): Double {
-            val r = run(me, me.strategy(cfg), "2023-01-02", "2023-12-29").andExpect { status { isCreated() } }
-            val holdings = json.readTree(r.andReturn().response.contentAsString).get("result").get("holdings")
-            return holdings.properties().sumOf { it.value.asDouble() }
+        val end = LocalDate.of(2023, 12, 29)
+        fun result(cfg: Map<String, Any?>): tools.jackson.databind.JsonNode {
+            val r = run(me, me.strategy(cfg), "2023-01-02", end.toString()).andExpect { status { isCreated() } }
+            return json.readTree(r.andReturn().response.contentAsString).get("result")
         }
+        fun invested(r: tools.jackson.databind.JsonNode) = r.get("holdings").properties().sumOf { it.value.asDouble() }
 
-        val uncapped = invested(base)
-        verify(krx, never()).sectorMap(any())
+        val uncapped = invested(result(base))
+        verify(sectorMaps, never()).latestOnOrBefore(anyDate())
         assertTrue(uncapped > 0.9, "캡 없으면 거의 전액 투자: $uncapped")
 
-        given(krx.sectorMap(any())).willReturn(codes.associateWith { "전기전자" })
-        val before = MarketClock.todayUtcLegacy(clock)
-        val withCap = invested(capped)
-        val after = MarketClock.todayUtcLegacy(clock)
-        verify(krx).sectorMap(argThat { it == before || it == after }) // 원본 date.today()(UTC)
-        assertTrue(withCap < 0.5, "한 업종 30% 상한이면 나머지는 현금: $withCap")
+        val snap = LocalDate.of(2022, 12, 1)
+        given(sectorMaps.latestOnOrBefore(anyDate())).willReturn(snap)
+        given(sectorMaps.mapAt(snap)).willReturn(codes.associateWith { "전기전자" })
+        assertTrue(invested(result(capped)) < 0.5, "한 업종 30% 상한이면 나머지는 현금")
+        verify(sectorMaps, never()).latestOnOrBefore(dateThat { it.isAfter(end) }) // 결정일(구간 안) 기준만
 
-        given(krx.sectorMap(any())).willThrow(SourceUnavailableError("krx", "down"))
-        assertEquals(uncapped, invested(capped), 1e-9)
+        // 구간에 스냅샷이 없으면 멈추지 않고 캡 없이 진행하되, 결과 가정에 적는다(과거 업종 이력은 출처가 없다).
+        given(sectorMaps.latestOnOrBefore(anyDate())).willReturn(null)
+        val r = result(capped)
+        assertTrue(invested(r) > 0.9)
+        assertTrue(r.get("assumptions").any { it.asString().contains("섹터 한도") }, r.get("assumptions").toString())
     }
 
     @Test
@@ -216,6 +228,8 @@ class BacktestsControllerTest(
             jsonPath("$.period_start") { value("2022-12-31T15:00:00+00:00") }
             jsonPath("$.period_end") { value("2023-12-29T14:59:59+00:00") }
             jsonPath("$.N") { value(2) }
+            jsonPath("$.pbo") { value(org.hamcrest.Matchers.nullValue()) } // 날짜 아닌 곡선 → 공통 월 없음 → null(0 아님)
+            jsonPath("$.min_trl") { value(com.quantfolio.backtest.DeflatedSharpe.minTrl(b.result!!)!!) }
         }
     }
 }

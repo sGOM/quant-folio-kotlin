@@ -17,11 +17,10 @@ import kotlin.test.assertTrue
 @Import(ContainersConfig::class)
 class StoresTest(
     @Autowired private val daily: StockDailyStore,
-    @Autowired private val periods: StockPeriodStore,
     @Autowired private val indexes: IndexOhlcvStore,
-    @Autowired private val constituents: IndexConstituentStore,
     @Autowired private val dart: DartFinancialStore,
     @Autowired private val ticks: PriceTickStore,
+    @Autowired private val named: org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate,
 ) {
     private var dayCounter = 0L
     // 다른 테스트의 고정 날짜(2001~2026)와 겹치지 않는 구간 — 겹치면 공유 DB 에서 순서에 따라 깨진다
@@ -79,6 +78,26 @@ class StoresTest(
     }
 
     @Test
+    fun prevDiffAndStockKindRoundTrip() {
+        val day = freshDay()
+        daily.write(day, listOf(StockDaily("000010", close = 100.0, prevDiff = -1500.5, stockKind = "보통주")))
+        val got = daily.read(day).single()
+        assertEquals(-1500.5, got.prevDiff)
+        assertEquals("보통주", got.stockKind)
+    }
+
+    @Test
+    fun nullPrevDiffDoesNotOverwriteExisting() {
+        val day = freshDay()
+        daily.write(day, listOf(StockDaily("000011", prevDiff = 20.0, stockKind = "우선주")))
+        daily.write(day, listOf(StockDaily("000011", close = 5.0)))
+        val got = daily.read(day).single()
+        assertEquals(20.0, got.prevDiff)
+        assertEquals("우선주", got.stockKind)
+        assertEquals(5.0, got.close)
+    }
+
+    @Test
     fun deleteDay() {
         val day = freshDay()
         daily.write(day, listOf(StockDaily("000004", close = 1.0)))
@@ -86,22 +105,7 @@ class StoresTest(
         assertTrue(daily.read(day).isEmpty())
     }
 
-    // ── stock_period_stats ──
-    @Test
-    fun periodKeyedByStartEndInvestors() {
-        val s = freshDay()
-        val e = s.plusDays(30)
-        periods.write(s, e, "외국인", listOf(StockPeriod("005930", market = "KOSPI", name = "삼성전자", netBuyValue = 1.5e12)))
-        periods.write(s, e, "기관합계", listOf(StockPeriod("005930", market = "KOSPI", netBuyValue = -3.0)))
-        val foreign = periods.read(s, e, "외국인").single()
-        assertEquals(1.5e12, foreign.netBuyValue)
-        assertEquals("삼성전자", foreign.name)
-        assertEquals(-3.0, periods.read(s, e, "기관합계").single().netBuyValue)
-        periods.delete(s, e, "외국인")
-        assertTrue(periods.read(s, e, "외국인").isEmpty())
-    }
-
-    // ── index_ohlcv + coverage ──
+    // ── index_ohlcv ──
     @Test
     fun indexBarsSortedAndUpserted() {
         val code = "T${uniq()}"
@@ -115,47 +119,20 @@ class StoresTest(
         assertEquals(5L, bars[1].volume)
     }
 
-    @Test
-    fun coverageMergesAdjacent() {
-        val code = "C${uniq()}"
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 1, 10))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 11), LocalDate.of(2024, 1, 20))
-        assertEquals(listOf(LocalDate.of(2024, 1, 1) to LocalDate.of(2024, 1, 20)), indexes.readCoverage(code))
-    }
-
-    @Test
-    fun coverageMergesOverlapAndKeepsDisjoint() {
-        val code = "C${uniq()}"
-        indexes.mergeCoverage(code, LocalDate.of(2024, 3, 1), LocalDate.of(2024, 3, 31))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 1), LocalDate.of(2024, 1, 31))
-        indexes.mergeCoverage(code, LocalDate.of(2024, 1, 15), LocalDate.of(2024, 2, 10))
-        assertEquals(
-            listOf(LocalDate.of(2024, 1, 1) to LocalDate.of(2024, 2, 10), LocalDate.of(2024, 3, 1) to LocalDate.of(2024, 3, 31)),
-            indexes.readCoverage(code),
-        )
-        indexes.mergeCoverage(code, LocalDate.of(2024, 5, 2), LocalDate.of(2024, 5, 1)) // end < start 는 무시
-        assertEquals(2, indexes.readCoverage(code).size)
-        indexes.delete(code)
-        assertTrue(indexes.readCoverage(code).isEmpty())
-    }
-
-    // ── index_constituents ──
-    @Test
-    fun constituentsIgnoreDuplicates() {
-        val code = "K${uniq()}"
-        val base = LocalDate.of(2024, 6, 1)
-        constituents.write(code, base, listOf("5930", "000660"))
-        constituents.write(code, base, listOf("005930"))
-        assertEquals(setOf("005930", "000660"), constituents.read(code, base).toSet())
-        constituents.delete(code, base)
-        assertTrue(constituents.read(code, base).isEmpty())
-    }
-
     // ── dart_financials ──
     @Test
     fun confirmedDateRule() {
         assertEquals(LocalDate.of(2024, 6, 14), DartFinancialStore.confirmedDate(LocalDate.of(2024, 3, 16), 2023))
         assertEquals(LocalDate.of(2024, 12, 31), DartFinancialStore.confirmedDate(null, 2023))
+    }
+
+    /** 확정일 당일 KST 새벽(UTC 로는 전날)에도 확정이다 — 원본은 컨테이너 UTC 날짜라 하루 늦었다(migration-notes #1). */
+    @Test
+    fun dartFinalUsesKstDate() {
+        val corp = uniq()
+        dart.write(corp, 2023, "11011", "CFS", listOf(mapOf("account_nm" to "매출액", "rcept_no" to "20240316000001"))) // 확정일 2024-06-14
+        val kstDawn = java.time.Clock.fixed(Instant.parse("2024-06-13T16:00:00Z"), java.time.ZoneOffset.UTC) // KST 06-14 01:00
+        assertTrue(DartFinancialStore(named, kstDawn).read(corp, 2023, "11011", "CFS")!!.second)
     }
 
     @Test

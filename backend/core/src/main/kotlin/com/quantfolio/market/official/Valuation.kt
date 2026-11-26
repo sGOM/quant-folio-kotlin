@@ -1,0 +1,136 @@
+package com.quantfolio.market.official
+
+import com.quantfolio.market.dart.DartFinancials
+import com.quantfolio.market.PastTradingDays
+import com.quantfolio.market.dart.DartMetrics
+import com.quantfolio.market.store.DartFinancialStore
+import com.quantfolio.market.store.DividendEvent
+import com.quantfolio.market.store.DividendStore
+import com.quantfolio.market.store.FetchLedger
+import com.quantfolio.market.store.PriceTickStore
+import com.quantfolio.market.store.StockDaily
+import com.quantfolio.market.store.StockDailyStore
+import org.springframework.stereotype.Component
+import java.time.LocalDate
+
+/**
+ * KRX 가 주던 PER·PBR·배당수익률을 로컬 데이터로 직접 계산한다(백테스트가 KRX 를 부르지 않게).
+ *
+ * - PER = 시가총액 / 지배주주 당기순이익, PBR = 시가총액 / 지배주주 자본. 적자·자본잠식이면 null(0 아님).
+ * - 재무 = 접수일 <= asOf 인 최신 사업보고서(11011), 연결 우선·별도 폴백. 접수일 > asOf 인 보고서는 못 본다(미래참조 금지).
+ * - 배당수익률(%) = 최근 365일 주당 현금배당 합 / 종가 * 100. 알려진 배당이 없으면 null(단 전체 적재 완료 후엔 0.0), 합이 0 이면 0.0.
+ * - 시총·종가 = asOf 이하 가장 최근 스냅샷 행.
+ */
+@Component
+class Valuation(
+    private val daily: StockDailyStore,
+    private val dart: DartFinancials,
+    private val dartStore: DartFinancialStore,
+    private val dividends: DividendStore,
+    private val ledger: FetchLedger,
+    ticks: PriceTickStore,
+    private val days: PastTradingDays,
+) {
+    private val units = PriceUnits(ticks, daily)
+
+    /** 한 종목의 재무 조회 결과. 미적재와 '쓸 보고서 없음'은 다른 사건이다. */
+    private sealed interface Fin {
+        data class Loaded(val netIncome: Double?, val equity: Double?) : Fin
+        data class NotLoaded(val error: MarketDataNotLoaded) : Fin
+        data object Absent : Fin
+    }
+
+    /**
+     * per·pbr·div 만 채운 행(+market), [symbols] 순서대로. asOf 이하(14일 이내) 스냅샷이 없는 종목은 세 값 모두 null.
+     * 조회한 종목 전부가 DART 미적재면 [MarketDataNotLoaded] 를 그대로 올린다(일부만이면 그 종목만 null).
+     */
+    fun compute(asOf: LocalDate, symbols: List<String>): List<StockDaily> {
+        val codes = symbols.map { it.padStart(6, '0') }.distinct()
+        val snaps = daily.latestUpTo(codes, asOf, SNAPSHOT_LOOKBACK_DAYS).associateBy { it.symbol }
+        if (snaps.isEmpty()) return codes.map { StockDaily(it) }
+        val corps = dart.corpCodeMapLocal()
+        val fins = codes.filter { it in snaps }.associateWith { c -> corps[c]?.let { financials(it, asOf) } ?: Fin.Absent }
+        val queried = fins.values.filter { it !is Fin.Absent }
+        if (queried.isNotEmpty() && queried.all { it is Fin.NotLoaded }) throw (queried.first() as Fin.NotLoaded).error
+        val dps = dpsBySymbol(snaps.keys.toList(), asOf)
+        // 전체 배당 적재가 끝난 뒤의 무기록은 무배당(원본 KRX DVD_YLD 도 0). 적재 전이면 모른다(null).
+        // 단, 적재된 배당 이력이 시작된 지 1년이 안 된 asOf 는 이력 부재와 무배당을 구분할 수 없어 null.
+        val dividendsLoaded = ledger.get(DividendIngest.SOURCE, DividendIngest.LEDGER_KEY)?.final == true &&
+            dividends.minRecordDate()?.let { !asOf.isBefore(it.plusDays(DIV_WINDOW_DAYS)) } == true
+        return codes.map { c ->
+            val s = snaps[c] ?: return@map StockDaily(c)
+            val f = fins[c] as? Fin.Loaded
+            val cap = s.marketCap?.toDouble()
+            StockDaily(
+                c, market = s.market,
+                per = ratio(cap, f?.netIncome),
+                pbr = ratio(cap, f?.equity),
+                div = (if (c in dps) dps[c] else 0.0.takeIf { dividendsLoaded })?.let { d -> s.close?.takeIf { it > 0 }?.let { d / it * 100 } },
+            )
+        }
+    }
+
+    /** 분모가 양수일 때만. 적자·자본잠식·결측은 null. */
+    private fun ratio(cap: Double?, denominator: Double?): Double? =
+        if (cap != null && denominator != null && denominator > 0) cap / denominator else null
+
+    private fun financials(corp: String, asOf: LocalDate): Fin {
+        val lagged = DartMetrics.announcementLaggedYear(asOf)
+        for (year in listOf(asOf.year - 1, asOf.year - 2)) {
+            for (fs in listOf(DartFinancials.FS_CONSOLIDATED, DartFinancials.FS_SEPARATE)) {
+                val accounts = try {
+                    dart.cachedAccounts(corp, year, DartMetrics.REPORT_ANNUAL, fs, remote = false)
+                } catch (e: MarketDataNotLoaded) {
+                    // 공시가 끝났을 연도(<= lagged)의 공백은 진짜 미적재다 — 더 오래된 보고서로 조용히 내려가지 않는다.
+                    if (year <= lagged) return Fin.NotLoaded(e)
+                    break
+                }
+                if (accounts.isNullOrEmpty()) continue
+                val received = dartStore.receiptDate(corp, year, DartMetrics.REPORT_ANNUAL, fs)
+                // 접수일을 해석 못 한 행은 기존 PIT 규칙(4월부터 직전 연도)으로 판정한다.
+                val known = received?.let { !it.isAfter(asOf) } ?: (year <= lagged)
+                if (!known) break // 연결이 있으면 별도는 보지 않는다(firstAvailable 과 같다). 더 오래된 연도로.
+                val (ni, eq) = DartMetrics.controllingNetIncomeEquity(accounts, separate = fs == DartFinancials.FS_SEPARATE)
+                return Fin.Loaded(ni, eq)
+            }
+        }
+        return Fin.Absent
+    }
+
+    /**
+     * 종목별 DPS(asOf 시점 주식 단위). 알려진 배당이 한 건도 없으면 키가 없다(= unknown), 합이 0 이면 0.0.
+     * 배당금은 기준일 당시 주식 수 기준이라 분할이 끼면 asOf 가격과 단위가 다르다 — 배당락일 비율 ÷ asOf 비율을 곱해 맞춘다.
+     * 환산 비율을 못 구하면(배당락일 불명·종가 없음) 추측하지 않고 값이 null(= 키는 있고 모름)이다. 0원 배당은 환산이 필요 없다.
+     */
+    private fun dpsBySymbol(codes: List<String>, asOf: LocalDate): Map<String, Double?> =
+        // 창은 "알려진 날" 기준이다: 알려진 날 = 공시일, 없으면 기준일 + 90일. 기준일로 창을 잡으면 실효 창이 275일로 줄어
+        // 연 1회 결산배당이 매년 12월~3월에 통째로 빠진다.
+        dividends.read(codes, asOf.minusDays(DIV_WINDOW_DAYS + UNANNOUNCED_LAG_DAYS), asOf)
+            // ponytail: 공시일 없는 배당은 기준일 + 90일 뒤에야 알려진 것으로 본다. 2023 이전 결산배당은 기준일(12/31) 뒤에
+            // 결정돼서, 공시일 없이 기준일 직후부터 쓰면 미래참조다. 상한은 실제 공시일을 못 구한 만큼의 지연이고, 공시일 적재가 늘면 줄어든다.
+            .filter { e ->
+                val known = e.announcedOn ?: e.recordDate.plusDays(UNANNOUNCED_LAG_DAYS)
+                !known.isAfter(asOf) && known.isAfter(asOf.minusDays(DIV_WINDOW_DAYS))
+            }
+            .groupBy { it.symbol }
+            .mapValues { (symbol, es) -> es.sumOfScaled(symbol, asOf) }
+
+    private fun List<DividendEvent>.sumOfScaled(symbol: String, asOf: LocalDate): Double? {
+        val paying = filter { it.dps != 0.0 }
+        if (paying.isEmpty()) return 0.0
+        val exDates = paying.associateWith { DividendDates.exDateOn(it.recordDate, days) }
+        if (exDates.values.any { it == null }) return null
+        val from = exDates.values.minOf { it!! }
+        val ratios = units.ratios(symbol, from, asOf)
+        // asOf 이하 가장 최근 비율(스냅샷과 같은 14일 이내) — 둘 다 asOf 이하 날짜라 미래참조 없음.
+        val now = ratios.filterKeys { !it.isBefore(asOf.minusDays(SNAPSHOT_LOOKBACK_DAYS)) }.maxByOrNull { it.key }?.value ?: return null
+        return paying.sumOf { e -> (ratios[exDates.getValue(e)] ?: return null) / now * e.dps }
+    }
+
+    companion object {
+        // 측정 근거 없음. LocalSnapshots 경유 시 asOf 당일 행만 넘어와 실질 무영향.
+        private const val SNAPSHOT_LOOKBACK_DAYS = 14L
+        private const val DIV_WINDOW_DAYS = 365L
+        private const val UNANNOUNCED_LAG_DAYS = 90L
+    }
+}

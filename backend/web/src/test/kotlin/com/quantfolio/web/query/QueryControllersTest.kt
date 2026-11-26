@@ -7,6 +7,7 @@ import com.quantfolio.domain.news.NewsArticleSymbol
 import com.quantfolio.domain.news.NewsArticleSymbolRepository
 import com.quantfolio.domain.user.User
 import com.quantfolio.domain.user.UserRepository
+import com.quantfolio.market.official.MarketDataNotLoaded
 import com.quantfolio.market.symbols.SymbolCatalog
 import com.quantfolio.market.symbols.SymbolInfo
 import com.quantfolio.metrics.MetricsCommon
@@ -145,6 +146,21 @@ class QueryControllersTest(
         assertNull(redis.opsForValue().get("metrics:sectors:KOSDAQ:2026-10-16"))
     }
 
+    /** 로컬 미적재는 지표 계산 오류(503)가 아니라 ApiErrorHandler 의 409 — 사람이 적재해야 풀린다. */
+    @Test
+    fun metricsNotLoadedIs409() {
+        given(sectors.compute("KOSPI", asOf)).willThrow(MarketDataNotLoaded("index_ohlcv", "sector_indexes|KOSPI"))
+        mvc.get("/api/metrics/sectors?market=KOSPI") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.key") { value("sector_indexes|KOSPI") }
+        }
+        given(stocks.compute("KOSPI", asOf)).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        mvc.get("/api/metrics/stocks?market=KOSPI") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.kind") { value("stock_daily") }
+        }
+    }
+
     @Test
     fun stocksFilterSortLimit() {
         fun s(code: String, per: Double?, value: Double?, cap: Long?) = StockMetric(code, code, "KOSPI", per = per, avgValue20 = value, marketCap = cap)
@@ -188,9 +204,21 @@ class QueryControllersTest(
 
     @Test
     fun recommendUsesCache() {
-        given(recommend.kospi200Scored(asOf)).willReturn(RecommendOut(asOf, "KOSPI200", 0, false, emptyList()))
-        mvc.get("/api/recommend/kospi200") { cookie(cookie) }.andExpect { jsonPath("$.index") { value("KOSPI200") } }
-        assertNull(redis.opsForValue().get("recommend:kospi200:2026-10-16"))
+        given(recommend.mcap200Scored(asOf)).willReturn(RecommendOut(asOf, "MCAP200", 0, false, emptyList()))
+        mvc.get("/api/recommend/mcap200") { cookie(cookie) }.andExpect { jsonPath("$.index") { value("MCAP200") } }
+        assertNull(redis.opsForValue().get("recommend:mcap200:2026-10-16"))
+        mvc.get("/api/recommend/kospi200") { cookie(cookie) }.andExpect { status { isNotFound() } }
+    }
+
+    /** 당일 시총 미적재는 빈 추천이 아니라 409(조용한 강등 금지). */
+    @Test
+    fun recommendNotLoadedIs409() {
+        given(recommend.mcap200Scored(asOf)).willThrow(MarketDataNotLoaded("stock_daily", "KOSPI"))
+        mvc.get("/api/recommend/mcap200") { cookie(cookie) }.andExpect {
+            status { isConflict() }
+            jsonPath("$.kind") { value("stock_daily") }
+        }
+        assertNull(redis.opsForValue().get("recommend:mcap200:2026-10-16"))
     }
 
     @Test

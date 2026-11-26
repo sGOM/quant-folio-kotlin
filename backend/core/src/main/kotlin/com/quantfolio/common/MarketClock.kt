@@ -5,7 +5,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
 /**
@@ -28,9 +27,4 @@ object MarketClock {
     /** KST 하루 끝(23:59:59) 시각. */
     fun kstEnd(d: LocalDate): Instant = d.atTime(LocalTime.of(23, 59, 59)).atZone(KST).toInstant()
 
-    /**
-     * 원본 `date.today()` — 컨테이너(UTC) 날짜라 KST 00~09시엔 전날이다. **새 코드에 쓰지 말 것.**
-     * 원본 동작 보존을 위해 일부러 남긴 곳만 쓴다(docs/migration-notes.md #1·#6~#8). 거래일은 [todayKst].
-     */
-    fun todayUtcLegacy(clock: Clock): LocalDate = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC)
 }

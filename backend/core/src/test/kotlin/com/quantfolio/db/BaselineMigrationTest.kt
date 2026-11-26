@@ -41,7 +41,7 @@ class BaselineMigrationTest {
         val tables = query(url, "select tablename from pg_tables where schemaname='public' and tablename <> 'flyway_schema_history' order by 1") { it.getString(1) }
         assertEquals(
             listOf(
-                "alerts", "backtests", "dart_financials", "executions", "external_fetches", "index_constituents",
+                "alerts", "backtests", "dart_corp_codes", "dart_financials", "dividends", "executions", "external_fetches", "index_constituents",
                 "index_ohlcv", "index_ohlcv_coverage", "kis_stock_master_snapshots", "news_article_symbols",
                 "news_articles", "orders", "positions", "price_ticks", "risk_limits", "sector_map_snapshots",
                 "stock_daily_snapshots", "stock_period_stats", "strategies", "users",
@@ -193,5 +193,73 @@ class BaselineMigrationTest {
         val empty = freshDb("bl_v8_empty")
         flyway(empty).migrate()
         assertEquals(listOf(false), query(empty, "select count(*) > 0 from orders") { it.getBoolean(1) })
+    }
+
+    /** V11 은 지수 소스 전략을 KOSPI_MCAP + pool_size 로 옮기고 pick·나머지 설정은 그대로 둔다. fixed 는 건드리지 않는다. */
+    @Test
+    fun v11MovesIndexSourcesToMcapWithPoolSize() {
+        val url = freshDb("bl_v11")
+        flyway(url, target = "10").migrate()
+        fun cfg(source: String, pick: Int) =
+            """{"type":"rebalance","universe":[],"selection":{"method":"momentum","top_n":5,"universe_rule":{"type":"momentum","source":"$source","lookback":120,"pick":$pick,"min_market_cap":null}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status)
+               select id, n, c::jsonb, 'draft' from users, (values
+                 ('k200', '${cfg("KOSPI200", 40)}'), ('k100', '${cfg("KOSPI100", 100)}'),
+                 ('krx300', '${cfg("KRX300", 20)}'), ('fixed', '${cfg("fixed", 20)}')) v(n, c)""",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'plain', '{"type":"sma_crossover","symbol":"005930"}'::jsonb, 'draft' from users""",
+        )
+
+        flyway(url).migrate()
+
+        fun field(name: String, key: String) = query(url, "select config->'selection'->'universe_rule'->>'$key' from strategies where name = '$name'") { it.getString(1) }.single()
+        assertEquals(listOf("KOSPI_MCAP", "200", "40"), listOf("source", "pool_size", "pick").map { field("k200", it) })
+        assertEquals(listOf("KOSPI_MCAP", "100", "100"), listOf("source", "pool_size", "pick").map { field("k100", it) })
+        assertEquals(listOf("KOSPI_MCAP", "300", "20"), listOf("source", "pool_size", "pick").map { field("krx300", it) })
+        assertEquals(listOf("fixed", null, "20"), listOf("source", "pool_size", "pick").map { field("fixed", it) })
+        assertEquals("120", field("k200", "lookback"))
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
+    }
+
+    /** V12 는 flow 팩터 키(가중치·창·분모)만 지우고 나머지 selection 키는 그대로 둔다. */
+    @Test
+    fun v12StripsFlowKeys() {
+        val url = freshDb("bl_v12")
+        flyway(url, target = "11").migrate()
+        val flowCfg = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"flow_window":90,"flow_denom":"mcap","factor_weights":{"momentum":0.5,"value":0.5,"flow":0.0}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'flowy', '$flowCfg'::jsonb, 'draft' from users""",
+            """insert into strategies(user_id, name, config, status)
+               select id, 'plain', '{"type":"sma_crossover","symbol":"005930"}'::jsonb, 'draft' from users""",
+        )
+
+        flyway(url).migrate()
+
+        val expected = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"factor_weights":{"momentum":0.5,"value":0.5}}}"""
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'flowy' and config = '$expected'::jsonb") { it.getInt(1) }.single())
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'plain' and config = '{\"type\": \"sma_crossover\", \"symbol\": \"005930\"}'::jsonb") { it.getInt(1) }.single())
+    }
+
+    /** flow 가중치 > 0 인 전략이 있으면 V12 는 조용히 지우지 않고 실패한다(사람이 먼저 가중치를 옮겨야 한다). */
+    @Test
+    fun v12RefusesPositiveFlowWeight() {
+        val url = freshDb("bl_v12_flow")
+        flyway(url, target = "11").migrate()
+        val flowCfg = """{"type":"rebalance","universe":[],"selection":{"method":"score","top_n":5,"factor_weights":{"momentum":0.7,"flow":0.3}}}"""
+        exec(
+            url,
+            "insert into users(email, password_hash) values ('owner@t.dev', 'h1')",
+            """insert into strategies(user_id, name, config, status) select id, 'flowy', '$flowCfg'::jsonb, 'draft' from users""",
+        )
+
+        val e = kotlin.test.assertFailsWith<org.flywaydb.core.api.FlywayException> { flyway(url).migrate() }
+        kotlin.test.assertTrue("flow" in generateSequence<Throwable>(e) { it.cause }.joinToString { it.message.orEmpty() }, e.toString())
+        assertEquals(1, query(url, "select count(*) from strategies where name = 'flowy' and config = '$flowCfg'::jsonb") { it.getInt(1) }.single())
     }
 }

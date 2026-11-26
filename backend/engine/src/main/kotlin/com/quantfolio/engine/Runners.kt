@@ -13,16 +13,16 @@ import com.quantfolio.domain.trading.Position
 import com.quantfolio.domain.trading.PositionRepository
 import com.quantfolio.domain.user.UserRepository
 import com.quantfolio.market.MarketCalendar
-import com.quantfolio.market.krx.KrxIndexService
-import com.quantfolio.market.krx.SnapshotSource
-import com.quantfolio.market.ohlcv.OhlcvLoader
+import com.quantfolio.market.official.LocalTradingDays
+import com.quantfolio.market.official.MarketDataNotLoaded
+import com.quantfolio.market.official.McapUniverse
 import com.quantfolio.market.store.Bar
 import com.quantfolio.market.store.PriceTickStore
 import com.quantfolio.metrics.MetricsCommon
-import com.quantfolio.metrics.UniverseScores
 import com.quantfolio.quant.pyFixed
 import com.quantfolio.quant.pyJsonDumps
 import org.slf4j.Logger
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.redis.core.StringRedisTemplate
@@ -33,6 +33,7 @@ import java.text.DecimalFormat
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalTime
 import java.time.ZoneOffset
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -68,14 +69,18 @@ data class RunnerContext(
     val risk: RiskManager,
     val calendar: MarketCalendar,
     val ticks: PriceTickStore,
-    val loader: OhlcvLoader,
     val jdbc: NamedParameterJdbcTemplate,
-    val snapshots: SnapshotSource,
     val common: MetricsCommon,
-    val scores: UniverseScores,
-    val krx: KrxIndexService,
+    val market: LocalMarketData,
     val positions: PositionRepository,
-)
+    val mcap: McapUniverse,
+    val days: LocalTradingDays,
+    // 미실측 - KRX Open API 공개 시각은 Task 1 실측으로 확정한다. 이 시각(KST) 전에는 직전 거래일(T-1) 미적재를 경보 없이 기다린다.
+    @Value("\${quantfolio.engine.dataReadyBy:10:30}") val dataReadyBy: String,
+) {
+    /** 기동(빈 생성) 때 한 번 파싱 - 잘못된 설정은 틱 안(손절·익절 경로 포함)이 아니라 기동 실패로 드러난다. */
+    val dataReadyByTime: LocalTime = LocalTime.parse(dataReadyBy)
+}
 
 /**
  * 러너 공통 골격(원본 `engine/base_runner.py`): 전략 적재·자격 검증 → 주기 틱(타임아웃 방어) → 헬스 기록·연속 실패 알림,
@@ -191,19 +196,31 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     }
 
     /**
-     * price_ticks 의 [start, end] 일봉. [minBars] 보다 적으면 외부 소스에서 적재해 다시 읽는다.
-     * 적재 실패는 경고만 남기고 있는 만큼 돌려준다(`"$symbol $failLogLabel 적재 실패"`).
+     * price_ticks 의 [start, end] 일봉(로컬만 — 외부 소스로 보충하지 않는다). [minBars] 보다 적으면 경고만 남기고 있는 만큼 돌려준다.
+     * 거래일 누락을 막아야 하는 호출자(리밸런싱)는 먼저 `ctx.market.coverage.require` 로 확인한다.
      */
     protected fun barsWithBackfill(symbol: String, start: Instant, end: Instant, minBars: Int, failLogLabel: String): List<Bar> {
         val bars = ctx.ticks.bars(symbol, start, end)
-        if (bars.size >= minBars) return bars
-        return try {
-            ctx.ticks.upsert(symbol, ctx.loader.load(symbol, start.atZone(ZoneOffset.UTC).toLocalDate(), end.atZone(ZoneOffset.UTC).toLocalDate()))
-            ctx.ticks.bars(symbol, start, end)
-        } catch (e: Exception) {
-            log.warn("{} {} 적재 실패: {}", symbol, failLogLabel, e.message)
-            bars
-        }
+        if (bars.size < minBars) log.warn("{} {} 로컬 일봉 부족({}<{}) — 외부 보충 없음", symbol, failLogLabel, bars.size, minBars)
+        return bars
+    }
+
+    /**
+     * 적재 대기 중인가 - [MarketDataNotLoaded] 가 "직전 기대 거래일(T-1) 하나"만 빠진 것이고 아직 `dataReadyBy`(KST) 전이면 true.
+     * T-1 = 오늘 앞의 평일 중 휴장 확정이 아닌 마지막 날(원장이 모르는 날 포함). 빠진 구간이 그 하루로만 이뤄졌을 때만 대기로 본다 -
+     * 추가 조건 - (1) T-1 앞 조회 창(오늘-10일~T-2)의 기대 거래일이 모두 원장에 known: McapUniverse 등은 "첫 모르는 날"만 (day,day) 로
+     * 보고하므로 며칠 끊겨도 [(T-1,T-1)] 로 보인다. (2) kind 가 날짜 결손(stock_daily·trading_days·price_ticks·index_ohlcv)일 때만 -
+     * 주권 종류(stock_kind)·min_market_cap 같은 날짜 무관 결손은 기다린다고 풀리지 않는다.
+     * 더 오래된 결손·날짜 없는 미적재(업종·커버리지·DART)·구간이 T-1 밖으로 번진 경우는 대기가 아니라 경보 대상이다.
+     */
+    protected fun awaitingPreviousDay(e: MarketDataNotLoaded): Boolean {
+        val now = MarketClock.nowKst(ctx.clock)
+        if (!now.toLocalTime().isBefore(ctx.dataReadyByTime)) return false
+        if (e.kind !in WAITABLE_KINDS || e.missing.isEmpty()) return false
+        val today = now.toLocalDate()
+        val t1 = ctx.days.expected(today.minusDays(10), today.minusDays(1)).lastOrNull() ?: return false
+        if (!e.missing.all { it.first == t1 && it.second == t1 }) return false
+        return ctx.days.expected(today.minusDays(10), t1.minusDays(1)).all { ctx.days.isTradingDay(it) != null }
     }
 
     /** 이 전략에 귀속된 (사용자, 종목) 포지션. 없으면 null. */
@@ -277,6 +294,7 @@ abstract class BaseRunner(val strategyId: Int, protected val ctx: RunnerContext)
     protected val tickAbandoned: Boolean get() = tickAbort.get()?.get() == true
 
     private companion object {
+        val WAITABLE_KINDS = setOf("stock_daily", "trading_days", "price_ticks", "index_ohlcv")
         const val POSITION_LOCK_TTL = RedisKeys.POSITION_LOCK_TTL_SECONDS
     }
 }

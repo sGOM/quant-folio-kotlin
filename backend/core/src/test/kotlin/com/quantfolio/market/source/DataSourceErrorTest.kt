@@ -57,7 +57,8 @@ class DataSourceErrorTest {
 
     @Test
     fun secondsUntilMidnight() {
-        val clock = Clock.fixed(Instant.parse("2026-10-19T23:00:00Z"), ZoneId.of("UTC"))
+        // DART 한도는 KST 자정에 리셋된다 — 프로세스 시간대(UTC)와 무관하게 KST 23:00 이면 1시간(migration-notes #2)
+        val clock = Clock.fixed(Instant.parse("2026-10-19T14:00:00Z"), ZoneId.of("UTC"))
         assertEquals(3600.0, DataSourceErrors.secondsUntilMidnight(clock))
         assertNull(SourceSchemaError("x", "y").retryAfterSeconds)
     }
