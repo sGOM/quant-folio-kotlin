@@ -35,6 +35,9 @@ paths:
 - 저장소 `secrets/` 에 더미 키를 두지 않는다 — 컷오버 때 실제 증권사·외부 API 키 대신 쓰인다.
 - 이미지 빌드는 테스트를 안 돈다(Testcontainers 불가). 검증은 CI `./gradlew build` + e2e-smoke.
   e2e-smoke 는 회원가입이 없어 빈 DB 에 소유자(id 1) 행을 SQL 로 시드하고 `TRADING_OWNER_USER_ID=1` 로 맞춘다.
-- frontend 는 원본(`8a563702`)에서 시작했으며 의존성 보안 업데이트·주문 정합 알림·단일 소유자 설정 안내를 반영했다. Dockerfile 은 `npm ci`로 lockfile을 따른다.
+- frontend 는 원본(`8a563702`)에서 시작했으며 의존성 보안 업데이트·주문 정합 알림·단일 소유자 설정 안내를 반영했다. Dockerfile 은 `npm ci`로 lockfile을 따르고 `next build` → `next start`(원본은 소스 마운트 dev 서버)다.
+  화면 코드를 고치면 `docker compose build frontend` 가 필요하고, `NEXT_PUBLIC_API_BASE_URL` 은 빌드 인자라 바꿔도 재빌드 전엔 반영되지 않는다(미정의면 `lib/api.ts` 가 `localhost:8000` 으로 폴백).
+- **Redis 에 매매 상태(MDD·트레일 고점·`rebalance:last`)가 있다** — compose 는 AOF + 볼륨 `redis_data`. AOF 를 켠 Redis 는 기존 `dump.rdb` 를 무시하고 빈 상태로 뜬다(2026-11-26 실측) — 볼륨을 바꿀 땐 cutover runbook 4단계의 `CONFIG SET appendonly yes` 이관을 거친다.
+- db·redis·caddy 이미지는 버전 태그로 고정(TimescaleDB 확장 2.28.0) — 올릴 땐 `ALTER EXTENSION timescaledb UPDATE` 를 같은 작업에서.
 - Caddy 는 `X-Forwarded-Port` 를 넘겨야 한다(`Caddyfile` 의 `header_up X-Forwarded-Port {http.request.port}`). web(`forward-headers-strategy: native` = Tomcat RemoteIpValve)은 `X-Forwarded-Host` 의 포트를 버리고 Proto 가 있으면 80/443 으로 봐서, `APP_PORT=8080` 같은 비표준 포트에선 같은 출처 POST 가 CORS 403 이 된다(`ProxyHttpsTest`, e2e-smoke 가 8080 으로 지킨다).
 - 거래를 켜려면 `.env`에 확인한 소유자의 `TRADING_OWNER_USER_ID`를 넣고 web·engine을 함께 재기동한다(`env_file` 공유). 미설정은 거래 차단이며 원본 DB 사용자나 첫 가입자를 자동으로 선택하지 않는다.
