@@ -64,7 +64,7 @@ Flyway V4부터 포지션은 사용자·계좌·전략·종목별로 분리한�
 | 15 | `Reconciler`·`Fills.record` | `reconcile.py:80-199`·`record_fill` | ① 잔고 교차확인의 기록 수량 합이 매수·매도를 구분 없이 더한다. ② 증분 체결에 누적 평균가를 적용(증분 단가 아님). ③ 체결 조회가 당일 KST 만. ④ 포지션 read-modify-write 가 주문 단위 락뿐이라 같은 종목 다른 주문끼리 경쟁. | 회수 불가 체결 / 평단 왜곡 / 전날 체결 미회수 / 수량 유실 |
 | 16 | `RebalanceRunner.holdings`·`RiskManager` 일손익·`LiveGate` 일일 상한 | `rebalance_runner.py:1027`·`risk.py:203`·`live_gate.py:145` | ① 청산 대상이 현재 후보 유니버스 안 보유분만. ② 실현손익이 매도대금 − 수수료(원가 미차감). ③ 일일 상한이 체결 합계만 보고 미체결 주문 명목을 안 더한다. | 유니버스 이탈 종목 미청산(MDD 킬스위치 포함) / 손실 매도가 이익으로 집계돼 손실 한도 미발동 / 상한 초과 체결 **2026-11-26 Kotlin 에서 셋 다 수정**(원본 은퇴 뒤 사용자 지시): ① 정기 리밸런싱도 이 전략·계좌 보유 전체를 본다(리스크오프는 이전부터) ② 실현손익 = (체결가 − 매도 시점 평단) × 포지션 반영 수량 − 수수료, 평단은 체결 이력 재생 — 매수대금은 더 이상 손실이 아니다 ③ 일일 사용액에 당일 미완료 주문의 미체결 잔량 × 주문가를 더한다 |
 | 17 | `Signals.minPeriods`(sma/ema_crossover) | `signals.py:712` | `ema_crossover` 의 slow 기본값을 신호 계산(26)과 달리 20 으로 본다. | slow 미지정 ema 전략의 최소 봉 수(시드 길이·데이터 충분성)가 6봉 짧게 잡힌다 |
-| 18 | `AlertPublisher.publishEvent` | `engine/alerts.py`·`fills.publish_event` | DB 적재 실패만 삼키고, Redis 발행 실패는 감싸지 않아 `publish` 호출자(주문 정합 등)로 예외가 전파된다. 보존(2026-11-17 리뷰에서 확인). | 알림 발행 실패가 호출한 작업을 중단시킬 수 있다 |
+| 18 | `AlertPublisher.publishEvent` | `engine/alerts.py`·`fills.publish_event` | DB 적재 실패만 삼키고, Redis 발행 실패는 감싸지 않아 `publish` 호출자(주문 정합 등)로 예외가 전파된다. 보존(2026-11-17 리뷰에서 확인). | 알림 발행 실패가 호출한 작업을 중단시킬 수 있다 **2026-11-26 Kotlin 수정**: `publishEvent` 가 발행 실패를 로그로 삼킨다(주문 접수 직후·체결 기록에서도 부른다). 알림함(DB) 적재는 그대로 |
 
 ## KIS 실측에서 확인한 접속 문제 (2026-11-16)
 

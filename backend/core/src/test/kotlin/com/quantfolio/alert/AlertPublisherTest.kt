@@ -95,4 +95,18 @@ class AlertPublisherTest(
         }
         kotlin.test.assertEquals(1, alerts.findAll().count { a -> a.code == code })
     }
+
+    /** WS 발행은 부가 통로다 — Redis 장애가 알림을 부른 작업(주문 접수·정합)을 중단시키면 안 된다. 원본은 전파했다(migration-notes #18). */
+    @Test
+    fun redisPublishFailureDoesNotPropagateToCaller() {
+        val down = object : StringRedisTemplate(cf) {
+            override fun convertAndSend(channel: String, message: Any): Long = throw org.springframework.data.redis.RedisConnectionFailureException("down")
+        }
+        val uid = users.save(User(email = "${UUID.randomUUID()}@t.dev", passwordHash = "x")).id!!
+        val code = "redis-down-" + UUID.randomUUID()
+        val p = AlertPublisher(jdbc, down, clock, txManager)
+        p.publish(uid, 7, AlertSeverity.critical, "Redis 장애 중 알림", code)
+        p.publishEvent(mapOf("type" to "order", "user_id" to uid))
+        assertEquals(1, alerts.findAll().count { it.code == code }) // 알림함(DB)엔 남는다
+    }
 }
