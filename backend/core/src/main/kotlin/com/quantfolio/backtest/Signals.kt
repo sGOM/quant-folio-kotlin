@@ -356,7 +356,7 @@ object Signals {
                 }
                 maxOf(2, longest + 1)
             }
-            "sma_crossover", "ema_crossover" -> c.i("slow", 20) // 원본도 ema 기본값(26)이 아닌 20 — 보존(migration-notes)
+            "sma_crossover", "ema_crossover" -> c.i("slow") // 신호 계산과 같은 타입별 기본값(sma 20·ema 26). 원본은 둘 다 20(migration-notes #17)
             "rsi" -> c.i("period") + 1
             "macd" -> c.i("slow") + c.i("signal")
             "bollinger" -> c.i("period")

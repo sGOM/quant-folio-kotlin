@@ -32,7 +32,9 @@ class SignalsOracleTest {
             val full = datasets.getValue(c.get("data").asString())
             val data = if (Signals.requiresOhlc(cfg)) full else PriceData.close(full.close)
             assertEquals(c.get("requires_ohlc").asBoolean(), Signals.requiresOhlc(cfg))
-            assertEquals(c.get("min_periods").asInt(), Signals.minPeriods(cfg))
+            // 의도적 차이(migration-notes #17): slow 미지정 ema_crossover 는 신호 계산과 같은 기본 26 — 원본 min_periods 는 20 이었다
+            val minPeriods = if (cfg == mapOf("type" to "ema_crossover")) 26 else c.get("min_periods").asInt()
+            assertEquals(minPeriods, Signals.minPeriods(cfg))
             val (entries, exits) = Signals.generate(data, cfg)
             assertEquals(json.convertValue<List<Boolean>>(c.get("entries")), entries.values.toList(), "entries")
             assertEquals(json.convertValue<List<Boolean>>(c.get("exits")), exits.values.toList(), "exits")
