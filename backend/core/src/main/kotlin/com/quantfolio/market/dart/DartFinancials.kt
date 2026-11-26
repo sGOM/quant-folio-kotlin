@@ -88,14 +88,16 @@ class DartFinancials(
     fun corpCodeMapLocal(): Map<String, String> =
         localCorpMap ?: store.readCorpCodes().ifEmpty { throw MarketDataNotLoaded("dart_corp_map", "corp_code") }.also { localCorpMap = it }
 
-    /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. */
-    fun annualMetrics(corp: String, year: Int, remote: Boolean = true): Map<String, Double?> {
+    /** 연간(사업보고서) 지표 — 연결 우선, 없으면 별도. [asOf] 가 있으면 그날까지 공개된 판본만([publishedBy]), 아니면 빈 지표. */
+    fun annualMetrics(corp: String, year: Int, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (asOf != null && !publishedBy(corp, year, DartMetrics.REPORT_ANNUAL, asOf, remote)) return DartMetrics.deriveMetrics(emptyList())
         annualCache[corp to year]?.let { return it }
         val accounts = firstAvailable(corp, year, DartMetrics.REPORT_ANNUAL, remote)
         return DartMetrics.deriveMetrics(accounts.orEmpty()).also { if (accounts != null) annualCache[corp to year] = it }
     }
 
-    fun periodMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true): Map<String, Double?> {
+    fun periodMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (asOf != null && !publishedBy(corp, year, reprt, asOf, remote)) return DartMetrics.deriveMetrics(emptyList())
         val key = Triple(corp, year, reprt)
         periodCache[key]?.let { return it }
         val accounts = firstAvailable(corp, year, reprt, remote)
@@ -103,11 +105,11 @@ class DartFinancials(
     }
 
     /** 최근 4분기 합산(TTM). 당해 분기가 아직 없으면 직전 연간, 합성이 불가하면 당해 분기 그대로. */
-    fun ttmMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true): Map<String, Double?> {
-        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL, remote)
-        val cur = periodMetrics(corp, year, reprt, remote)
-        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote)
-        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt, remote), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote))
+    fun ttmMetrics(corp: String, year: Int, reprt: String, remote: Boolean = true, asOf: LocalDate? = null): Map<String, Double?> {
+        if (reprt == DartMetrics.REPORT_ANNUAL) return periodMetrics(corp, year, DartMetrics.REPORT_ANNUAL, remote, asOf)
+        val cur = periodMetrics(corp, year, reprt, remote, asOf)
+        if (cur.values.all { it == null }) return periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote, asOf)
+        val combined = DartMetrics.combineTtm(cur, periodMetrics(corp, year - 1, reprt, remote, asOf), periodMetrics(corp, year - 1, DartMetrics.REPORT_ANNUAL, remote, asOf))
         return if (combined.values.all { it == null }) cur else combined
     }
 
@@ -122,14 +124,19 @@ class DartFinancials(
         fun lenient(f: () -> Map<String, Double?>): Map<String, Double?> =
             try { f() } catch (e: MarketDataNotLoaded) { if (remote) throw e else DartMetrics.deriveMetrics(emptyList()) }
         val (year, reprt) = if (useTtm) DartMetrics.latestReportPeriod(asOf) else DartMetrics.announcementLaggedYear(asOf) to DartMetrics.REPORT_ANNUAL
+        // 판본이 asOf 뒤 접수(정정·마감 지연)면 그때 몰랐다 — 연간은 직전 연도를 최신으로(Valuation.financials 와 같은 기준), 각 연도도 공개분만.
+        // 원본은 공시지연 규칙만 보고 DART 가 주는 최신 정정본을 썼다(migration-notes #11).
+        fun knownAt(corp: String, y: Int): Boolean =
+            try { publishedBy(corp, y, DartMetrics.REPORT_ANNUAL, asOf, remote) } catch (e: MarketDataNotLoaded) { if (remote) throw e else true }
         val partial = { ok: Int, errors: List<DataSourceError> ->
             log.error("OpenDART 부분 실패 — 성공 {} / 실패 {} / 전체 {}(대표: {})", ok, errors.size, codes.size, errors.first().message)
         }
         return perSymbol(codes, map, partial) { corp ->
             val (m, prev, prev2) = if (useTtm) {
-                Triple(lenient { ttmMetrics(corp, year, reprt, remote) }, lenient { ttmMetrics(corp, year - 1, reprt, remote) }, lenient { ttmMetrics(corp, year - 2, reprt, remote) })
+                Triple(lenient { ttmMetrics(corp, year, reprt, remote, asOf) }, lenient { ttmMetrics(corp, year - 1, reprt, remote, asOf) }, lenient { ttmMetrics(corp, year - 2, reprt, remote, asOf) })
             } else {
-                Triple(lenient { annualMetrics(corp, year, remote) }, lenient { annualMetrics(corp, year - 1, remote) }, lenient { annualMetrics(corp, year - 2, remote) })
+                val y = if (knownAt(corp, year)) year else year - 1
+                Triple(lenient { annualMetrics(corp, y, remote, asOf) }, lenient { annualMetrics(corp, y - 1, remote, asOf) }, lenient { annualMetrics(corp, y - 2, remote, asOf) })
             }
             val result: MutableMap<String, Any?> = LinkedHashMap(m)
             result["op_growth"] = DartMetrics.yoyGrowth(m["op_income"], prev["op_income"])
@@ -226,6 +233,15 @@ class DartFinancials(
         val pred = QUARTER_PRED[reprt] ?: return null
         val prev = periodMetrics(corp, year, pred)["net_income"] ?: return null
         return cur - prev
+    }
+
+    /**
+     * 이 (연도, 보고서)의 저장 판본이 [asOf] 에 공개돼 있었는지 — [firstAvailable] 이 고르는 재무제표(연결 우선)의 접수일(정정되면 정정 접수일)로 본다.
+     * 자료가 없거나 접수일을 해석 못 했으면 true(호출자의 공시지연 규칙에 맡긴다). 미적재면 [cachedAccounts] 처럼 [MarketDataNotLoaded].
+     */
+    private fun publishedBy(corp: String, year: Int, reprt: String, asOf: LocalDate, remote: Boolean): Boolean {
+        val fs = listOf(FS_CONSOLIDATED, FS_SEPARATE).firstOrNull { cachedAccounts(corp, year, reprt, it, remote)?.isNotEmpty() == true } ?: return true
+        return store.receiptDate(corp, year, reprt, fs)?.let { !it.isAfter(asOf) } ?: true
     }
 
     private fun firstAvailable(corp: String, year: Int, reprt: String, remote: Boolean = true): List<Map<String, Any?>>? =

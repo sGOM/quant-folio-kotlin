@@ -43,7 +43,7 @@ class DartFinancialsTest(
     private val corp = "C" + UUID.randomUUID().toString().take(6)
 
     /** (사업연도, 보고서) → 당기순이익. 계정 응답에 접수번호를 넣어 확정일 계산이 되게 한다. */
-    private fun serveAccounts(netIncome: Map<Pair<Int, String>, Long>, fsDiv: String = "CFS") {
+    private fun serveAccounts(netIncome: Map<Pair<Int, String>, Long>, fsDiv: String = "CFS", receipts: Map<Pair<Int, String>, String> = emptyMap()) {
         http.on({ it.url.endsWith("fnlttSinglAcntAll.json") && it.query["corp_code"] == corp }) { call ->
             val k = call.query["bsns_year"]!!.toInt() to call.query["reprt_code"]!!
             val ni = netIncome[k]
@@ -51,7 +51,7 @@ class DartFinancialsTest(
                 """{"status":"013","message":"no data"}"""
             } else {
                 """{"status":"000","list":[
-                    {"sj_div":"IS","account_id":"ifrs-full_ProfitLoss","account_nm":"당기순이익","thstrm_amount":"$ni","rcept_no":"${k.first + 1}0301000001"},
+                    {"sj_div":"IS","account_id":"ifrs-full_ProfitLoss","account_nm":"당기순이익","thstrm_amount":"$ni","rcept_no":"${receipts[k] ?: "${k.first + 1}0301"}000001"},
                     {"sj_div":"IS","account_id":"dart_OperatingIncomeLoss","account_nm":"영업이익","thstrm_amount":"${ni * 2}"},
                     {"sj_div":"BS","account_id":"ifrs-full_Equity","account_nm":"자본총계","thstrm_amount":"1000"}]}"""
             }
@@ -173,6 +173,46 @@ class DartFinancialsTest(
         assertEquals(0.5, m["net_growth"])
         assertEquals(0.0, m["turnaround"])
         assertEquals(1, m["loss_years_3"])
+    }
+
+    /** 원본은 공시지연(4월)만 보고 DART 가 주는 최신 정정본을 그 전부터 썼다(migration-notes #11). asOf 뒤 접수 판본은 그때 몰랐다. */
+    @Test
+    fun metricsBySymbolFallsBackWhenLaggedYearWasPublishedAfterAsOf() {
+        serveCorpMap("900011" to corp)
+        val a = DartMetrics.REPORT_ANNUAL
+        serveAccounts(
+            mapOf((2023 to a) to 999L, (2022 to a) to 120L, (2021 to a) to 100L, (2020 to a) to -5L),
+            receipts = mapOf((2023 to a) to "20240716"), // 2023 사업보고서의 저장 판본은 7월 정정본
+        )
+        val m = fin.metricsBySymbol(listOf("900011"), LocalDate.of(2024, 5, 1))["900011"]!!
+        assertEquals(120.0, m["net_income"]) // 2023 대신 그때 알려진 최신 2022
+        assertEquals(0.2, m["net_growth"]!! as Double, 1e-12)
+        assertEquals(1, m["loss_years_3"])
+    }
+
+    @Test
+    fun growthIsNullWhenPreviousYearIsOnlyALaterCorrection() {
+        serveCorpMap("900012" to corp)
+        val a = DartMetrics.REPORT_ANNUAL
+        serveAccounts(
+            mapOf((2023 to a) to 150L, (2022 to a) to 100L, (2021 to a) to 80L),
+            receipts = mapOf((2023 to a) to "20240320", (2022 to a) to "20240801"), // 2022 는 나중 정정본만 있다 — 원 판본 숫자는 모른다
+        )
+        val m = fin.metricsBySymbol(listOf("900012"), LocalDate.of(2024, 5, 1))["900012"]!!
+        assertEquals(150.0, m["net_income"])
+        assertNull(m["net_growth"])
+    }
+
+    @Test
+    fun ttmIgnoresQuarterPublishedAfterAsOf() {
+        serveCorpMap("900013" to corp)
+        serveAccounts(
+            mapOf((2024 to DartMetrics.REPORT_Q1) to 70L, (2023 to DartMetrics.REPORT_Q1) to 10L, (2023 to DartMetrics.REPORT_ANNUAL) to 100L),
+            receipts = mapOf((2024 to DartMetrics.REPORT_Q1) to "20240610", (2023 to DartMetrics.REPORT_Q1) to "20230515", (2023 to DartMetrics.REPORT_ANNUAL) to "20240320"),
+        )
+        // 2024-06-01 → 최근 보고서는 2024 1분기지만 6/10 접수라 아직 모른다 → 직전 연간
+        val m = fin.metricsBySymbol(listOf("900013"), LocalDate.of(2024, 6, 1), useTtm = true)["900013"]!!
+        assertEquals(100.0, m["net_income"])
     }
 
     @Test
