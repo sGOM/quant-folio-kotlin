@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
 import java.security.MessageDigest
-import java.time.Clock
 import java.time.LocalDate
 
 /** 입력·설정이 백테스트에 맞지 않음 — HTTP 422(원본 ValueError·HTTPException 422). */
@@ -47,7 +46,6 @@ class BacktestRunner(
     private val mcap: McapUniverse,
     private val panic: PanicService,
     private val dividendFeed: DividendFeed,
-    private val clock: Clock,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -141,16 +139,17 @@ class BacktestRunner(
         }
 
         val dividends = withDividends(closes.keys.toList(), start, end)
+        val sectors = if (Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) && !Cfg.truthy(config["_sector_map"])) SectorSetup() else null
         val result = LinkedHashMap(
             engine {
                 PortfolioBacktest.run(
-                    closePanel = panel, config = withSectorMap(config) + dividends.config, simStart = start, simEnd = end, fundamentals = provider,
-                    regime = regime, pool = pool, benchmark = benchmark, panic = panicDays, volume = volume,
+                    closePanel = panel, config = config + dividends.config, simStart = start, simEnd = end, fundamentals = provider,
+                    regime = regime, pool = pool, benchmark = benchmark, panic = panicDays, volume = volume, sectors = sectors?.let { it::at },
                 )
             },
         )
         (dividends.warnings + (result["dividend_warnings"] as? List<*> ?: emptyList<Any?>())).takeIf { it.isNotEmpty() }?.let { result["dividend_warnings"] = it }
-        result["assumptions"] = dividends.assumptions + "벤치마크는 배당 제외"
+        result["assumptions"] = dividends.assumptions + "벤치마크는 배당 제외" + listOfNotNull(sectors?.assumption())
         result["universe_fingerprint"] = universeFingerprint(universe, rule)
         return result
     }
@@ -182,18 +181,26 @@ class BacktestRunner(
     }
 
     /**
-     * 원본 `portfolio._with_sector_map` — 섹터 한도(max_sector_pct)용 종목→업종 매핑을 백테스트 전체에 1회 조회해 config 에 싣는다.
-     * 기준일은 원본 `date.today()`(컨테이너 UTC 날짜, migration-notes #8·#12). 스냅샷 없음은 MarketDataNotLoaded 로 전파하고, 스냅샷은 있는데 매핑이 비면 WARNING 후 캡 미적용.
+     * 섹터 한도(max_sector_pct)용 결정일별 업종 매핑 — 결정일 이하 최신 스냅샷(같은 스냅샷일은 1회만 읽는다).
+     * 원본 `_with_sector_map` 은 오늘 분류 하나를 구간 전체에 써 미래를 봤다(migration-notes #12). 과거 업종 이력은 출처가 없어
+     * 스냅샷이 없는(또는 빈) 결정일은 캡 없이 진행하고, 그 사실을 결과 가정([assumption])에 적어 캡이 조용히 빠지지 않게 한다.
      */
-    private fun withSectorMap(config: Map<String, Any?>): Map<String, Any?> {
-        if (!Cfg.truthy(Cfg.map(config, "risk_layer")["max_sector_pct"]) || Cfg.truthy(config["_sector_map"])) return config
-        val smap = sectorMaps.sectorMap(MarketClock.todayKst(clock)) // 로컬 스냅샷 없으면 MarketDataNotLoaded(전파) — 캡이 조용히 빠지지 않게
-        if (smap.isEmpty()) {
-            log.warn("섹터 한도 설정됨(max_sector_pct)이나 업종 매핑 미확보 — 섹터 캡 미적용.")
-            return config
+    private inner class SectorSetup {
+        private val maps = HashMap<LocalDate, Map<String, String>>()
+        private var firstApplied: LocalDate? = null
+        private var skipped = false
+
+        fun at(d: LocalDate): Map<String, String?>? {
+            val map = sectorMaps.latestOnOrBefore(d)?.let { snap -> maps.getOrPut(snap) { sectorMaps.mapAt(snap) } }?.takeIf { it.isNotEmpty() }
+            if (map == null) skipped = true else if (firstApplied == null) firstApplied = d
+            return map
         }
-        log.info("섹터 집중 한도용 업종 매핑 로드: {}종목", smap.size)
-        return config + ("_sector_map" to smap)
+
+        fun assumption(): String? = when {
+            firstApplied == null -> "섹터 한도(max_sector_pct) 미적용: 구간에 업종 스냅샷이 없다(과거 업종 이력 없음 — 오늘 분류로 대신하지 않는다)"
+            skipped -> "섹터 한도(max_sector_pct)는 업종 스냅샷이 있는 $firstApplied 결정일부터 적용(그 전 결정일은 미적용)"
+            else -> null
+        }
     }
 
     private fun indexClose(ticker: String, from: LocalDate, to: LocalDate, failLog: String): Series? = try {

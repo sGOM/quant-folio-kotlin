@@ -19,6 +19,9 @@ import kotlin.math.pow
 /** 리밸런싱일 d 의 후보풀 공급(시점별 지수 구성종목 → 생존편향 제거). */
 typealias PoolProvider = (LocalDate) -> List<String>?
 
+/** 결정일 d 의 종목→업종(d 이하 최신 스냅샷). 그 시점 스냅샷이 없으면 null — 그 결정일은 섹터 캡 없이(migration-notes #12). */
+typealias SectorProvider = (LocalDate) -> Map<String, String?>?
+
 /** method="score" 의 펀더멘털 공급: (as_of, codes) → 종목 → {PER, PBR, DIV, roe, …, market_cap, sector}. */
 typealias FundamentalsProvider = (LocalDate, List<String>) -> Map<String, Map<String, Any?>>?
 
@@ -122,7 +125,7 @@ object PortfolioBacktest {
         val config: Map<String, Any?>,
         val fundamentals: FundamentalsProvider?,
         val pool: PoolProvider?,
-        val sectorMap: Map<String, String?>?,
+        val sectorAt: (LocalDate) -> Map<String, String?>?,
         val snapshots: MutableList<ScoreSnapshot>?,
     )
 
@@ -159,11 +162,11 @@ object PortfolioBacktest {
             val vols = cols["vol_ann"]?.let { v -> universe.indices.filter { !v[it].isNaN() }.associate { universe[it] to v[it] } }
             val gateHistory = if (Cfg.truthy(selection["vol_gate"])) universe.filter { hist.hasSymbol(it) }.associateWith { hist.column(it).dropNa() } else emptyMap()
             val w = Rebalance.targetWeights(gateHistory, config, scores, vols)
-            return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
+            return scale(RiskCaps.apply(w, hist, risk, ctx.sectorAt(d)), exposure)
         }
         val priceHistory = universe.filter { hist.hasSymbol(it) }.associateWith { hist.column(it).dropNa() }
         val w = Rebalance.targetWeights(priceHistory, config)
-        return scale(RiskCaps.apply(w, hist, risk, ctx.sectorMap), exposure)
+        return scale(RiskCaps.apply(w, hist, risk, ctx.sectorAt(d)), exposure)
     }
 
     /** `_dividends`(종목 → [{ex_date, dps}]) → 배당락일별 (종목, dps), 종목 오름차순. 없거나 비면 빈 맵. */
@@ -191,6 +194,7 @@ object PortfolioBacktest {
         benchmark: Series? = null,
         panic: List<PanicDay>? = null,
         volume: Panel? = null,
+        sectors: SectorProvider? = null,
     ): Map<String, Any?> {
         val symbols = closePanel.symbols
         val raw = symbols.associateWith { closePanel.column(it) }
@@ -228,9 +232,10 @@ object PortfolioBacktest {
         val risk = Cfg.map(config, "risk_layer")
         val mddKill = risk["mdd_kill_pct"]?.takeIf { Cfg.truthy(it) }?.let { Cfg.num(it) }
         val mddRearm = Cfg.int(Cfg.or(risk, "mdd_rearm_days", 20))
+        // 고정 매핑 `_sector_map`(원본 방식, 정답지 시나리오)보다 결정일별 [sectors] 가 우선이다.
         @Suppress("UNCHECKED_CAST")
-        val sectorMap = config["_sector_map"] as? Map<String, String?>
-        val ctx = Ctx(panel, config, fundamentals, pool, sectorMap, snapshots)
+        val fixedSectors = config["_sector_map"] as? Map<String, String?>
+        val ctx = Ctx(panel, config, fundamentals, pool, sectors ?: { fixedSectors }, snapshots)
 
         val rf = Cfg.map(config, "regime_filter")
         var regimeOn: BooleanArray? = null

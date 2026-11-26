@@ -34,7 +34,7 @@ paths:
 ## 미래참조 금지
 
 결정 시점 d 의 계산에는 `Panel.upTo(d)` 뷰만 넘긴다. 뷰는 d 이후 행이 없어 구조적으로 미래를 볼 수 없다.
-**예외(원본 보존):** 섹터 캡의 오늘 업종(`withSectorMap`)은 미래를 본다 — `docs/migration-notes.md` #12.
+섹터 캡 업종은 결정일 이하 최신 스냅샷(`PortfolioBacktest.run(sectors=)`)만 — 스냅샷 없는 결정일은 캡 없이 진행하고 결과 `assumptions` 에 적는다(#12 수정, 원본은 오늘 분류를 구간 전체에).
 DART 재무는 저장 판본의 접수일(`dart_financials.rcept_dt`, 정정되면 정정 접수일)이 asOf 이하일 때만 쓴다 — 연간 공시지연 연도가 아직이면 직전 연도(`DartFinancials.metricsBySymbol`·`Valuation.financials` 같은 기준, #11 수정). 원 판본 숫자는 OpenDART 가 주지 않아 정정 전 구간은 결측이다.
 상장폐지는 그날 가격이 ffill 한도(`delisting_gap_days`)를 넘겨 결측이면 현금화한다 — 재개 여부를 묻지 않는다(#10 수정, 원본 `lastValid` 는 패널 전체를 봤다). 정답지 4개 시나리오는 그 분기일(2024-05-20) 전까지만 대조한다.
 수정주가는 최신 인자 기준이라 **가격 수준**은 미래 분할을 반영한다(원본 네이버와 같음) — 두 날의 비율만 쓰면 무관하다(`PriceUnits`).
@@ -50,4 +50,4 @@ DART 재무는 저장 판본의 접수일(`dart_financials.rcept_dt`, 정정되�
 ## 함정
 
 - 사용자 정의(custom) 전략은 조건이 **거짓→참으로 바뀌는 봉에서만** 신호를 낸다(`Signals.customSignals` 의 `risingEdge`). "항상 참" 조건으로는 주문이 나가지 않는다.
-- `PortfolioBacktest` 는 조회 없는 순수 계산이라 업종 매핑 같은 조회 입력(`_sector_map`)은 `BacktestRunner.withSectorMap` 이 config 에 실어 넘긴다(원본은 백테스트 함수 안에서 조회한다). 실거래(`RebalanceRunner`)와 백테스트가 같은 리스크 설정을 적용하는지 함께 확인한다.
+- `PortfolioBacktest` 는 조회 없는 순수 계산이라 업종 매핑 같은 조회 입력은 `BacktestRunner` 가 결정일별 provider(`sectors`)로 넘긴다(고정 `_sector_map` 은 정답지용, 원본은 백테스트 함수 안에서 조회한다). 실거래(`RebalanceRunner`)와 백테스트가 같은 리스크 설정을 적용하는지 함께 확인한다.

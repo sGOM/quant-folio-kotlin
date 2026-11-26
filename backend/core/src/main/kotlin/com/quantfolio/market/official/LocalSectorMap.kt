@@ -10,8 +10,11 @@ import java.time.LocalDate
  */
 @Component
 class LocalSectorMap(private val sectors: SectorMapSnapshotRepository) {
-    fun sectorMap(asOf: LocalDate): Map<String, String> {
-        val latest = sectors.latestDateOnOrBefore(asOf) ?: throw MarketDataNotLoaded("sector_map", asOf.toString())
-        return sectors.findBySnapshotDate(latest).associate { it.symbol to it.sector }
-    }
+    fun sectorMap(asOf: LocalDate): Map<String, String> =
+        mapAt(latestOnOrBefore(asOf) ?: throw MarketDataNotLoaded("sector_map", asOf.toString()))
+
+    /** asOf 이하 최신 스냅샷일. 없으면 null. */
+    fun latestOnOrBefore(asOf: LocalDate): LocalDate? = sectors.latestDateOnOrBefore(asOf)
+
+    fun mapAt(snapshotDate: LocalDate): Map<String, String> = sectors.findBySnapshotDate(snapshotDate).associate { it.symbol to it.sector }
 }
